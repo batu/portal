@@ -1,0 +1,14 @@
+.twf/
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+.pytest_cache/
+build/
+dist/
+
+# Gallery runtime state (never commit local data dirs used during dev/test)
+.gallery-test/
+

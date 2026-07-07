@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Gallery — Queue{% endblock %}
+{% block content %}
+<section>
+  <h1>Open ({{ open_requests|length }})</h1>
+  {% if not open_requests %}
+    <p class="empty">Nothing waiting on you.</p>
+  {% endif %}
+  <ul class="request-list">
+    {% for r in open_requests %}
+    <li>
+      <a class="request-card" href="/r/{{ r.id }}">
+        <div class="request-title">{{ r.title }}</div>
+        <div class="request-meta">
+          {% if r.project %}<span class="tag">{{ r.project }}</span>{% endif %}
+          <span class="tag kind">{{ r.kind }}</span>
+          <span class="tag">{{ r.variant_count }} variant{{ 's' if r.variant_count != 1 else '' }}</span>
+          <span class="age">{{ r.created_at|ago }}</span>
+        </div>
+      </a>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+
+<section>
+  <details {% if q %}open{% endif %}>
+    <summary><h2 style="display:inline">Decided ({{ decided|length }})</h2></summary>
+    <form method="get" class="search-form">
+      <input type="text" name="q" placeholder="search project or title…" value="{{ q }}">
+      <button type="submit">Search</button>
+    </form>
+    <ul class="request-list decided">
+      {% for r in decided %}
+      <li>
+        <a class="request-card" href="/r/{{ r.id }}">
+          <div class="request-title">{{ r.title }}</div>
+          <div class="request-meta">
+            {% if r.project %}<span class="tag">{{ r.project }}</span>{% endif %}
+            <span class="tag kind">{{ r.kind }}</span>
+            <span class="tag">{{ r.variant_count }} variant{{ 's' if r.variant_count != 1 else '' }}</span>
+            <span class="age">decided {{ r.decided_at|ago }}</span>
+          </div>
+        </a>
+      </li>
+      {% endfor %}
+    </ul>
+  </details>
+</section>
+{% endblock %}

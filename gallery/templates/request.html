@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}{{ r.title }} — Gallery{% endblock %}
+{% block content %}
+<section class="request-detail" data-req-id="{{ r.id }}" data-kind="{{ r.kind }}" data-status="{{ r.status }}">
+  <h1>{{ r.title }}</h1>
+  <div class="request-meta">
+    {% if r.project %}<span class="tag">{{ r.project }}</span>{% endif %}
+    <span class="tag kind">{{ r.kind }}</span>
+    <span class="age">{{ r.created_at|ago }}</span>
+  </div>
+
+  {% if context_html %}
+  <div class="context">{{ context_html|safe }}</div>
+  {% endif %}
+
+  {% if r.status == "decided" and r.verdict %}
+  <div class="verdict-banner">
+    <strong>Decided</strong> {{ r.decided_at|ago }} —
+    {% if r.verdict.selected %}selected: {{ r.verdict.selected|join(', ') }}{% else %}no selection{% endif %}
+    {% if r.verdict.comment %}<div class="verdict-comment">&ldquo;{{ r.verdict.comment }}&rdquo;</div>{% endif %}
+  </div>
+  {% endif %}
+
+  <div class="variant-grid">
+    {% for v in r.variants %}
+    <div class="variant" data-idx="{{ v.idx }}">
+      <div class="variant-media">
+        {% if v.media_type == "video" %}
+        <video controls playsinline preload="metadata" src="/media/{{ r.id }}/{{ v.media_path }}?token={{ request.query_params.get('token', '') }}"></video>
+        {% else %}
+        <a href="/media/{{ r.id }}/{{ v.media_path }}?token={{ request.query_params.get('token', '') }}" target="_blank" rel="noopener">
+          <img loading="lazy" src="/media/{{ r.id }}/{{ v.media_path }}?token={{ request.query_params.get('token', '') }}" alt="variant {{ v.idx }}">
+        </a>
+        {% endif %}
+      </div>
+      <div class="variant-footer">
+        <span class="variant-number">{{ v.idx }}</span>
+        <span class="order-badge" hidden></span>
+        {% if v.caption %}<span class="variant-caption">{{ v.caption }}</span>{% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+
+  {% if r.status == "open" %}
+  <div class="decision-panel">
+    {% if r.kind == "approve" %}
+    <div class="approve-buttons">
+      <button type="button" class="btn approve" data-approve="yes">Approve</button>
+      <button type="button" class="btn reject" data-approve="no">Reject</button>
+    </div>
+    {% endif %}
+
+    <textarea class="comment-box" placeholder="Comment (optional)…"></textarea>
+
+    {% if r.kind != "approve" %}
+    <button type="button" class="btn decide" id="decide-btn">{{ "Done" if r.kind == "comment" else "Decide" }}</button>
+    {% endif %}
+    <div class="hint">
+      {% if r.kind == "pick-one" %}Tap one variant, then Decide.
+      {% elif r.kind == "pick-many" %}Tap any number of variants, then Decide.
+      {% elif r.kind == "rank" %}Tap variants in order (tap again to remove), then Decide.
+      {% elif r.kind == "comment" %}Just leave a comment and press Done.
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+</section>
+{% endblock %}

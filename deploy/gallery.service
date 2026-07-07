@@ -1,0 +1,19 @@
+# Reference systemd user unit for a future Linux move.
+# Not used on the Mac mini (launchd is authoritative there — see
+# com.appletolye.gallery.plist). Install with:
+#   mkdir -p ~/.config/systemd/user
+#   cp gallery.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now gallery.service
+[Unit]
+Description=Gallery — pick-by-number review hub
+After=network.target
+
+[Service]
+ExecStart=%h/.local/bin/gallery serve
+Restart=always
+RestartSec=5
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+
+[Install]
+WantedBy=default.target

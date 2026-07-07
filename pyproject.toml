@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gallery"
+version = "0.1.0"
+description = "Persistent pick-by-number review hub for agent-generated image/video variants"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "python-multipart>=0.0.9",
+    "jinja2>=3.1",
+    "markdown>=3.6",
+]
+
+[project.scripts]
+gallery = "gallery.cli:main"
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "httpx>=0.27", "pillow>=10.0"]
+
+[tool.setuptools.packages.find]
+include = ["gallery*"]
+
+[tool.setuptools.package-data]
+gallery = ["templates/*.html", "static/*"]
