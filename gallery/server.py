@@ -17,6 +17,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 
 from . import config, db, notify
 
@@ -850,6 +851,12 @@ def _reject_closed_stream(stream: dict) -> None:
         raise HTTPException(status_code=409, detail=f"stream is closed: {stream['slug']}")
 
 
+def _web_open_stream_or_404(slug: str) -> dict:
+    stream = _web_stream_or_404(slug)
+    _reject_closed_stream(stream)
+    return stream
+
+
 def _validate_question_id(value: object) -> str:
     question_id = _bounded_text(value, "question_id", 128)
     if not SAFE_SEGMENT_RE.fullmatch(question_id) or question_id in {".", ".."}:
@@ -1019,23 +1026,21 @@ def web_stream_detail(request: Request, slug: str):
 async def web_stream_note(request: Request, slug: str):
     if not web_token_ok(request):
         raise HTTPException(status_code=401, detail="missing or invalid token")
-    stream = _web_stream_or_404(slug)
-    _reject_closed_stream(stream)
+    stream = await run_in_threadpool(_web_open_stream_or_404, slug)
     body = await _json_object_body(request)
     text = _bounded_text(body.get("text"), "text", MAX_MESSAGE_TEXT_LENGTH)
-    return _create_to_agent_message(stream, text)
+    return await run_in_threadpool(_create_to_agent_message, stream, text)
 
 
 @app.post("/s/{slug}/answer")
 async def web_stream_answer(request: Request, slug: str):
     if not web_token_ok(request):
         raise HTTPException(status_code=401, detail="missing or invalid token")
-    stream = _web_stream_or_404(slug)
-    _reject_closed_stream(stream)
+    stream = await run_in_threadpool(_web_open_stream_or_404, slug)
     body = await _json_object_body(request)
     text = _bounded_text(body.get("text"), "text", MAX_MESSAGE_TEXT_LENGTH)
     question_id = _validate_question_id(body.get("question_id"))
-    return _create_answer_message(stream, question_id, text)
+    return await run_in_threadpool(_create_answer_message, stream, question_id, text)
 
 
 @app.get("/r/{req_id}", response_class=HTMLResponse)

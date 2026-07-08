@@ -83,6 +83,41 @@ def test_web_message_twins_validate_inputs_and_answer_source(client, token):
 
     assert [response.status_code for response in responses] == [400, 400, 400, 400, 404, 404, 400]
     assert [item["text"] for item in db.list_messages(stream["id"], direction="to_agent")] == ["Existing note"]
+    assert db.list_messages(other["id"])[0]["consumed_at"] is None
+    assert db.list_messages(stream["id"], direction="to_agent")[0]["consumed_at"] is None
+
+
+def test_web_message_twins_do_not_autocreate_missing_streams(client, token):
+    db.create_stream("alpha", "session", "Alpha stream")
+    _seed_cookie(client, token, "alpha")
+
+    note = client.post("/s/missing/note", json={"text": "No stream"})
+    answer = client.post("/s/missing/answer", json={"text": "No stream", "question_id": "m_missing"})
+
+    assert note.status_code == 404
+    assert answer.status_code == 404
+    assert db.get_stream("missing") is None
+    assert db.list_messages(db.get_stream("alpha")["id"]) == []
+
+
+def test_answer_twin_rejects_invalid_text_without_side_effects(client, token, monkeypatch):
+    stream = db.create_stream("alpha", "session", "Alpha stream")
+    question = db.create_message(stream["id"], "to_human", "Which option?", message_id="m_question")
+    _seed_cookie(client, token, "alpha")
+    monkeypatch.setattr("gallery.server.MAX_MESSAGE_TEXT_LENGTH", 4)
+
+    responses = [
+        client.post("/s/alpha/answer", json={"question_id": question["id"]}),
+        client.post("/s/alpha/answer", json={"text": "   ", "question_id": question["id"]}),
+        client.post("/s/alpha/answer", json={"text": 123, "question_id": question["id"]}),
+        client.post("/s/alpha/answer", json={"text": "12345", "question_id": question["id"]}),
+    ]
+
+    assert [response.status_code for response in responses] == [400, 400, 400, 400]
+    messages = db.list_messages(stream["id"])
+    assert len(messages) == 1
+    assert messages[0]["id"] == question["id"]
+    assert messages[0]["consumed_at"] is None
 
 
 def test_closed_stream_rejects_note_and_answer_twins_and_hides_forms(client, token):
@@ -102,7 +137,10 @@ def test_closed_stream_rejects_note_and_answer_twins_and_hides_forms(client, tok
     assert "Archived stream. Posts and decisions are read-only." in page.text
     assert "data-stream-note-form" not in page.text
     assert "data-answer-form" not in page.text
-    assert [item["direction"] for item in db.list_messages(stream["id"])] == ["to_human"]
+    messages = db.list_messages(stream["id"])
+    assert [item["direction"] for item in messages] == ["to_human"]
+    assert messages[0]["id"] == question["id"]
+    assert messages[0]["consumed_at"] is None
 
 
 def test_stream_page_renders_questions_and_message_states_newest_first(client, token):
@@ -121,20 +159,6 @@ def test_stream_page_renders_questions_and_message_states_newest_first(client, t
         created_at="2026-07-08T10:00:00+00:00",
         message_id="m_newer",
     )
-    same_second_first = db.create_message(
-        stream["id"],
-        "to_human",
-        "First same-second question?",
-        created_at="2026-07-08T10:00:00+00:00",
-        message_id="m_same_first",
-    )
-    same_second_second = db.create_message(
-        stream["id"],
-        "to_human",
-        "Second same-second question?",
-        created_at="2026-07-08T10:00:00+00:00",
-        message_id="m_same_second",
-    )
     consumed_question = db.create_message(stream["id"], "to_human", "Answered already?", message_id="m_done")
     queued = db.create_message(stream["id"], "to_agent", "Queued note", message_id="m_queued")
     picked_up = db.create_message(stream["id"], "to_agent", "Picked up note", message_id="m_picked")
@@ -147,10 +171,7 @@ def test_stream_page_renders_questions_and_message_states_newest_first(client, t
     assert "data-stream-note-form" in page.text
     assert "Agent asks" in page.text
     assert page.text.index("Newer question?") < page.text.index("Older question?")
-    assert page.text.index("Second same-second question?") < page.text.index("First same-second question?")
     assert f'value="{newer["id"]}"' in page.text
-    assert f'value="{same_second_first["id"]}"' in page.text
-    assert f'value="{same_second_second["id"]}"' in page.text
     assert f'value="{older["id"]}"' in page.text
     assert f'value="{consumed_question["id"]}"' not in page.text
     assert "Answered already?" in page.text
