@@ -11,6 +11,8 @@ from pathlib import Path
 from . import client, config
 
 STREAM_SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?$")
+STREAM_SLUG_MAX_LENGTH = 128
+PROJECT_STREAM_PREFIX = "proj-"
 
 
 def _resolve_files(patterns: list[str]) -> list[Path]:
@@ -68,7 +70,9 @@ def _legacy_stream_slug(project: str | None) -> str:
     if not project or not project.strip():
         return "inbox"
     slug = re.sub(r"[^a-z0-9]+", "-", project.strip().lower()).strip("-")
-    return f"proj-{slug or 'project'}"
+    max_project_slug_length = STREAM_SLUG_MAX_LENGTH - len(PROJECT_STREAM_PREFIX)
+    slug = (slug or "project")[:max_project_slug_length].strip("-") or "project"
+    return f"{PROJECT_STREAM_PREFIX}{slug}"
 
 
 def _stream_decision_metadata(stream: str, request_id: str, status: str, error: str | None = None) -> dict:

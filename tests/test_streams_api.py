@@ -144,6 +144,26 @@ def test_legacy_requests_are_visible_in_project_and_inbox_streams(client, token)
     assert inbox_posts[0]["body"] == {"request_id": inbox_create.json()["id"]}
 
 
+def test_legacy_project_stream_slug_is_bounded_and_routable(client, token):
+    project = "ab/" * 80
+
+    create = client.post(
+        "/api/requests",
+        headers=auth_headers(token),
+        data={"title": "Long project", "project": project, "kind": "pick-one"},
+        files=_request_uploads(1),
+    )
+    assert create.status_code == 200
+
+    slug = db._stream_slug_for_project(project)
+    assert len(slug) <= db.STREAM_SLUG_MAX_LENGTH
+    assert server.STREAM_SLUG_RE.fullmatch(slug)
+
+    stream = client.get(f"/api/streams/{slug}", headers=auth_headers(token))
+    assert stream.status_code == 200
+    assert stream.json()["posts"][0]["body"] == {"request_id": create.json()["id"]}
+
+
 def test_stream_decision_post_references_existing_request_and_is_stream_scoped(client, token):
     request_create = client.post(
         "/api/requests",

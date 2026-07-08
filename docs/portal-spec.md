@@ -41,20 +41,25 @@ Principles, in priority order:
     machinery, no implied end.
   - URL: `/s/<slug>`. Slug chosen at creation (`ftd-menu-redesign-0708`),
     unique, immutable.
-- **Post** — one item in a stream. Three types:
+- **Post** — one durable item in the stream timeline. Shipped v1.1 stores
+  `report` and `decision` entries in `posts`; phase-2 `message` entries are
+  stream-scoped queue records in `messages`, rendered on the stream page but
+  not accepted through the post-envelope endpoint. Two post-envelope types:
   - `report` (one-way): a self-contained HTML file or media bundle. Rendered
     inline / linked from the stream page.
   - `decision` (two-way): today's gallery request — kinds `pick-one`,
     `pick-many`, `rank`, `approve`, `comment`, plus new **`before-after`**
     (§6). Carries variants, blocks on a verdict.
-  - `message` (two-way, phase 2): text notes in either direction — the
-    steering inbox and agent questions (§7).
+- **Message** (two-way, phase 2): text notes in either direction — the
+  steering inbox and agent questions (§7). Messages are stream-scoped but stay
+  in the `messages` queue table/API until a consumer needs full post-envelope
+  unification.
 - **Verdict** — unchanged from gallery: `{selected, ratings?, comment?}`,
   latest-wins revision, now attached to a decision post.
 
 ## 3. Envelope
 
-Every post shares one envelope; type-specific payload nests under `body`.
+Every report/decision post shares one envelope; type-specific payload nests under `body`.
 Deliberately minimal in v1 — fields are added only when something consumes
 them (per scope review: no `tags`, no typed author object yet).
 
@@ -62,7 +67,7 @@ them (per scope review: no `tags`, no typed author object yet).
 {
   "id": "p_8f3a2c",
   "stream": "ftd-menu-redesign-0708",
-  "type": "report | decision | message",
+  "type": "report | decision",
   "title": "Menu tile spacing pass 3",
   "author": "claude-fable-5 @ fabrikav2",
   "created_at": "2026-07-08T14:12:03Z",
@@ -73,6 +78,9 @@ them (per scope review: no `tags`, no typed author object yet).
 `author` is a free-text display string. A typed author model and per-user
 identity arrive with coworker auth (phase 3), when something actually reads
 them. `tags` likewise deferred until a filter/search consumer exists.
+
+Messages use the smaller `{id, stream_id, direction, text, created_at,
+consumed_at}` shape in §4 rather than this post envelope.
 
 ## 4. Data model and migration
 
@@ -87,7 +95,9 @@ messages(id, stream_id, direction 'to_agent'|'to_human', text,
 ```
 
 `messages` is created in the **phase-2 migration**, not phase 1 — no table
-ships before its consumer.
+ships before its consumer. Messages are intentionally not dual-written into
+`posts` in v1.1; the queue semantics for ask/pull are separate from report and
+decision post rendering.
 
 **Migration mechanism (new — required).** `db.py` today applies schema via
 `executescript` of `CREATE TABLE IF NOT EXISTS` on every connect; that cannot
@@ -129,6 +139,12 @@ GET  /api/streams/{slug}/messages?since=&direction=&unconsumed=1   (phase 2)
 POST /api/messages/{id}/consume                                    (phase 2)
 ```
 
+Mutation status semantics in v1.1: missing/invalid bearer or web token returns
+`401`; missing streams/posts/messages/requests return `404`; closed-stream
+mutations return `409`. There is no shipped `403` state in the single-token v1
+model; forbidden-vs-authenticated distinctions arrive with §9's future
+per-stream auth.
+
 **Browser twins (required, per feasibility review).** The stream page's own
 JS cannot send a bearer header; gallery already solves this once with the
 cookie-authed `POST /r/{req_id}/decide` twin of the verdict API. Every
@@ -158,6 +174,11 @@ lock, or they'd stall unrelated requests under FastAPI's sync thread pool.
 (steering note); non-blocking by default so agent loops can check between
 turns. These are ccbot's verbs re-homed onto the Portal; the filesystem
 queue and cc-gateway are retired.
+
+Agent-side message creation follows the same push convenience as reports:
+`POST /api/streams/{slug}/messages` auto-creates a missing session stream.
+Read paths (`GET .../messages`, `portal pull`) and browser twins require an
+existing stream and return `404` for a missing slug.
 
 ## 6. Before/after decisions
 
@@ -192,14 +213,19 @@ as an alias of `pick-one` that defaults the UI to toggle view.
 
 ## 8. Notifications
 
-Reuse `notify.py` (Telegram doorbell). Per-type policy in `config.json`:
-decisions and `ask` messages ring by default; reports are silent by default
-(configurable per stream). Message text links straight to the stream URL.
+Reuse `notify.py` (Telegram doorbell). Shipped v1.1 has a fixed policy:
+decisions and `ask`/`to_human` messages ring by default; reports and
+human-to-agent steering notes are silent. `config.json` holds Telegram
+credentials only for now; configurable per-type/per-stream policy is deferred
+until there is a real settings consumer. Message text links straight to the
+stream URL.
 
 ## 9. Access (designed-for, not built in v1)
 
-v1: Tailscale-only, single bearer token, exactly as today. The design keeps
-public exposure cheap later: streams are the sharing unit (a future
+v1: Tailscale-only, single bearer token, exactly as today. Auth failures are
+authentication failures (`401`), not authorization failures (`403`), because
+there is no user or per-stream permission state yet. The design keeps public
+exposure cheap later: streams are the sharing unit (a future
 `stream_tokens` table grants per-stream read or read+verdict access), and all
 media auth already flows through one place (`_maybe_set_cookie` / bearer
 check). Public exposure would be Cloudflare Tunnel or Tailscale Funnel in
@@ -247,9 +273,11 @@ front of the same service — no schema change anticipated.
 1. **Stream auto-creation — decided: automatic.** The agent creates the
    stream at session start and invents the slug (Batu: "the names aren't that
    important... I might forget it"). Mechanically: `portal report`/`portal
-   post` with `--stream <slug>` **auto-create the stream if it doesn't
-   exist** (kind `session`), so no separate `stream new` call is required in
-   the common path; `portal stream new` remains for explicit/pinned streams.
+   post` with `--stream <slug>` and `portal ask --stream <slug>`
+   **auto-create the stream if it doesn't exist** (kind `session`), so no
+   separate `stream new` call is required in the common push path; `portal
+   stream new` remains for explicit/pinned streams. Browser note/answer twins
+   and read/pull paths do not auto-create.
 2. **Report size limits — decided:** 200 MB/post soft cap; warn, never
    reject.
 3. ~~Naming~~ **Decided 2026-07-08: the name is `portal`** (two-way
@@ -274,3 +302,35 @@ front of the same service — no schema change anticipated.
   client-side polling (no server-side long poll on the single locked sqlite
   connection); before image stored out-of-band on `requests`, not as a
   0-indexed variant (variants are 1-based).
+- 2026-07-08 integration review: accepted shipped message storage as a
+  separate `messages` queue table/API rather than forcing immediate
+  post-envelope unification; §2-§5 now state that `posts` carries
+  report/decision entries while messages remain stream-scoped queue records.
+- 2026-07-08 integration review: accepted v1 single-token access semantics:
+  auth failures are `401`, missing resources are `404`, closed-stream
+  mutations are `409`, and no `403` state exists until per-stream/user auth.
+- 2026-07-08 integration review: accepted fixed notification policy for v1.1
+  (decisions and `to_human` ask messages ring; reports and steering notes are
+  silent) and deferred configurable per-type/per-stream policy.
+- 2026-07-08 integration review: documented that agent-side message creation
+  auto-creates missing session streams, while read/pull and browser twin routes
+  require an existing stream.
+- 2026-07-08 integration review: fixed legacy project-derived stream slugs so
+  long project names remain within the route slug contract and are routable via
+  `/s/<slug>` and `/api/streams/{slug}`.
+- 2026-07-08 integration review: fixed notification/config failure paths so
+  legacy decision request creation does not fail after persistence when the
+  doorbell thread cannot start or config would otherwise be reloaded for the
+  notification URL.
+- 2026-07-08 integration review: fixed message `since` cursor precision so
+  fast `portal ask` replies in the same wall-clock second are not skipped by
+  truncating timestamps to seconds.
+- 2026-07-08 integration review: proposed follow-up card for stream-owned
+  decisions; `portal post --stream <non-legacy>` currently mirrors a request
+  into the stream but the authoritative `requests.stream_id` still points at
+  `inbox`/`proj-*`, so closing the explicit stream does not make that request
+  read-only.
+- 2026-07-08 integration review: proposed follow-up card for ask/answer
+  correlation; answers and human steering notes currently share the
+  unconsumed `to_agent` queue, so a linked reply model or message kind is
+  needed before `portal ask` and `portal pull` can be fully disambiguated.

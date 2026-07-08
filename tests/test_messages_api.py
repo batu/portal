@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 
 import pytest
 
@@ -108,6 +109,46 @@ def test_message_helpers_combine_since_direction_and_unconsumed_filters(data_dir
     assert [message["id"] for message in filtered] == [wanted_agent["id"]]
 
 
+def test_message_since_preserves_subsecond_cursor(data_dir):
+    stream = db.create_stream("subsecond", "session", "Subsecond")
+    db.create_message(
+        stream["id"],
+        "to_agent",
+        "Stale note",
+        created_at="2026-07-08T10:00:00.050000+00:00",
+        message_id="m_stale",
+    )
+    question = db.create_message(
+        stream["id"],
+        "to_human",
+        "Question?",
+        created_at="2026-07-08T10:00:00.100000+00:00",
+        message_id="m_question",
+    )
+    reply = db.create_message(
+        stream["id"],
+        "to_agent",
+        "Answer",
+        created_at="2026-07-08T10:00:00.200000+00:00",
+        message_id="m_reply",
+    )
+
+    filtered = db.list_messages(stream["id"], since=question["created_at"], direction="to_agent", unconsumed=True)
+
+    assert [message["id"] for message in filtered] == [reply["id"]]
+
+
+def test_now_iso_uses_subsecond_precision(monkeypatch):
+    class FixedDateTime:
+        @classmethod
+        def now(cls, tz):
+            return datetime(2026, 7, 8, 10, 0, 0, 123456, tzinfo=tz)
+
+    monkeypatch.setattr(db, "datetime", FixedDateTime)
+
+    assert db.now_iso() == "2026-07-08T10:00:00.123456+00:00"
+
+
 def test_concurrent_consume_preserves_single_timestamp(data_dir):
     stream = db.create_stream("race", "session", "Race")
     message = db.create_message(stream["id"], "to_agent", "Consume once")
@@ -215,6 +256,40 @@ def test_message_api_validates_inputs_and_read_does_not_autocreate(client, token
         json={"direction": "to_agent", "text": "x"},
     )
     assert monkeypatch_response.status_code == 200
+
+
+def test_message_api_preserves_subsecond_since_cursor(client, token):
+    stream = db.create_stream("api-subsecond", "session", "API subsecond")
+    db.create_message(
+        stream["id"],
+        "to_agent",
+        "Stale note",
+        created_at="2026-07-08T10:00:00.050000+00:00",
+        message_id="m_stale",
+    )
+    question = db.create_message(
+        stream["id"],
+        "to_human",
+        "Question?",
+        created_at="2026-07-08T10:00:00.100000+00:00",
+        message_id="m_question",
+    )
+    db.create_message(
+        stream["id"],
+        "to_agent",
+        "Answer",
+        created_at="2026-07-08T10:00:00.200000+00:00",
+        message_id="m_reply",
+    )
+
+    response = client.get(
+        "/api/streams/api-subsecond/messages",
+        headers=auth_headers(token),
+        params={"since": question["created_at"], "direction": "to_agent", "unconsumed": "1"},
+    )
+
+    assert response.status_code == 200
+    assert [message["id"] for message in response.json()] == ["m_reply"]
 
 
 def test_message_api_rejects_oversized_text(client, token, monkeypatch):

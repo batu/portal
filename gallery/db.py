@@ -16,6 +16,8 @@ from . import config
 
 KINDS = ("pick-one", "pick-many", "rank", "approve", "comment", "before-after")
 MESSAGE_DIRECTIONS = ("to_agent", "to_human")
+STREAM_SLUG_MAX_LENGTH = 128
+PROJECT_STREAM_PREFIX = "proj-"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS requests (
@@ -71,7 +73,7 @@ class MessageNotFoundError(ValueError):
 
 
 def now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds")
 
 
 def new_request_id() -> str:
@@ -511,7 +513,7 @@ def _normalize_message_since(since: str) -> str:
         raise ValueError("since must be an ISO timestamp") from exc
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise ValueError("since must include a timezone")
-    return parsed.astimezone(timezone.utc).isoformat(timespec="seconds")
+    return parsed.astimezone(timezone.utc).isoformat()
 
 
 def _get_message_by_id(conn: sqlite3.Connection, message_id: str) -> dict | None:
@@ -649,7 +651,9 @@ def _stream_slug_for_project(project: str | None) -> str:
     if not project or not project.strip():
         return "inbox"
     slug = re.sub(r"[^a-z0-9]+", "-", project.strip().lower()).strip("-")
-    return f"proj-{slug or 'project'}"
+    max_project_slug_length = STREAM_SLUG_MAX_LENGTH - len(PROJECT_STREAM_PREFIX)
+    slug = (slug or "project")[:max_project_slug_length].strip("-") or "project"
+    return f"{PROJECT_STREAM_PREFIX}{slug}"
 
 
 def create_request(

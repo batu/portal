@@ -1,4 +1,4 @@
-from gallery import config, server
+from gallery import config, db, server
 
 
 def auth_headers(token):
@@ -199,6 +199,60 @@ def test_legacy_request_closed_stream_error_is_409_and_cleans_media(client, toke
 
     assert second.status_code == 409
     assert not (config.media_dir() / "req_after_close").exists()
+
+
+def test_legacy_request_notification_thread_failure_does_not_fail_request(client, token, monkeypatch):
+    class FailingThread:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            raise RuntimeError("thread unavailable")
+
+    monkeypatch.setattr(server.threading, "Thread", FailingThread)
+
+    response = client.post(
+        "/api/requests",
+        headers=auth_headers(token),
+        data={"title": "Still created", "kind": "pick-one"},
+        files=_upload_files(1),
+    )
+
+    assert response.status_code == 200
+    assert db.get_request(response.json()["id"]) is not None
+
+
+def test_legacy_request_reuses_auth_config_for_notification_url(client, token, monkeypatch, data_dir):
+    cfg = data_dir[1]
+    calls = 0
+
+    class FakeThread:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            pass
+
+    def flaky_load_config():
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return cfg
+        raise RuntimeError("config reloaded after persistence")
+
+    monkeypatch.setattr(server.threading, "Thread", FakeThread)
+    monkeypatch.setattr(server.config, "load_config", flaky_load_config)
+
+    response = client.post(
+        "/api/requests",
+        headers=auth_headers(token),
+        data={"title": "Single config read", "kind": "pick-one"},
+        files=_upload_files(1),
+    )
+
+    assert response.status_code == 200
+    assert calls == 1
+    assert db.get_request(response.json()["id"]) is not None
 
 
 def test_request_id_collision_does_not_delete_existing_media(client, token, monkeypatch):

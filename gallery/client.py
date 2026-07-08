@@ -34,6 +34,8 @@ def _request(method: str, url: str, headers: dict, data: bytes | None = None) ->
         except json.JSONDecodeError:
             pass
         raise GalleryClientError(exc.code, detail) from exc
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise GalleryClientError(0, str(exc)) from exc
 
 
 def get_json(base_url: str, token: str, path: str) -> dict | list:

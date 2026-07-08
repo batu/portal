@@ -1,10 +1,11 @@
 import json
 import tomllib
+import urllib.error
 from pathlib import Path
 
 import pytest
 
-from gallery import cli
+from gallery import cli, db
 
 
 def _stub_open_stream(monkeypatch):
@@ -16,6 +17,28 @@ def test_pyproject_exposes_portal_and_gallery_scripts():
 
     assert pyproject["project"]["scripts"]["portal"] == "gallery.cli:main"
     assert pyproject["project"]["scripts"]["gallery"] == "gallery.cli:main"
+
+
+def test_legacy_stream_slug_matches_db_bounded_project_slug():
+    project = "ab/" * 80
+
+    slug = cli._legacy_stream_slug(project)
+
+    assert slug == db._stream_slug_for_project(project)
+    assert len(slug) <= db.STREAM_SLUG_MAX_LENGTH
+
+
+def test_client_network_error_becomes_gallery_client_error(monkeypatch):
+    def fail_urlopen(_request, timeout):
+        raise urllib.error.URLError("server down")
+
+    monkeypatch.setattr(cli.client.urllib.request, "urlopen", fail_urlopen)
+
+    with pytest.raises(cli.client.GalleryClientError) as exc:
+        cli.client.get_json("http://gallery", "tok", "/api/health")
+
+    assert exc.value.status == 0
+    assert "server down" in exc.value.message
 
 
 def test_no_command_prints_help_and_exits(monkeypatch, capsys):

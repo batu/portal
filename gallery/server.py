@@ -71,11 +71,13 @@ def _server_token() -> str:
     return config.load_config()["token"]
 
 
-def require_api_token(request: Request) -> None:
+def require_api_token(request: Request) -> dict:
+    server_cfg = config.load_config()
     auth = request.headers.get("authorization", "")
     token = auth[7:] if auth.lower().startswith("bearer ") else None
-    if not token or token != _server_token():
+    if not token or token != server_cfg["token"]:
         raise HTTPException(status_code=401, detail="missing or invalid bearer token")
+    return server_cfg
 
 
 def web_token_ok(request: Request) -> bool:
@@ -299,7 +301,7 @@ def _validate_since(value: str | None) -> str | None:
         raise HTTPException(status_code=400, detail="since must be an ISO timestamp") from exc
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise HTTPException(status_code=400, detail="since must include a timezone")
-    return parsed.astimezone(timezone.utc).isoformat(timespec="seconds")
+    return parsed.astimezone(timezone.utc).isoformat()
 
 
 def _parse_unconsumed(value: str | None) -> bool:
@@ -343,7 +345,7 @@ async def create_request(
     before: UploadFile | None = File(None),
     files: list[UploadFile] = File(...),
 ):
-    require_api_token(request)
+    server_cfg = require_api_token(request)
 
     if kind not in db.KINDS:
         raise HTTPException(status_code=400, detail=f"invalid kind: {kind}. Must be one of {db.KINDS}")
@@ -420,13 +422,15 @@ async def create_request(
     else:
         raise HTTPException(status_code=500, detail="could not allocate unique request id")
 
-    server_cfg = config.load_config()
     url = f"{server_cfg['url']}/r/{req_id}?token={server_cfg['token']}"
-    threading.Thread(
-        target=notify.send_doorbell,
-        args=(server_cfg, title, len(variants), url),
-        daemon=True,
-    ).start()
+    try:
+        threading.Thread(
+            target=notify.send_doorbell,
+            args=(server_cfg, title, len(variants), url),
+            daemon=True,
+        ).start()
+    except Exception as exc:  # noqa: BLE001 - notification startup must never fail request creation
+        log.warning("request notification failed to start: %s", exc)
 
     return {"id": req_id, "url": f"{server_cfg['url']}/r/{req_id}", "variant_count": len(variants)}
 
