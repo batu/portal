@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}{{ stream.title }} — Stream{% endblock %}
 {% block content %}
-<section class="stream-detail">
+<section class="stream-detail" data-stream-slug="{{ stream.slug }}">
   <div class="stream-header">
     <h1>{{ stream.title }}</h1>
     <div class="request-meta">
@@ -15,6 +15,93 @@
   {% if stream.closed_at %}
   <p class="archive-note">Archived stream. Posts and decisions are read-only.</p>
   {% endif %}
+
+  <section class="stream-message-panel" aria-labelledby="stream-messages-title">
+    <h2 id="stream-messages-title">Messages</h2>
+
+    {% if not stream.closed_at %}
+    <form class="message-form note-form" method="post" action="/s/{{ stream.slug }}/note" data-stream-note-form>
+      <label for="stream-note">Note to agent</label>
+      <textarea id="stream-note" name="text" class="comment-box" rows="3" autocomplete="off"></textarea>
+      <button class="btn message-send" type="submit">Send</button>
+      <p class="message-status" data-form-status role="status" aria-live="polite"></p>
+    </form>
+    {% endif %}
+
+    {% if messages.questions %}
+    <section class="agent-questions" aria-labelledby="agent-asks-title">
+      <h2 id="agent-asks-title">Agent asks</h2>
+      <ul class="message-list question-list">
+        {% for message in messages.questions %}
+        <li>
+          <article class="stream-message to-human needs-answer" data-question-id="{{ message.id }}">
+            <div class="message-heading">
+              <span class="message-label">Question</span>
+              <span class="age">{{ message.created_at|ago }}</span>
+            </div>
+            <p class="message-text">{{ message.text }}</p>
+            {% if not stream.closed_at %}
+            <form class="message-form answer-form" method="post" action="/s/{{ stream.slug }}/answer" data-answer-form>
+              <input type="hidden" name="question_id" value="{{ message.id }}">
+              <label for="answer-{{ message.id }}">Answer</label>
+              <textarea id="answer-{{ message.id }}" name="text" class="comment-box" rows="2" autocomplete="off"></textarea>
+              <button class="btn message-send" type="submit">Answer</button>
+              <p class="message-status" data-form-status role="status" aria-live="polite"></p>
+            </form>
+            {% endif %}
+          </article>
+        </li>
+        {% endfor %}
+      </ul>
+    </section>
+    {% endif %}
+
+    {% if messages.answered_questions %}
+    <details class="message-history" data-consumed-questions>
+      <summary>Answered questions ({{ messages.answered_questions|length }})</summary>
+      <ul class="message-list">
+        {% for message in messages.answered_questions %}
+        <li>
+          <article class="stream-message to-human is-consumed">
+            <div class="message-heading">
+              <span class="message-label">Question</span>
+              <span class="status-badge picked-up">answered</span>
+            </div>
+            <p class="message-text">{{ message.text }}</p>
+            <div class="message-time">answered {{ message.consumed_at|ago }}</div>
+          </article>
+        </li>
+        {% endfor %}
+      </ul>
+    </details>
+    {% endif %}
+
+    {% if messages.to_agent %}
+    <section class="to-agent-messages" aria-labelledby="to-agent-title">
+      <h2 id="to-agent-title">To agent</h2>
+      <ul class="message-list">
+        {% for message in messages.to_agent %}
+        <li>
+          <article class="stream-message to-agent {% if message.consumed_at %}is-consumed{% else %}is-queued{% endif %}">
+            <div class="message-heading">
+              <span class="message-label">Human note</span>
+              {% if message.consumed_at %}
+              <span class="status-badge picked-up">picked up</span>
+              {% else %}
+              <span class="status-badge queued">queued</span>
+              {% endif %}
+            </div>
+            <p class="message-text">{{ message.text }}</p>
+            <div class="message-time">
+              {% if message.consumed_at %}picked up {{ message.consumed_at|ago }}{% else %}queued {{ message.created_at|ago }}{% endif %}
+            </div>
+          </article>
+        </li>
+        {% endfor %}
+      </ul>
+    </section>
+    {% endif %}
+  </section>
 
   {% if not posts %}
   <p class="empty">No posts yet.</p>
