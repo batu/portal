@@ -10,6 +10,8 @@ from pathlib import Path
 
 from . import client, config
 
+STREAM_SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?$")
+
 
 def _resolve_files(patterns: list[str]) -> list[Path]:
     paths = []
@@ -36,11 +38,41 @@ def _exit_client_error(exc: client.GalleryClientError) -> None:
     sys.exit(1)
 
 
+def _stream_slug(value: str) -> str:
+    if not STREAM_SLUG_RE.fullmatch(value):
+        raise argparse.ArgumentTypeError("invalid stream slug")
+    return value
+
+
 def _legacy_stream_slug(project: str | None) -> str:
     if not project or not project.strip():
         return "inbox"
     slug = re.sub(r"[^a-z0-9]+", "-", project.strip().lower()).strip("-")
     return f"proj-{slug or 'project'}"
+
+
+def _stream_decision_metadata(stream: str, request_id: str, status: str, error: str | None = None) -> dict:
+    metadata = {
+        "stream": stream,
+        "type": "decision",
+        "body": {"request_id": request_id},
+        "status": status,
+    }
+    if error is not None:
+        metadata["error"] = error
+    return metadata
+
+
+def _preflight_stream(base_url: str, token: str, slug: str) -> None:
+    try:
+        stream = client.get_stream(base_url, token, slug)
+    except client.GalleryClientError as exc:
+        if exc.status == 404:
+            return
+        _exit_client_error(exc)
+    if stream.get("closed_at") is not None:
+        print(f"error: stream is closed: {slug}", file=sys.stderr)
+        sys.exit(1)
 
 
 def cmd_init(args):
@@ -58,10 +90,17 @@ def cmd_init(args):
 
 def cmd_post(args):
     base_url, token = config.client_config()
+    if args.stream is not None:
+        _preflight_stream(base_url, token, args.stream)
+
     files = _resolve_files(args.files)
     request_files = files
     if args.before:
-        request_files = [("before", _resolve_file(args.before)), *files]
+        before = _resolve_file(args.before)
+        if before.resolve() in {path.resolve() for path in files}:
+            print("error: before image must not also be a candidate file", file=sys.stderr)
+            sys.exit(1)
+        request_files = [("before", before), *files]
 
     manifest = None
     if args.manifest:
@@ -79,24 +118,35 @@ def cmd_post(args):
     except client.GalleryClientError as exc:
         _exit_client_error(exc)
 
-    if args.stream and args.stream != _legacy_stream_slug(args.project):
-        try:
-            stream_post = client.create_stream_post(
-                base_url,
-                token,
-                args.stream,
-                "decision",
-                args.title,
-                "portal",
-                body={"request_id": result["id"]},
-                files=[],
-            )
-        except client.GalleryClientError as exc:
-            request_id = result.get("id")
-            suffix = f" (request created: {request_id})" if request_id else ""
-            print(f"error: {exc}{suffix}", file=sys.stderr)
+    if args.stream is not None:
+        request_id = result.get("id")
+        if not request_id:
+            print("error: request response missing id", file=sys.stderr)
             sys.exit(1)
-        result = {**result, "stream_post": stream_post}
+        if args.stream == _legacy_stream_slug(args.project):
+            result = {**result, "stream_post": _stream_decision_metadata(args.stream, request_id, "already-attached")}
+        else:
+            try:
+                stream_post = client.create_stream_post(
+                    base_url,
+                    token,
+                    args.stream,
+                    "decision",
+                    args.title,
+                    "portal",
+                    body={"request_id": request_id},
+                    files=[],
+                )
+            except client.GalleryClientError as exc:
+                result = {
+                    **result,
+                    "stream_post": _stream_decision_metadata(args.stream, request_id, "attach-failed", str(exc)),
+                }
+                print(json.dumps(result))
+                suffix = f" (request created: {request_id})"
+                print(f"error: {exc}{suffix}", file=sys.stderr)
+                sys.exit(1)
+            result = {**result, "stream_post": stream_post}
     print(json.dumps(result))
 
 
@@ -208,7 +258,7 @@ def main():
         choices=["pick-one", "pick-many", "rank", "approve", "comment", "before-after"],
     )
     p.add_argument("--project", default=None)
-    p.add_argument("--stream", default=None, help="Also attach this decision request to a Portal stream")
+    p.add_argument("--stream", default=None, type=_stream_slug, help="Also attach this decision request to a Portal stream")
     p.add_argument("--before", default=None, help="Optional before image for before/after decisions")
     p.add_argument("--context", default=None, help="Optional markdown context blurb")
     p.add_argument("--manifest", default=None, help="Path to a JSON file mapping filename -> {caption, meta}")
@@ -218,15 +268,15 @@ def main():
     stream_sub = p.add_subparsers(dest="stream_command", required=True)
 
     sp = stream_sub.add_parser("new", help="Create a Portal stream")
-    sp.add_argument("slug")
+    sp.add_argument("slug", type=_stream_slug)
     sp.add_argument("--kind", default="session", choices=["session", "pinned"])
     sp.add_argument("--title", default=None)
 
     sp = stream_sub.add_parser("close", help="Close a Portal stream")
-    sp.add_argument("slug")
+    sp.add_argument("slug", type=_stream_slug)
 
     p = sub.add_parser("report", help="Post an HTML report to a Portal stream")
-    p.add_argument("--stream", required=True)
+    p.add_argument("--stream", required=True, type=_stream_slug)
     p.add_argument("--title", required=True)
     p.add_argument("file_html")
     p.add_argument("assets", nargs="*")

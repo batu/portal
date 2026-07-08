@@ -7,6 +7,10 @@ import pytest
 from gallery import cli
 
 
+def _stub_open_stream(monkeypatch):
+    monkeypatch.setattr(cli.client, "get_stream", lambda *_args, **_kwargs: {"closed_at": None})
+
+
 def test_pyproject_exposes_portal_and_gallery_scripts():
     pyproject = tomllib.loads((Path(__file__).resolve().parents[1] / "pyproject.toml").read_text())
 
@@ -168,6 +172,7 @@ def test_post_stream_creates_decision_post_with_request_id(monkeypatch, tmp_path
     stream_posts = []
 
     monkeypatch.setattr(cli.config, "client_config", lambda: ("http://gallery", "tok"))
+    _stub_open_stream(monkeypatch)
 
     def fake_post_multipart(base_url, token, path, fields, files):
         request_posts.append(
@@ -248,6 +253,7 @@ def test_post_stream_with_before_keeps_before_out_of_candidates(monkeypatch, tmp
     captured = {}
 
     monkeypatch.setattr(cli.config, "client_config", lambda: ("http://gallery", "tok"))
+    _stub_open_stream(monkeypatch)
 
     def fake_post_multipart(_base_url, _token, _path, _fields, files):
         captured["files"] = files
@@ -282,6 +288,7 @@ def test_post_stream_attach_failure_mentions_created_request(monkeypatch, tmp_pa
     upload.write_bytes(b"png")
 
     monkeypatch.setattr(cli.config, "client_config", lambda: ("http://gallery", "tok"))
+    _stub_open_stream(monkeypatch)
     monkeypatch.setattr(
         cli.client,
         "post_multipart",
@@ -301,7 +308,162 @@ def test_post_stream_attach_failure_mentions_created_request(monkeypatch, tmp_pa
         cli.main()
 
     assert exc.value.code == 1
-    assert "error: HTTP 404: stream missing (request created: req_123)" in capsys.readouterr().err
+    captured = capsys.readouterr()
+    assert json.loads(captured.out) == {
+        "id": "req_123",
+        "variant_count": 1,
+        "stream_post": {
+            "stream": "alpha",
+            "type": "decision",
+            "body": {"request_id": "req_123"},
+            "status": "attach-failed",
+            "error": "HTTP 404: stream missing",
+        },
+    }
+    assert "error: HTTP 404: stream missing (request created: req_123)" in captured.err
+
+
+@pytest.mark.parametrize("stream", ["", "Alpha", "bad slug", "alpha-"])
+def test_post_invalid_stream_slug_rejected_before_request(monkeypatch, tmp_path, stream):
+    upload = tmp_path / "variant.png"
+    upload.write_bytes(b"png")
+
+    monkeypatch.setattr(
+        cli.client,
+        "post_multipart",
+        lambda *args, **kwargs: pytest.fail("invalid stream slug must be rejected before request creation"),
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        ["portal", "post", "--stream", stream, "--title", "t", "--kind", "pick-one", str(upload)],
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+
+    assert exc.value.code == 2
+
+
+def test_post_closed_stream_rejected_before_request(monkeypatch, tmp_path, capsys):
+    upload = tmp_path / "variant.png"
+    upload.write_bytes(b"png")
+
+    monkeypatch.setattr(cli.config, "client_config", lambda: ("http://gallery", "tok"))
+    monkeypatch.setattr(cli.client, "get_stream", lambda *_args, **_kwargs: {"closed_at": "now"})
+    monkeypatch.setattr(
+        cli.client,
+        "post_multipart",
+        lambda *args, **kwargs: pytest.fail("closed stream must be rejected before request creation"),
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        ["portal", "post", "--stream", "alpha", "--title", "t", "--kind", "pick-one", str(upload)],
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+
+    assert exc.value.code == 1
+    assert "error: stream is closed: alpha" in capsys.readouterr().err
+
+
+def test_post_missing_stream_preflight_allows_auto_create(monkeypatch, tmp_path):
+    upload = tmp_path / "variant.png"
+    upload.write_bytes(b"png")
+    events = []
+    request_posts = []
+    stream_posts = []
+
+    monkeypatch.setattr(cli.config, "client_config", lambda: ("http://gallery", "tok"))
+
+    def missing_stream(*_args, **_kwargs):
+        events.append("get_stream")
+        raise cli.client.GalleryClientError(404, "stream not found")
+
+    monkeypatch.setattr(cli.client, "get_stream", missing_stream)
+    monkeypatch.setattr(
+        cli.client,
+        "post_multipart",
+        lambda base_url, token, path, fields, files: events.append("post_multipart")
+        or request_posts.append((base_url, token, path, fields, files))
+        or {"id": "req_123"},
+    )
+    monkeypatch.setattr(
+        cli.client,
+        "create_stream_post",
+        lambda *args, **kwargs: events.append("create_stream_post")
+        or stream_posts.append((args, kwargs))
+        or {"post": {"id": "p_123"}},
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        ["portal", "post", "--stream", "alpha", "--title", "t", "--kind", "pick-one", str(upload)],
+    )
+
+    cli.main()
+
+    assert len(request_posts) == 1
+    assert len(stream_posts) == 1
+    assert events == ["get_stream", "post_multipart", "create_stream_post"]
+
+
+def test_post_stream_missing_request_id_exits_1(monkeypatch, tmp_path, capsys):
+    upload = tmp_path / "variant.png"
+    upload.write_bytes(b"png")
+
+    monkeypatch.setattr(cli.config, "client_config", lambda: ("http://gallery", "tok"))
+    _stub_open_stream(monkeypatch)
+    monkeypatch.setattr(cli.client, "post_multipart", lambda *_args, **_kwargs: {"variant_count": 1})
+    monkeypatch.setattr(
+        cli.client,
+        "create_stream_post",
+        lambda *args, **kwargs: pytest.fail("request id is required before stream attachment"),
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        ["portal", "post", "--stream", "alpha", "--title", "t", "--kind", "pick-one", str(upload)],
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+
+    assert exc.value.code == 1
+    assert "error: request response missing id" in capsys.readouterr().err
+
+
+def test_post_before_cannot_also_be_candidate_via_glob(monkeypatch, tmp_path, capsys):
+    before = tmp_path / "before.png"
+    after = tmp_path / "after.png"
+    before.write_bytes(b"before")
+    after.write_bytes(b"after")
+
+    monkeypatch.setenv("GALLERY_URL", "http://example.invalid")
+    monkeypatch.setenv("GALLERY_TOKEN", "x")
+    monkeypatch.setattr(
+        cli.client,
+        "post_multipart",
+        lambda *args, **kwargs: pytest.fail("duplicate before/candidate file must be rejected before posting"),
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "portal",
+            "post",
+            "--before",
+            str(before),
+            "--title",
+            "t",
+            "--kind",
+            "before-after",
+            str(tmp_path / "*.png"),
+        ],
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+
+    assert exc.value.code == 1
+    assert "error: before image must not also be a candidate file" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(
@@ -317,6 +479,7 @@ def test_post_stream_skips_duplicate_legacy_stream_attach(monkeypatch, tmp_path,
     request_posts = []
 
     monkeypatch.setattr(cli.config, "client_config", lambda: ("http://gallery", "tok"))
+    _stub_open_stream(monkeypatch)
 
     def fake_post_multipart(base_url, token, path, fields, files):
         request_posts.append((base_url, token, path, fields, files))
@@ -347,7 +510,16 @@ def test_post_stream_skips_duplicate_legacy_stream_attach(monkeypatch, tmp_path,
     cli.main()
 
     assert len(request_posts) == 1
-    assert json.loads(capsys.readouterr().out) == {"id": "req_123", "variant_count": 1}
+    assert json.loads(capsys.readouterr().out) == {
+        "id": "req_123",
+        "variant_count": 1,
+        "stream_post": {
+            "stream": stream,
+            "type": "decision",
+            "body": {"request_id": "req_123"},
+            "status": "already-attached",
+        },
+    }
 
 
 def test_list_parses_flags(monkeypatch):
@@ -456,6 +628,28 @@ def test_report_missing_file_exits_1(monkeypatch, tmp_path):
         cli.main()
 
     assert exc.value.code == 1
+
+
+def test_report_client_error_exits_1(monkeypatch, tmp_path, capsys):
+    html = tmp_path / "report.html"
+    html.write_text("<html></html>")
+
+    monkeypatch.setattr(cli.config, "client_config", lambda: ("http://gallery", "tok"))
+
+    def boom(*_args, **_kwargs):
+        raise cli.client.GalleryClientError(409, "stream is closed: alpha")
+
+    monkeypatch.setattr(cli.client, "create_stream_post", boom)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["portal", "report", "--stream", "alpha", "--title", "Report", str(html)],
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+
+    assert exc.value.code == 1
+    assert "error: HTTP 409: stream is closed: alpha" in capsys.readouterr().err
 
 
 def test_new_command_client_errors_exit_1(monkeypatch, capsys):
