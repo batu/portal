@@ -17,15 +17,18 @@ def _variant_uploads(n=2):
     return [("files", (f"after-{i}.png", tiny_png_bytes(), "image/png")) for i in range(1, n + 1)]
 
 
-def _create_request(client, token, *, kind="pick-one", before=True, variants=2):
+def _create_request(client, token, *, kind="pick-one", before=True, variants=2, project=None):
     files = []
     if before:
         files.append(("before", ("before.png", tiny_png_bytes(), "image/png")))
     files.extend(_variant_uploads(variants))
+    data = {"title": f"{kind} before", "kind": kind}
+    if project is not None:
+        data["project"] = project
     create = client.post(
         "/api/requests",
         headers=auth_headers(token),
-        data={"title": f"{kind} before", "kind": kind},
+        data=data,
         files=files,
     )
     assert create.status_code == 200
@@ -118,6 +121,44 @@ def test_request_without_before_keeps_existing_key_markup(client, token):
     assert "BEFORE" not in page.text
 
 
+def test_before_request_non_selecting_kinds_do_not_render_inert_candidate_buttons(client, token):
+    req_id = _create_request(client, token, kind="approve", before=True, variants=1)
+
+    page = client.get(f"/r/{req_id}?token={token}")
+
+    assert page.status_code == 200
+    assert 'data-before-default-view="side-by-side" data-can-decide="true"' in page.text
+    assert '<div class="variant" data-idx="1">' in page.text
+    assert 'data-idx="1" tabindex=' not in page.text
+    assert 'data-idx="1" role="button"' not in page.text
+    assert 'data-idx="1" aria-pressed=' not in page.text
+    assert '<button type="button" class="btn approve" data-approve="yes">Approve</button>' in page.text
+
+
+def test_before_request_in_closed_stream_is_not_selectable(client, token):
+    req_id = _create_request(
+        client,
+        token,
+        kind="before-after",
+        before=True,
+        variants=1,
+        project="closed/project",
+    )
+    close = client.post("/api/streams/proj-closed-project/close", headers=auth_headers(token))
+    assert close.status_code == 200
+
+    page = client.get(f"/r/{req_id}?token={token}")
+
+    assert page.status_code == 200
+    assert "Archived stream. This request is read-only." in page.text
+    assert 'data-before-default-view="toggle" data-can-decide="false"' in page.text
+    assert '<div class="variant" data-idx="1">' in page.text
+    assert 'data-idx="1" tabindex=' not in page.text
+    assert 'data-idx="1" role="button"' not in page.text
+    assert 'data-idx="1" aria-pressed=' not in page.text
+    assert '<div class="decision-panel">' not in page.text
+
+
 def test_static_js_keeps_before_after_pick_one_and_space_blink_hooks(client):
     script = client.get("/static/app.js")
 
@@ -128,3 +169,11 @@ def test_static_js_keeps_before_after_pick_one_and_space_blink_hooks(client):
     assert "show-before" in script.text
     assert "keydown" in script.text
     assert "event.key !== \" \"" in script.text
+    assert "activeToggleIdx" in script.text
+    assert "clearBlink()" in script.text
+    assert "pauseVideos(root)" in script.text
+    assert "syncActiveToggleIdx(idxOf(el))" in script.text
+    assert "isToggleMode() && pickOneKinds[kind] && pos !== -1" in script.text
+    assert 'event.target.closest && event.target.closest("a")' in script.text
+    assert "event.target !== el" in script.text
+    assert 'section.dataset.canDecide === "false"' in script.text

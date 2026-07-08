@@ -1,7 +1,9 @@
 {% extends "base.html" %}
 {% block title %}{{ r.title }} — Gallery{% endblock %}
 {% block content %}
-<section class="request-detail" data-req-id="{{ r.id }}" data-kind="{{ r.kind }}" data-status="{{ r.status }}"{% if before_media %} data-before-default-view="{{ before_media.default_view }}"{% endif %}>
+{% set selectable_variants = r.kind in ["pick-one", "before-after", "pick-many", "rank"] %}
+{% set can_decide = r.status == "open" and not stream_read_only %}
+<section class="request-detail" data-req-id="{{ r.id }}" data-kind="{{ r.kind }}" data-status="{{ r.status }}"{% if before_media %} data-before-default-view="{{ before_media.default_view }}" data-can-decide="{{ 'true' if can_decide else 'false' }}"{% endif %}>
   <h1>{{ r.title }}</h1>
   <div class="request-meta">
     {% if r.project %}<span class="tag">{{ r.project }}</span>{% endif %}
@@ -75,7 +77,7 @@
 
   <div class="variant-grid"{% if before_media %} data-candidate-grid{% endif %}>
     {% for v in r.variants %}
-    <div class="variant" data-idx="{{ v.idx }}"{% if before_media %} tabindex="0" role="button" aria-pressed="false"{% endif %}>
+    <div class="variant" data-idx="{{ v.idx }}"{% if before_media and selectable_variants and can_decide %} tabindex="0" role="button" aria-pressed="false"{% endif %}>
       <div class="variant-media">
         {% if v.media_type == "video" %}
         <video controls playsinline preload="metadata" src="/media/{{ r.id }}/{{ v.media_path }}?token={{ request.query_params.get('token', '') }}"></video>
@@ -94,7 +96,7 @@
     {% endfor %}
   </div>
 
-  {% if r.status == "open" and not stream_read_only %}
+  {% if can_decide %}
   <div class="decision-panel">
     {% if r.kind == "approve" %}
     <div class="approve-buttons">

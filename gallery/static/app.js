@@ -22,6 +22,7 @@
   var order = [];
   var pickOneKinds = { "pick-one": true, "before-after": true };
   var blinkTimer = null;
+  var activeToggleIdx = null;
 
   function idxOf(el) {
     return parseInt(el.dataset.idx, 10);
@@ -53,25 +54,55 @@
     return beforeReview && beforeReview.dataset.mode === "toggle";
   }
 
-  function selectedToggleIdx() {
+  function activeToggleCandidate() {
+    if (activeToggleIdx !== null && order.indexOf(activeToggleIdx) !== -1) {
+      return activeToggleIdx;
+    }
     return order.length ? order[order.length - 1] : null;
+  }
+
+  function pauseVideos(root) {
+    if (!root) return;
+    Array.prototype.slice.call(root.querySelectorAll("video")).forEach(function (video) {
+      video.pause();
+    });
+  }
+
+  function clearBlink() {
+    window.clearTimeout(blinkTimer);
+    blinkTimer = null;
+    if (toggleFrame) {
+      toggleFrame.classList.remove("show-before");
+    }
+  }
+
+  function syncActiveToggleIdx(preferred) {
+    if (preferred !== null && order.indexOf(preferred) !== -1) {
+      activeToggleIdx = preferred;
+    } else {
+      activeToggleIdx = order.length ? order[order.length - 1] : null;
+    }
   }
 
   function syncToggleFrame() {
     if (!toggleFrame) return;
-    var selected = selectedToggleIdx();
+    var selected = activeToggleCandidate();
     toggleFrame.classList.toggle("has-candidate", selected !== null);
     if (selected === null) {
-      toggleFrame.classList.remove("show-before");
+      clearBlink();
     }
     toggleCandidates.forEach(function (el) {
-      el.hidden = parseInt(el.dataset.toggleCandidate, 10) !== selected;
+      var shouldHide = parseInt(el.dataset.toggleCandidate, 10) !== selected;
+      if (shouldHide && !el.hidden) {
+        pauseVideos(el);
+      }
+      el.hidden = shouldHide;
     });
   }
 
   function blinkToggleFrame() {
-    if (!toggleFrame || !isToggleMode() || selectedToggleIdx() === null) return;
-    window.clearTimeout(blinkTimer);
+    if (!toggleFrame || !isToggleMode() || activeToggleCandidate() === null) return;
+    clearBlink();
     syncToggleFrame();
     toggleFrame.classList.add("show-before");
     blinkTimer = window.setTimeout(function () {
@@ -83,6 +114,9 @@
     if (!beforeReview) return;
     var normalized = view === "toggle" ? "toggle" : "side-by-side";
     beforeReview.dataset.mode = normalized;
+    if (sideBySideView && normalized !== "side-by-side") pauseVideos(sideBySideView);
+    if (toggleView && normalized !== "toggle") pauseVideos(toggleView);
+    if (normalized !== "toggle") clearBlink();
     if (sideBySideView) sideBySideView.hidden = normalized !== "side-by-side";
     if (toggleView) toggleView.hidden = normalized !== "toggle";
     beforeButtons.forEach(function (btn) {
@@ -94,10 +128,12 @@
   function toggleVariant(el) {
     var i = idxOf(el);
     var pos = order.indexOf(i);
-    if (isToggleMode() && pos !== -1) {
+    if (isToggleMode() && pickOneKinds[kind] && pos !== -1) {
+      syncActiveToggleIdx(i);
       blinkToggleFrame();
       return;
     }
+    if (isToggleMode()) clearBlink();
     if (pickOneKinds[kind]) {
       order = pos === -1 ? [i] : [];
     } else if (kind === "pick-many" || kind === "rank") {
@@ -107,6 +143,7 @@
         order.splice(pos, 1);
       }
     }
+    syncActiveToggleIdx(pos === -1 ? i : null);
     renderSelection();
     syncToggleFrame();
   }
@@ -120,17 +157,26 @@
     setBeforeView(section.dataset.beforeDefaultView || beforeReview.dataset.mode);
   }
 
-  if (status !== "open") return; // decided requests are read-only
+  if (status !== "open" || section.dataset.canDecide === "false") return; // decided/archived requests are read-only
 
   if (pickOneKinds[kind] || kind === "pick-many" || kind === "rank") {
     variants.forEach(function (el) {
-      el.addEventListener("click", function () {
+      el.addEventListener("click", function (event) {
+        if (isToggleMode() && event.target.closest && event.target.closest("a")) {
+          event.preventDefault();
+        }
         toggleVariant(el);
       });
       if (beforeReview) {
         el.addEventListener("keydown", function (event) {
           if (event.key !== " " && event.code !== "Space") return;
+          if (event.target !== el) return;
           event.preventDefault();
+          if (isToggleMode() && order.indexOf(idxOf(el)) !== -1) {
+            syncActiveToggleIdx(idxOf(el));
+            blinkToggleFrame();
+            return;
+          }
           toggleVariant(el);
         });
       }
