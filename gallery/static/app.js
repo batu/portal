@@ -226,3 +226,86 @@
     });
   }
 })();
+
+(function () {
+  var section = document.querySelector(".stream-detail");
+  if (!section) return; // not a stream detail page
+
+  var slug = section.dataset.streamSlug;
+  if (!slug) return;
+
+  function endpoint(action) {
+    return "/s/" + encodeURIComponent(slug) + "/" + action + window.location.search;
+  }
+
+  function statusFor(form) {
+    return form.querySelector("[data-form-status]");
+  }
+
+  function setStatus(form, message, isError) {
+    var status = statusFor(form);
+    if (!status) return;
+    status.textContent = message;
+    status.classList.toggle("is-error", Boolean(isError));
+  }
+
+  function submitJson(form, action, payload) {
+    var button = form.querySelector("button[type='submit']");
+    if (button) button.disabled = true;
+    setStatus(form, "Sending...", false);
+    fetch(endpoint(action), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify(payload),
+    })
+      .then(function (resp) {
+        if (!resp.ok) {
+          return resp.json().catch(function () {
+            return {};
+          }).then(function (err) {
+            throw new Error(err.detail || "failed to send message");
+          });
+        }
+        return resp.json();
+      })
+      .then(function () {
+        window.location.reload();
+      })
+      .catch(function (err) {
+        setStatus(form, err.message, true);
+        if (button) button.disabled = false;
+      });
+  }
+
+  function textPayload(form) {
+    var textarea = form.querySelector("textarea[name='text']");
+    var text = textarea ? textarea.value.trim() : "";
+    if (!text) {
+      setStatus(form, "Message is required.", true);
+      return null;
+    }
+    return { text: text };
+  }
+
+  var noteForm = section.querySelector("[data-stream-note-form]");
+  if (noteForm) {
+    noteForm.addEventListener("submit", function (event) {
+      event.preventDefault();
+      var payload = textPayload(noteForm);
+      if (!payload) return;
+      submitJson(noteForm, "note", payload);
+    });
+  }
+
+  Array.prototype.slice.call(section.querySelectorAll("[data-answer-form]")).forEach(function (form) {
+    form.addEventListener("submit", function (event) {
+      event.preventDefault();
+      var payload = textPayload(form);
+      if (!payload) return;
+      var questionId = form.querySelector("input[name='question_id']");
+      payload.question_id = questionId ? questionId.value : "";
+      submitJson(form, "answer", payload);
+    });
+  });
+})();

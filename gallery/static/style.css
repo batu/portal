@@ -111,6 +111,142 @@ h2 { font-size: 1.05rem; }
   padding: 10px 12px;
 }
 
+.stream-message-panel {
+  margin: 18px 0 24px;
+}
+
+.stream-message-panel h2 {
+  margin: 16px 0 8px;
+}
+
+.message-form {
+  margin: 0;
+}
+
+.note-form {
+  margin-bottom: 18px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+}
+
+.message-form label {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--fg);
+  font-weight: 700;
+}
+
+.message-form .comment-box {
+  min-height: 76px;
+  margin-bottom: 10px;
+}
+
+.btn.message-send {
+  width: 100%;
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+.btn.message-send:disabled {
+  opacity: 0.65;
+  cursor: progress;
+}
+
+.message-status {
+  min-height: 20px;
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.message-status.is-error {
+  color: #ff9b9b;
+}
+
+.message-list {
+  list-style: none;
+  margin: 0 0 16px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.stream-message {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+}
+
+.stream-message.needs-answer {
+  border-color: #3d6fd0;
+}
+
+.stream-message.is-consumed {
+  color: var(--muted);
+  background: #151820;
+}
+
+.message-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.message-label {
+  color: var(--fg);
+  font-weight: 800;
+}
+
+.message-text {
+  margin: 0 0 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.message-time {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.answer-form {
+  margin-top: 12px;
+}
+
+.message-history {
+  margin: 12px 0 16px;
+}
+
+.message-history summary {
+  min-height: 44px;
+  padding: 10px 0;
+  color: var(--muted);
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.status-badge.queued {
+  background: #2f2818;
+  color: #ffd580;
+}
+
+.status-badge.picked-up {
+  background: #16301e;
+  color: #71d083;
+}
+
+.message-form textarea:focus-visible,
+.message-form .btn:focus-visible,
+.message-history summary:focus-visible {
+  outline: 3px solid #ffd166;
+  outline-offset: 3px;
+}
+
 .post-list {
   list-style: none;
   margin: 0 0 24px;
@@ -489,4 +625,9 @@ h2 { font-size: 1.05rem; }
   .decision-link { background: #f7f8fa; }
   .status-badge.pending { background: #fff3cf; color: #7a4c00; }
   .status-badge.decided { background: #eafaf0; color: #1f7a3a; }
+  .stream-message.is-consumed { background: #f7f8fa; }
+  .stream-message.needs-answer { border-color: #7aa7ff; }
+  .message-status.is-error { color: #a32424; }
+  .status-badge.queued { background: #fff3cf; color: #7a4c00; }
+  .status-badge.picked-up { background: #eafaf0; color: #1f7a3a; }
 }
