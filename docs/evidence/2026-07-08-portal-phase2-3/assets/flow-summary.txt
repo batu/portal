@@ -1,0 +1,9 @@
+inbox_stream_slug: phase23-inbox-evidence
+media_stream_slug: phase23-media-evidence
+question_id: m_evidence_1
+answer_id: m_evidence_3
+note_id: m_evidence_4
+report_post_id: p_evidence_1
+request_id: req_evidence_1
+decision_post_id: p_evidence_2
+closed_report_rejection_status: 409

@@ -1,0 +1,22 @@
+usage: portal [-h]
+              {init,post,stream,report,wait,ask,pull,trello-watch,status,list,serve} ...
+
+Portal review hub for agent outputs and decisions
+
+positional arguments:
+  {init,post,stream,report,wait,ask,pull,trello-watch,status,list,serve}
+    init                Create ~/.gallery/ and generate a bearer token
+    post                Post a new decision request
+    stream              Create or close Portal streams
+    report              Post an HTML report to a Portal stream
+    wait                Block until a request is decided, then print the
+                        verdict
+    ask                 Ask a human and block for a reply
+    pull                Fetch and consume the next queued steering note
+    trello-watch        Poll Trello cards and run one twf stage per pass
+    status              Print a request's current state
+    list                List requests
+    serve               Run the server in the foreground (used by launchd)
+
+options:
+  -h, --help            show this help message and exit

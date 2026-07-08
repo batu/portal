@@ -1,0 +1,28 @@
+usage: portal trello-watch [-h] --repo REPO [--list TRIGGER_LIST]
+                           [--interval INTERVAL] [--once]
+                           [--max-stage MAX_STAGE]
+
+options:
+  -h, --help            show this help message and exit
+  --repo REPO           twf project repo whose agents/config.json supplies
+                        Trello lists
+  --list TRIGGER_LIST   Trigger Trello list id or configured list name
+                        (default: todo)
+  --interval INTERVAL
+  --once                Run one poll pass and exit
+  --max-stage MAX_STAGE
+                        Last configured stage the watcher may reach
+
+foreground polling: each poll prints one JSON summary line. Use --once for a
+single machine-checkable pass.
+
+Summary shape:
+  {"picked_up": 0, "advanced": 0, "stopped": 0, "errored": 0, "skipped": 0,
+   "cards": [{"card_id": "...", "short_link": "...", "stream_slug": "...",
+              "status": "...", "action": "...", "reason": "..."}]}
+
+Exit/stdout contract:
+  success 0: one JSON summary line
+  retryable one-shot failure 75: JSON summary includes "transient_error"
+  client/config/API error 1: stderr only, no branch JSON
+  argparse usage error 2: stderr only, no branch JSON

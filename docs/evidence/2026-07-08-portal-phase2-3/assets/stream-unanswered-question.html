@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <title>phase23-inbox-evidence — Stream</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <a href="/" class="brand">Gallery</a>
+  </header>
+  <main>
+
+<section class="stream-detail" data-stream-slug="phase23-inbox-evidence">
+  <div class="stream-header">
+    <h1>phase23-inbox-evidence</h1>
+    <div class="request-meta">
+      <span class="tag">/s/phase23-inbox-evidence</span>
+      <span class="tag kind">session</span>
+      <span class="age">created 10h ago</span>
+
+    </div>
+  </div>
+
+
+
+  <section class="stream-message-panel" aria-labelledby="stream-messages-title">
+    <h2 id="stream-messages-title">Messages</h2>
+
+
+    <form class="message-form note-form" method="post" action="/s/phase23-inbox-evidence/note" data-stream-note-form>
+      <label for="stream-note">Note to agent</label>
+      <textarea id="stream-note" name="text" class="comment-box" rows="3" autocomplete="off"></textarea>
+      <button class="btn message-send" type="submit">Send</button>
+      <p class="message-status" data-form-status role="status" aria-live="polite"></p>
+    </form>
+
+
+
+    <section class="agent-questions" aria-labelledby="agent-asks-title">
+      <h2 id="agent-asks-title">Agent asks</h2>
+      <ul class="message-list question-list">
+
+        <li>
+          <article class="stream-message to-human needs-answer" data-question-id="m_evidence_1">
+            <div class="message-heading">
+              <span class="message-label">Question</span>
+              <span class="age">10h ago</span>
+            </div>
+            <p class="message-text">Which rollout should I assume?</p>
+
+            <form class="message-form answer-form" method="post" action="/s/phase23-inbox-evidence/answer" data-answer-form>
+              <input type="hidden" name="question_id" value="m_evidence_1">
+              <label for="answer-m_evidence_1">Answer</label>
+              <textarea id="answer-m_evidence_1" name="text" class="comment-box" rows="2" autocomplete="off"></textarea>
+              <button class="btn message-send" type="submit">Answer</button>
+              <p class="message-status" data-form-status role="status" aria-live="polite"></p>
+            </form>
+
+          </article>
+        </li>
+
+      </ul>
+    </section>
+
+
+
+
+
+  </section>
+
+
+  <p class="empty">No posts yet.</p>
+
+
+  <ul class="post-list">
+
+  </ul>
+</section>
+
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>

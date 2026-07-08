@@ -1,0 +1,17 @@
+usage: portal pull [-h] --stream STREAM [--timeout TIMEOUT]
+                   [--interval INTERVAL]
+
+options:
+  -h, --help           show this help message and exit
+  --stream STREAM
+  --timeout TIMEOUT
+  --interval INTERVAL
+
+client-side polling: fetches the oldest unconsumed to_agent message and consumes
+it before printing. Default --timeout 0 performs one non-blocking check.
+
+Exit/stdout contract:
+  success 0: {"text": "...", "message_id": "..."}
+  client/API error 1: stderr only, no branch JSON
+  empty 3: {"empty": true}
+  argparse usage error 2: stderr only, no branch JSON

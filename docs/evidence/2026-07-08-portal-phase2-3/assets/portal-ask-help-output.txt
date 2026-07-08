@@ -1,0 +1,21 @@
+usage: portal ask [-h] --stream STREAM [--timeout TIMEOUT]
+                  [--interval INTERVAL]
+                  question
+
+positional arguments:
+  question
+
+options:
+  -h, --help           show this help message and exit
+  --stream STREAM
+  --timeout TIMEOUT
+  --interval INTERVAL
+
+client-side polling: posts a to_human question, then polls plain GET messages
+for the first unconsumed to_agent reply after the ask timestamp.
+
+Exit/stdout contract:
+  success 0: {"reply": "...", "message_id": "...", "elapsed_s": 1.23}
+  client/API error 1: stderr only, no branch JSON
+  timeout 2: {"timeout": true}
+  argparse usage error 2: stderr only, no branch JSON

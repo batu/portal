@@ -143,6 +143,41 @@ in project streams, and before/after review. Phase 2 added `ask`, `pull`, and
 stream note boxes. Public/per-stream auth remains planned in
 `docs/portal-spec.md`.
 
+### Portal inbox
+
+The Inbox verbs implement the phase 2 steering/questions protocol from
+[`docs/portal-spec.md` §7](docs/portal-spec.md#7-steering-and-questions-phase-2).
+They use client-side polling only; route handlers do not long-poll.
+
+```bash
+# Ask a blocking human question on a stream. Missing streams are auto-created.
+portal ask --stream ftd-menu-redesign-0708 "Which direction should I take?" \
+  --timeout 1800 --interval 15
+# -> {"reply": "...", "message_id": "...", "elapsed_s": 1.23}
+
+# Pick up the oldest queued human steering note. Default --timeout 0 is one
+# non-blocking check.
+portal pull --stream ftd-menu-redesign-0708
+# -> {"text": "...", "message_id": "..."}
+```
+
+`portal ask` posts a `to_human` question, rings the notification hook, then
+polls `GET /api/streams/<slug>/messages` for the first unconsumed `to_agent`
+reply after the ask timestamp. Human replies are submitted from the stream
+page's answer form; the browser uses the cookie-authenticated
+`POST /s/<slug>/answer` twin, so rendered forms do not carry `?token=` URLs.
+On success `ask` exits `0` with reply JSON. Client/API errors exit `1` with
+stderr only. Timeout exits `2` with `{"timeout": true}`. Argparse usage errors
+also exit `2` with no branch JSON.
+
+`portal pull` reads the oldest unconsumed `to_agent` steering note and consumes
+it before printing. Human notes are submitted from the stream page's note box
+through `POST /s/<slug>/note`; delivery is intended for agent turn boundaries,
+not mid-turn interruption. On success `pull` exits `0` with note JSON.
+Client/API errors exit `1`; an empty queue exits `3` with `{"empty": true}`.
+Argparse usage errors exit `2`. `pull` and browser note/answer routes require
+an existing stream; they do not auto-create one.
+
 ### Trello watcher for twf cards
 
 `portal trello-watch` is a foreground polling loop for coworker-created Trello
@@ -150,6 +185,8 @@ cards. It reads the target twf repo's `agents/config.json` `trello` block,
 watches a trigger list, runs one `twf run-card <shortid> --worktree` stage per
 tracked card per poll pass, and mirrors pickup, handoff, failure, and stop
 states into a per-card Portal stream named `trello-<shortid>`.
+This is the phase 3 watcher slice from
+[`docs/portal-spec.md` §11.3](docs/portal-spec.md#11-phases).
 
 Required inputs:
 
@@ -166,7 +203,10 @@ portal trello-watch --repo /Users/base/dev/appletolye/fabrikav2 \
 `--list` accepts a configured list name/key or a raw Trello list id and defaults
 to the repo board's `todo` list. `--max-stage` defaults to
 `aesthetics_reviewed`; the watcher stops there, on `blocked_on_batu`, or after
-an errored run. It never merges, lands, or advances past `--max-stage`.
+an errored run. It also stops and posts a human message if a tracked card is
+closed or moved to an unknown list. It never merges, lands, or advances past
+`--max-stage`. Each poll prints one JSON summary line; `--once` exits `75` for
+retryable one-shot failures and exits `1` for client/config/API errors.
 
 For a single test poll:
 

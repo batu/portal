@@ -1,0 +1,96 @@
+{
+  "boundaries": {
+    "network": "fake Trello and fake Portal only",
+    "subprocess": "fake runner only"
+  },
+  "first_summary": {
+    "advanced": 1,
+    "cards": [
+      {
+        "action": "advanced",
+        "card_id": "card-1",
+        "short_link": "hVtTtwRa",
+        "status": "tracking",
+        "stream_slug": "trello-hvtttwra"
+      }
+    ],
+    "errored": 0,
+    "picked_up": 1,
+    "skipped": 0,
+    "stopped": 0
+  },
+  "portal_messages": [
+    {
+      "slug": "trello-hvtttwra",
+      "text": "Trello card hVtTtwRa reached aesthetics_reviewed; watcher max-stage is aesthetics_reviewed, so it will not advance further."
+    }
+  ],
+  "portal_reports": [
+    {
+      "card_url": "https://trello.com/c/hVtTtwRa",
+      "kind": "pickup",
+      "slug": "trello-hvtttwra",
+      "text": "Picked up Phase 2/3 proof.\nTrello card: https://trello.com/c/hVtTtwRa\nWatcher stream: http://portal.local/s/trello-hvtttwra",
+      "title": "Picked up Phase 2/3 proof"
+    },
+    {
+      "card_url": "https://trello.com/c/hVtTtwRa",
+      "kind": "handoff",
+      "slug": "trello-hvtttwra",
+      "text": "Done: implemented one stage\nVerified-how: focused fake watcher run\nRemaining: next twf stage\nSurprises: none",
+      "title": "twf handoff for Phase 2/3 proof"
+    }
+  ],
+  "runner_calls": [
+    {
+      "env_keys": [
+        "PATH",
+        "TRELLO_API_KEY",
+        "TRELLO_TOKEN"
+      ],
+      "equivalent_command": "twf run-card hVtTtwRa --worktree",
+      "repo": "<fake-repo>",
+      "short": "hVtTtwRa"
+    }
+  ],
+  "second_summary": {
+    "advanced": 0,
+    "cards": [
+      {
+        "action": "stopped",
+        "card_id": "card-1",
+        "reason": "Trello card hVtTtwRa reached aesthetics_reviewed; watcher max-stage is aesthetics_reviewed, so it will not advance further.",
+        "short_link": "hVtTtwRa",
+        "status": "stopped",
+        "stream_slug": "trello-hvtttwra"
+      }
+    ],
+    "errored": 0,
+    "picked_up": 0,
+    "skipped": 0,
+    "stopped": 1
+  },
+  "third_summary": {
+    "advanced": 0,
+    "cards": [
+      {
+        "action": "skipped",
+        "card_id": "card-1",
+        "reason": "Trello card hVtTtwRa reached aesthetics_reviewed; watcher max-stage is aesthetics_reviewed, so it will not advance further.",
+        "short_link": "hVtTtwRa",
+        "status": "stopped",
+        "stream_slug": "trello-hvtttwra"
+      }
+    ],
+    "errored": 0,
+    "picked_up": 0,
+    "skipped": 1,
+    "stopped": 0
+  },
+  "trello_comments": [
+    [
+      "card-1",
+      "Portal report: http://portal.local/s/trello-hvtttwra\nStatus: completed one twf stage for hVtTtwRa."
+    ]
+  ]
+}
