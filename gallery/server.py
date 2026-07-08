@@ -701,6 +701,20 @@ def _request_stream_closed(request_row: dict) -> bool:
     return bool(row and row["closed_at"] is not None)
 
 
+def _before_media_context(request_row: dict) -> dict | None:
+    media_path = request_row.get("before_media_path")
+    if not isinstance(media_path, str) or not media_path or not _safe_media_filename(media_path):
+        return None
+    media_type = request_row.get("before_media_type")
+    if media_type not in {"image", "video"}:
+        media_type = _media_type_for(media_path)
+    return {
+        "url": _media_url(str(request_row["id"]), media_path),
+        "media_type": media_type,
+        "default_view": "toggle" if request_row.get("kind") == "before-after" else "side-by-side",
+    }
+
+
 def _list_stream_summaries() -> list[dict]:
     conn = db.connect()
     with db._lock:
@@ -775,11 +789,17 @@ def web_request_detail(request: Request, req_id: str):
 
     context_html = md_lib.markdown(r["context_md"]) if r.get("context_md") else ""
     stream_read_only = _request_stream_closed(r)
+    before_media = _before_media_context(r)
 
     response = templates.TemplateResponse(
         request,
         "request.html",
-        {"r": r, "context_html": context_html, "stream_read_only": stream_read_only},
+        {
+            "r": r,
+            "context_html": context_html,
+            "stream_read_only": stream_read_only,
+            "before_media": before_media,
+        },
     )
     _maybe_set_cookie(response, request)
     return response

@@ -1,0 +1,130 @@
+import re
+
+
+def auth_headers(token):
+    return {"Authorization": f"Bearer {token}"}
+
+
+def tiny_png_bytes() -> bytes:
+    return bytes.fromhex(
+        "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+        "0000000a49444154789c6360000002000100ffff03000006000557bfabd4000000"
+        "0049454e44ae426082"
+    )
+
+
+def _variant_uploads(n=2):
+    return [("files", (f"after-{i}.png", tiny_png_bytes(), "image/png")) for i in range(1, n + 1)]
+
+
+def _create_request(client, token, *, kind="pick-one", before=True, variants=2):
+    files = []
+    if before:
+        files.append(("before", ("before.png", tiny_png_bytes(), "image/png")))
+    files.extend(_variant_uploads(variants))
+    create = client.post(
+        "/api/requests",
+        headers=auth_headers(token),
+        data={"title": f"{kind} before", "kind": kind},
+        files=files,
+    )
+    assert create.status_code == 200
+    return create.json()["id"]
+
+
+def _selectable_variant_indices(html):
+    return re.findall(r'class="variant" data-idx="(\d+)"', html)
+
+
+def test_before_request_renders_before_block_switcher_and_non_selectable_baseline(client, token):
+    req_id = _create_request(client, token, kind="pick-one", before=True, variants=2)
+
+    page = client.get(f"/r/{req_id}?token={token}")
+
+    assert page.status_code == 200
+    assert 'data-before-default-view="side-by-side"' in page.text
+    assert 'class="before-after-review" data-before-review data-mode="side-by-side"' in page.text
+    assert 'class="before-card before-side-by-side" data-before-block data-side-by-side' in page.text
+    assert "BEFORE" in page.text
+    assert f'/media/{req_id}/__before.png?token=' in page.text
+    assert 'role="group" aria-label="Before after view"' in page.text
+    assert 'data-before-view="side-by-side" aria-pressed="true"' in page.text
+    assert 'data-before-view="toggle" aria-pressed="false"' in page.text
+    assert 'class="toggle-view" data-before-toggle hidden' in page.text
+    assert 'class="toggle-frame" data-toggle-frame' in page.text
+    assert 'data-toggle-candidate="1"' in page.text
+    assert 'data-toggle-candidate="2"' in page.text
+
+    before_region = page.text[page.text.index("data-before-block") : page.text.index("data-candidate-grid")]
+    assert 'class="variant"' not in before_region
+    assert "data-idx=" not in before_region
+    assert "tabindex=" not in before_region
+    assert 'role="button"' not in before_region
+    assert page.text.index("data-before-block") < page.text.index('class="variant" data-idx="1"')
+    assert _selectable_variant_indices(page.text) == ["1", "2"]
+    assert 'class="variant" data-idx="1" tabindex="0" role="button" aria-pressed="false"' in page.text
+
+    detail = client.get(f"/api/requests/{req_id}", headers=auth_headers(token))
+    assert detail.status_code == 200
+    assert [v["idx"] for v in detail.json()["variants"]] == [1, 2]
+
+
+def test_before_after_kind_defaults_to_toggle_and_uses_variant_verdicts(client, token):
+    req_id = _create_request(client, token, kind="before-after", before=True, variants=2)
+
+    page = client.get(f"/r/{req_id}?token={token}")
+
+    assert page.status_code == 200
+    assert 'data-kind="before-after"' in page.text
+    assert 'data-before-default-view="toggle"' in page.text
+    assert 'data-before-view="side-by-side" aria-pressed="false"' in page.text
+    assert 'data-before-view="toggle" aria-pressed="true"' in page.text
+    assert 'class="before-card before-side-by-side" data-before-block data-side-by-side hidden' in page.text
+    assert 'class="toggle-view" data-before-toggle>' in page.text
+    assert _selectable_variant_indices(page.text) == ["1", "2"]
+
+    invalid = client.post(f"/r/{req_id}/decide?token={token}", json={"selected": [0]})
+    assert invalid.status_code == 400
+    assert "selected indices not found" in invalid.json()["detail"]
+
+    decided = client.post(f"/r/{req_id}/decide?token={token}", json={"selected": [1]})
+    assert decided.status_code == 200
+    detail = client.get(f"/api/requests/{req_id}", headers=auth_headers(token))
+    assert detail.json()["status"] == "decided"
+    assert detail.json()["verdict"]["selected"] == [1]
+
+
+def test_request_without_before_keeps_existing_key_markup(client, token):
+    req_id = _create_request(client, token, kind="pick-one", before=False, variants=1)
+
+    page = client.get(f"/r/{req_id}?token={token}")
+
+    assert page.status_code == 200
+    assert (
+        f'<section class="request-detail" data-req-id="{req_id}" data-kind="pick-one" data-status="open">'
+        in page.text
+    )
+    assert '<div class="variant-grid">' in page.text
+    assert '<div class="variant" data-idx="1">' in page.text
+    assert '<div class="decision-panel">' in page.text
+    assert '<button type="button" class="btn decide" id="decide-btn">Decide</button>' in page.text
+    assert _selectable_variant_indices(page.text) == ["1"]
+    assert "data-before-default-view" not in page.text
+    assert "before-after-review" not in page.text
+    assert "data-before-review" not in page.text
+    assert "data-before-view" not in page.text
+    assert "data-before-toggle" not in page.text
+    assert "data-toggle-frame" not in page.text
+    assert "BEFORE" not in page.text
+
+
+def test_static_js_keeps_before_after_pick_one_and_space_blink_hooks(client):
+    script = client.get("/static/app.js")
+
+    assert script.status_code == 200
+    assert '"before-after": true' in script.text
+    assert "data-before-review" in script.text
+    assert "data-toggle-frame" in script.text
+    assert "show-before" in script.text
+    assert "keydown" in script.text
+    assert "event.key !== \" \"" in script.text
