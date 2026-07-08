@@ -44,6 +44,26 @@ def _stream_slug(value: str) -> str:
     return value
 
 
+def _non_negative_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be an integer") from exc
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("must be non-negative")
+    return parsed
+
+
+def _positive_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be an integer") from exc
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be positive")
+    return parsed
+
+
 def _legacy_stream_slug(project: str | None) -> str:
     if not project or not project.strip():
         return "inbox"
@@ -73,6 +93,14 @@ def _preflight_stream(base_url: str, token: str, slug: str) -> None:
     if stream.get("closed_at") is not None:
         print(f"error: stream is closed: {slug}", file=sys.stderr)
         sys.exit(1)
+
+
+def _sleep_if_time_remains(deadline: float, interval: int) -> bool:
+    remaining = deadline - time.time()
+    if remaining <= 0:
+        return False
+    time.sleep(min(interval, remaining))
+    return True
 
 
 def cmd_init(args):
@@ -200,6 +228,65 @@ def cmd_wait(args):
         time.sleep(args.interval)
 
 
+def cmd_ask(args):
+    base_url, token = config.client_config()
+    started_at = time.time()
+    deadline = started_at + args.timeout
+    try:
+        ask_message = client.create_stream_message(base_url, token, args.stream, "to_human", args.question)
+        while True:
+            replies = client.list_stream_messages(
+                base_url,
+                token,
+                args.stream,
+                since=ask_message["created_at"],
+                direction="to_agent",
+                unconsumed=True,
+            )
+            if replies:
+                reply = replies[0]
+                client.consume_message(base_url, token, reply["id"])
+                print(
+                    json.dumps(
+                        {
+                            "reply": reply["text"],
+                            "message_id": reply["id"],
+                            "elapsed_s": time.time() - started_at,
+                        }
+                    )
+                )
+                return
+            if not _sleep_if_time_remains(deadline, args.interval):
+                print(json.dumps({"timeout": True}))
+                sys.exit(2)
+    except client.GalleryClientError as exc:
+        _exit_client_error(exc)
+
+
+def cmd_pull(args):
+    base_url, token = config.client_config()
+    deadline = time.time() + args.timeout
+    try:
+        while True:
+            messages = client.list_stream_messages(
+                base_url,
+                token,
+                args.stream,
+                direction="to_agent",
+                unconsumed=True,
+            )
+            if messages:
+                message = messages[0]
+                client.consume_message(base_url, token, message["id"])
+                print(json.dumps({"text": message["text"], "message_id": message["id"]}))
+                return
+            if not _sleep_if_time_remains(deadline, args.interval):
+                print(json.dumps({"empty": True}))
+                sys.exit(3)
+    except client.GalleryClientError as exc:
+        _exit_client_error(exc)
+
+
 def cmd_status(args):
     base_url, token = config.client_config()
     try:
@@ -240,6 +327,30 @@ def cmd_serve(_args):
 
     cfg = config.load_config()
     uvicorn.run("gallery.server:app", host=cfg["host"], port=cfg["port"])
+
+
+ASK_EPILOG = """\
+client-side polling: posts a to_human question, then polls plain GET messages
+for the first unconsumed to_agent reply after the ask timestamp.
+
+Exit/stdout contract:
+  success 0: {"reply": "...", "message_id": "...", "elapsed_s": 1.23}
+  client/API error 1: stderr only, no branch JSON
+  timeout 2: {"timeout": true}
+  argparse usage error 2: stderr only, no branch JSON
+"""
+
+
+PULL_EPILOG = """\
+client-side polling: fetches the oldest unconsumed to_agent message and consumes
+it before printing. Default --timeout 0 performs one non-blocking check.
+
+Exit/stdout contract:
+  success 0: {"text": "...", "message_id": "..."}
+  client/API error 1: stderr only, no branch JSON
+  empty 3: {"empty": true}
+  argparse usage error 2: stderr only, no branch JSON
+"""
 
 
 def main():
@@ -286,6 +397,27 @@ def main():
     p.add_argument("--timeout", type=int, default=3600)
     p.add_argument("--interval", type=int, default=5)
 
+    p = sub.add_parser(
+        "ask",
+        help="Ask a human and block for a reply",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=ASK_EPILOG,
+    )
+    p.add_argument("--stream", required=True, type=_stream_slug)
+    p.add_argument("question")
+    p.add_argument("--timeout", type=_non_negative_int, default=1800)
+    p.add_argument("--interval", type=_positive_int, default=15)
+
+    p = sub.add_parser(
+        "pull",
+        help="Fetch and consume the next queued steering note",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=PULL_EPILOG,
+    )
+    p.add_argument("--stream", required=True, type=_stream_slug)
+    p.add_argument("--timeout", type=_non_negative_int, default=0)
+    p.add_argument("--interval", type=_positive_int, default=15)
+
     p = sub.add_parser("status", help="Print a request's current state")
     p.add_argument("id")
 
@@ -307,6 +439,8 @@ def main():
         "stream": cmd_stream,
         "report": cmd_report,
         "wait": cmd_wait,
+        "ask": cmd_ask,
+        "pull": cmd_pull,
         "status": cmd_status,
         "list": cmd_list,
         "serve": cmd_serve,

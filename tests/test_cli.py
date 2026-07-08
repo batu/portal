@@ -35,7 +35,7 @@ def test_help_aliases_list_portal_verbs(monkeypatch, capsys, binary):
     assert exc.value.code == 0
     out = capsys.readouterr().out
     assert "usage: portal" in out
-    for verb in ["init", "post", "wait", "status", "list", "serve", "stream", "report"]:
+    for verb in ["init", "post", "wait", "status", "list", "serve", "stream", "report", "ask", "pull"]:
         assert verb in out
 
 
@@ -666,3 +666,232 @@ def test_new_command_client_errors_exit_1(monkeypatch, capsys):
 
     assert exc.value.code == 1
     assert "error: HTTP 500: broken" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("argv", "expected"),
+    [
+        (
+            ["portal", "ask", "--help"],
+            ["client-side polling", '{"timeout": true}', "success 0", "client/API error 1", "timeout 2"],
+        ),
+        (
+            ["portal", "pull", "--help"],
+            ["client-side polling", '{"empty": true}', "success 0", "client/API error 1", "empty 3"],
+        ),
+    ],
+)
+def test_ask_pull_help_documents_exit_contracts(monkeypatch, capsys, argv, expected):
+    monkeypatch.setattr("sys.argv", argv)
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+
+    assert exc.value.code == 0
+    out = capsys.readouterr().out
+    for text in expected:
+        assert text in out
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["portal", "ask", "--stream", "Bad", "Question?"],
+        ["portal", "ask", "--stream", "alpha", "--timeout", "-1", "Question?"],
+        ["portal", "ask", "--stream", "alpha", "--interval", "0", "Question?"],
+        ["portal", "pull", "--stream", "Bad"],
+        ["portal", "pull", "--stream", "alpha", "--timeout", "-1"],
+        ["portal", "pull", "--stream", "alpha", "--interval", "0"],
+    ],
+)
+def test_ask_pull_parser_errors_do_not_call_client(monkeypatch, capsys, argv):
+    monkeypatch.setattr(cli.config, "client_config", lambda: pytest.fail("parser errors must not read config"))
+    monkeypatch.setattr(cli.client, "create_stream_message", lambda *args, **kwargs: pytest.fail("no client calls"))
+    monkeypatch.setattr(cli.client, "list_stream_messages", lambda *args, **kwargs: pytest.fail("no client calls"))
+    monkeypatch.setattr("sys.argv", argv)
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+
+    assert exc.value.code == 2
+    assert capsys.readouterr().out == ""
+
+
+def test_ask_posts_question_polls_consumes_reply_and_prints_json(monkeypatch, capsys):
+    calls = []
+    consumed = []
+    times = iter([10.0, 12.5])
+
+    monkeypatch.setattr(cli.config, "client_config", lambda: ("http://gallery", "tok"))
+    monkeypatch.setattr(cli.time, "time", lambda: next(times))
+    monkeypatch.setattr(cli.time, "sleep", lambda _seconds: pytest.fail("immediate reply must not sleep"))
+
+    def fake_create(base_url, token, slug, direction, text):
+        calls.append(("create", base_url, token, slug, direction, text))
+        return {"id": "m_ask", "created_at": "2026-07-08T10:00:00Z"}
+
+    def fake_list(base_url, token, slug, *, since=None, direction=None, unconsumed=False):
+        calls.append(("list", base_url, token, slug, since, direction, unconsumed))
+        return [{"id": "m_reply", "text": "Ship it"}]
+
+    monkeypatch.setattr(cli.client, "create_stream_message", fake_create)
+    monkeypatch.setattr(cli.client, "list_stream_messages", fake_list)
+    monkeypatch.setattr(cli.client, "consume_message", lambda *args: consumed.append(args) or {"id": args[2]})
+    monkeypatch.setattr("sys.argv", ["portal", "ask", "--stream", "alpha", "Proceed?"])
+
+    cli.main()
+
+    assert calls == [
+        ("create", "http://gallery", "tok", "alpha", "to_human", "Proceed?"),
+        ("list", "http://gallery", "tok", "alpha", "2026-07-08T10:00:00Z", "to_agent", True),
+    ]
+    assert consumed == [("http://gallery", "tok", "m_reply")]
+    assert json.loads(capsys.readouterr().out) == {
+        "reply": "Ship it",
+        "message_id": "m_reply",
+        "elapsed_s": 2.5,
+    }
+
+
+def test_ask_sleeps_between_empty_poll_and_reply(monkeypatch, capsys):
+    replies = iter([[], [{"id": "m_reply", "text": "Continue"}]])
+    sleeps = []
+    times = iter([0.0, 0.0, 2.0])
+
+    monkeypatch.setattr(cli.config, "client_config", lambda: ("http://gallery", "tok"))
+    monkeypatch.setattr(
+        cli.client,
+        "create_stream_message",
+        lambda *_args: {"id": "m_ask", "created_at": "2026-07-08T10:00:00Z"},
+    )
+    monkeypatch.setattr(cli.client, "list_stream_messages", lambda *_args, **_kwargs: next(replies))
+    monkeypatch.setattr(cli.client, "consume_message", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(cli.time, "time", lambda: next(times))
+    monkeypatch.setattr(cli.time, "sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setattr(
+        "sys.argv",
+        ["portal", "ask", "--stream", "alpha", "--timeout", "5", "--interval", "2", "Question?"],
+    )
+
+    cli.main()
+
+    assert sleeps == [2]
+    assert json.loads(capsys.readouterr().out)["message_id"] == "m_reply"
+
+
+def test_ask_timeout_prints_json_exit_2_and_caps_sleep(monkeypatch, capsys):
+    sleeps = []
+    consumed = []
+    times = iter([0.0, 0.2, 1.0])
+
+    monkeypatch.setattr(cli.config, "client_config", lambda: ("http://gallery", "tok"))
+    monkeypatch.setattr(
+        cli.client,
+        "create_stream_message",
+        lambda *_args: {"id": "m_ask", "created_at": "2026-07-08T10:00:00Z"},
+    )
+    monkeypatch.setattr(cli.client, "list_stream_messages", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(cli.client, "consume_message", lambda *args, **kwargs: consumed.append(args))
+    monkeypatch.setattr(cli.time, "time", lambda: next(times))
+    monkeypatch.setattr(cli.time, "sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setattr(
+        "sys.argv",
+        ["portal", "ask", "--stream", "alpha", "--timeout", "1", "--interval", "15", "Question?"],
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+
+    captured = capsys.readouterr()
+    assert exc.value.code == 2
+    assert json.loads(captured.out) == {"timeout": True}
+    assert captured.err == ""
+    assert consumed == []
+    assert sleeps == [0.8]
+
+
+def test_pull_empty_default_prints_json_exit_3_without_sleep_or_consume(monkeypatch, capsys):
+    monkeypatch.setattr(cli.config, "client_config", lambda: ("http://gallery", "tok"))
+    monkeypatch.setattr(cli.client, "list_stream_messages", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(cli.client, "consume_message", lambda *args, **kwargs: pytest.fail("empty pull must not consume"))
+    monkeypatch.setattr(cli.time, "sleep", lambda _seconds: pytest.fail("default pull must not sleep"))
+    monkeypatch.setattr("sys.argv", ["portal", "pull", "--stream", "alpha"])
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+
+    captured = capsys.readouterr()
+    assert exc.value.code == 3
+    assert json.loads(captured.out) == {"empty": True}
+    assert captured.err == ""
+
+
+def test_pull_consumes_oldest_message_and_prints_json(monkeypatch, capsys):
+    list_calls = []
+    consumed = []
+
+    monkeypatch.setattr(cli.config, "client_config", lambda: ("http://gallery", "tok"))
+
+    def fake_list(base_url, token, slug, *, since=None, direction=None, unconsumed=False):
+        list_calls.append((base_url, token, slug, since, direction, unconsumed))
+        return [
+            {"id": "m_oldest", "text": "First"},
+            {"id": "m_newer", "text": "Second"},
+        ]
+
+    monkeypatch.setattr(cli.client, "list_stream_messages", fake_list)
+    monkeypatch.setattr(cli.client, "consume_message", lambda *args: consumed.append(args) or {"id": args[2]})
+    monkeypatch.setattr(cli.time, "sleep", lambda _seconds: pytest.fail("immediate pull must not sleep"))
+    monkeypatch.setattr("sys.argv", ["portal", "pull", "--stream", "alpha"])
+
+    cli.main()
+
+    assert list_calls == [("http://gallery", "tok", "alpha", None, "to_agent", True)]
+    assert consumed == [("http://gallery", "tok", "m_oldest")]
+    assert json.loads(capsys.readouterr().out) == {"text": "First", "message_id": "m_oldest"}
+
+
+def test_pull_blocks_with_interval_until_message_arrives(monkeypatch, capsys):
+    replies = iter([[], [{"id": "m_note", "text": "Use blue"}]])
+    sleeps = []
+    times = iter([0.0, 0.0])
+
+    monkeypatch.setattr(cli.config, "client_config", lambda: ("http://gallery", "tok"))
+    monkeypatch.setattr(cli.client, "list_stream_messages", lambda *_args, **_kwargs: next(replies))
+    monkeypatch.setattr(cli.client, "consume_message", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(cli.time, "time", lambda: next(times))
+    monkeypatch.setattr(cli.time, "sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setattr(
+        "sys.argv",
+        ["portal", "pull", "--stream", "alpha", "--timeout", "10", "--interval", "3"],
+    )
+
+    cli.main()
+
+    assert sleeps == [3]
+    assert json.loads(capsys.readouterr().out) == {"text": "Use blue", "message_id": "m_note"}
+
+
+@pytest.mark.parametrize(
+    ("argv", "failing_helper"),
+    [
+        (["portal", "ask", "--stream", "alpha", "Question?"], "create_stream_message"),
+        (["portal", "pull", "--stream", "alpha"], "list_stream_messages"),
+    ],
+)
+def test_ask_pull_client_errors_exit_1(monkeypatch, capsys, argv, failing_helper):
+    monkeypatch.setattr(cli.config, "client_config", lambda: ("http://gallery", "tok"))
+
+    def boom(*_args, **_kwargs):
+        raise cli.client.GalleryClientError(500, "broken")
+
+    monkeypatch.setattr(cli.client, failing_helper, boom)
+    monkeypatch.setattr("sys.argv", argv)
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+
+    captured = capsys.readouterr()
+    assert exc.value.code == 1
+    assert captured.out == ""
+    assert "error: HTTP 500: broken" in captured.err
