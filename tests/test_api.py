@@ -1,3 +1,6 @@
+from gallery import config, server
+
+
 def auth_headers(token):
     return {"Authorization": f"Bearer {token}"}
 
@@ -154,6 +157,99 @@ def test_request_before_upload_is_stored_outside_variants(client, token):
     )
     assert verdict.status_code == 200
     assert verdict.json()["selected"] == [1]
+
+
+def test_before_after_request_page_uses_pick_one_browser_flow(client, token):
+    create = client.post(
+        "/api/requests",
+        headers=auth_headers(token),
+        data={"title": "Before after web", "kind": "before-after"},
+        files=_upload_files(1),
+    )
+    assert create.status_code == 200
+    req_id = create.json()["id"]
+
+    page = client.get(f"/r/{req_id}?token={token}")
+    script = client.get("/static/app.js")
+
+    assert page.status_code == 200
+    assert 'data-kind="before-after"' in page.text
+    assert script.status_code == 200
+    assert '"before-after": true' in script.text
+
+
+def test_legacy_request_closed_stream_error_is_409_and_cleans_media(client, token, monkeypatch):
+    first = client.post(
+        "/api/requests",
+        headers=auth_headers(token),
+        data={"title": "First", "project": "closed/project", "kind": "pick-one"},
+        files=_upload_files(1),
+    )
+    assert first.status_code == 200
+    closed = client.post("/api/streams/proj-closed-project/close", headers=auth_headers(token))
+    assert closed.status_code == 200
+    monkeypatch.setattr(server.db, "new_request_id", lambda: "req_after_close")
+
+    second = client.post(
+        "/api/requests",
+        headers=auth_headers(token),
+        data={"title": "Second", "project": "closed/project", "kind": "pick-one"},
+        files=_upload_files(1),
+    )
+
+    assert second.status_code == 409
+    assert not (config.media_dir() / "req_after_close").exists()
+
+
+def test_request_id_collision_does_not_delete_existing_media(client, token, monkeypatch):
+    first = client.post(
+        "/api/requests",
+        headers=auth_headers(token),
+        data={"title": "First", "kind": "pick-one"},
+        files=[("files", ("first.png", b"first", "image/png"))],
+    )
+    assert first.status_code == 200
+    first_id = first.json()["id"]
+    detail = client.get(f"/api/requests/{first_id}", headers=auth_headers(token))
+    first_media_path = detail.json()["variants"][0]["media_path"]
+    ids = iter([first_id, "req_retry"])
+    monkeypatch.setattr(server.db, "new_request_id", lambda: next(ids))
+
+    second = client.post(
+        "/api/requests",
+        headers=auth_headers(token),
+        data={"title": "Second", "kind": "pick-one"},
+        files=[("files", ("second.png", b"second", "image/png"))],
+    )
+
+    assert second.status_code == 200
+    assert second.json()["id"] == "req_retry"
+    old_media = client.get(f"/media/{first_id}/{first_media_path}?token={token}")
+    assert old_media.status_code == 200
+    assert old_media.content == b"first"
+
+
+def test_legacy_verdict_closed_stream_error_is_409(client, token):
+    create = client.post(
+        "/api/requests",
+        headers=auth_headers(token),
+        data={"title": "Closed verdict", "project": "closed/verdict", "kind": "pick-one"},
+        files=_upload_files(1),
+    )
+    assert create.status_code == 200
+    req_id = create.json()["id"]
+    closed = client.post("/api/streams/proj-closed-verdict/close", headers=auth_headers(token))
+    assert closed.status_code == 200
+
+    api_verdict = client.post(
+        f"/api/requests/{req_id}/verdict",
+        headers=auth_headers(token),
+        json={"selected": [1]},
+    )
+    web_verdict = client.post(f"/r/{req_id}/decide?token={token}", json={"selected": [1]})
+
+    assert api_verdict.status_code == 409
+    assert web_verdict.status_code == 409
 
 
 def test_web_index_requires_token(client, token):

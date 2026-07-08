@@ -2,6 +2,7 @@
 
 import json
 import logging
+import math
 import mimetypes
 import re
 import shutil
@@ -111,6 +112,14 @@ def _safe_upload_name(filename: str | None, fallback: str) -> str:
     return (name or fallback)[:120]
 
 
+def _safe_media_filename(filename: str) -> bool:
+    if not filename or filename in {".", ".."}:
+        return False
+    if "/" in filename or "\\" in filename:
+        return False
+    return not any(ord(ch) < 32 for ch in filename)
+
+
 def _before_media_path(filename: str | None) -> str:
     suffix = Path(filename or "").suffix.lower()
     if not re.fullmatch(r"\.[a-z0-9]{1,16}", suffix):
@@ -144,6 +153,7 @@ def _bounded_text(value: object, name: str, max_length: int) -> str:
         raise HTTPException(status_code=400, detail=f"{name} is required")
     if len(value) > max_length:
         raise HTTPException(status_code=400, detail=f"{name} is too long")
+    _validate_json_response_safe(value)
     return value
 
 
@@ -153,40 +163,77 @@ def _parse_body_field(body: str | None) -> dict:
     if len(body.encode("utf-8")) > MAX_BODY_JSON_BYTES:
         raise HTTPException(status_code=400, detail="body JSON is too large")
     try:
-        parsed = json.loads(body)
-    except json.JSONDecodeError as exc:
+        parsed = json.loads(body, parse_constant=_reject_json_constant)
+    except (json.JSONDecodeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=f"invalid body JSON: {exc}") from exc
     if not isinstance(parsed, dict):
         raise HTTPException(status_code=400, detail="body JSON must be an object")
+    _validate_json_response_safe(parsed)
     return parsed
+
+
+def _reject_json_constant(value: str) -> None:
+    raise ValueError(f"invalid JSON constant: {value}")
+
+
+def _validate_json_response_safe(value: object) -> None:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            _validate_json_response_safe(key)
+            _validate_json_response_safe(child)
+    elif isinstance(value, list):
+        for child in value:
+            _validate_json_response_safe(child)
+    elif isinstance(value, float) and not math.isfinite(value):
+        raise HTTPException(status_code=400, detail="body JSON contains a non-finite number")
+    elif isinstance(value, str):
+        try:
+            value.encode("utf-8")
+        except UnicodeEncodeError as exc:
+            raise HTTPException(status_code=400, detail="body JSON contains invalid unicode") from exc
 
 
 def _coerce_uploads(files: list[UploadFile] | None) -> list[UploadFile]:
     return list(files or [])
 
 
-async def _save_post_files(post_id: str, uploads: list[UploadFile]) -> tuple[list[dict], int]:
+async def _rewind_uploads(uploads: list[UploadFile]) -> None:
+    for upload in uploads:
+        await upload.seek(0)
+
+
+async def _save_post_files(post_id: str, uploads: list[UploadFile]) -> tuple[list[dict], int, bool]:
     if not uploads:
-        return [], 0
+        return [], 0, False
     dest_dir = config.media_dir() / post_id
-    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest_dir.mkdir(parents=True, exist_ok=False)
     stored = []
     total_bytes = 0
-    for i, upload in enumerate(uploads, start=1):
-        original_name = upload.filename or f"file_{i}"
-        safe_name = f"{i:02d}_{_safe_upload_name(original_name, f'file_{i}')}"
-        dest_path = dest_dir / safe_name
-        size = await _write_upload(upload, dest_path)
-        total_bytes += size
-        stored.append(
-            {
-                "media_path": safe_name,
-                "media_type": upload.content_type or mimetypes.guess_type(safe_name)[0] or "application/octet-stream",
-                "size": size,
-                "original_name": Path(original_name).name,
-            }
-        )
-    return stored, total_bytes
+    try:
+        for i, upload in enumerate(uploads, start=1):
+            original_name = upload.filename or f"file_{i}"
+            safe_name = f"{i:02d}_{_safe_upload_name(original_name, f'file_{i}')}"
+            dest_path = dest_dir / safe_name
+            size = await _write_upload(upload, dest_path)
+            total_bytes += size
+            stored.append(
+                {
+                    "media_path": safe_name,
+                    "media_type": upload.content_type or mimetypes.guess_type(safe_name)[0] or "application/octet-stream",
+                    "size": size,
+                    "original_name": Path(original_name).name,
+                }
+            )
+    except Exception:
+        shutil.rmtree(dest_dir, ignore_errors=True)
+        raise
+    return stored, total_bytes, True
+
+
+def _add_stream_slug_to_post(post: dict, slug: str) -> dict:
+    post = dict(post)
+    post["stream"] = slug
+    return post
 
 
 @app.post("/api/requests")
@@ -214,44 +261,68 @@ async def create_request(
         except json.JSONDecodeError as exc:
             raise HTTPException(status_code=400, detail=f"invalid manifest JSON: {exc}") from exc
 
-    req_id = db.new_request_id()
-    dest_dir = config.media_dir() / req_id
-    dest_dir.mkdir(parents=True, exist_ok=True)
-
-    before_media_path = None
-    before_media_type = None
-    if before is not None and before.filename:
-        before_media_path = _before_media_path(before.filename)
-        await _write_upload(before, dest_dir / before_media_path)
-        before_media_type = _media_type_for(before.filename)
-
+    request_uploads = list(files)
+    all_uploads = ([before] if before is not None else []) + request_uploads
+    req_id = None
     variants = []
-    for i, upload in enumerate(files, start=1):
-        orig_name = upload.filename or f"variant_{i}"
-        safe_name = f"{i:02d}_{_safe_upload_name(orig_name, f'variant_{i}')}"
-        dest_path = dest_dir / safe_name
-        data = await upload.read()
-        dest_path.write_bytes(data)
-        info = manifest_map.get(orig_name, {})
-        variants.append(
-            {
-                "media_path": safe_name,
-                "media_type": _media_type_for(orig_name),
-                "caption": info.get("caption"),
-                "meta": info.get("meta"),
-            }
-        )
+    for _ in range(5):
+        req_id = db.new_request_id()
+        dest_dir = config.media_dir() / req_id
+        try:
+            dest_dir.mkdir(parents=True, exist_ok=False)
+        except FileExistsError:
+            continue
 
-    db.create_request(
-        req_id,
-        title,
-        project,
-        kind,
-        context,
-        variants,
-        before_media_path=before_media_path,
-        before_media_type=before_media_type,
-    )
+        before_media_path = None
+        before_media_type = None
+        variants = []
+        try:
+            if before is not None and before.filename:
+                before_media_path = _before_media_path(before.filename)
+                await _write_upload(before, dest_dir / before_media_path)
+                before_media_type = _media_type_for(before.filename)
+
+            for i, upload in enumerate(request_uploads, start=1):
+                orig_name = upload.filename or f"variant_{i}"
+                safe_name = f"{i:02d}_{_safe_upload_name(orig_name, f'variant_{i}')}"
+                dest_path = dest_dir / safe_name
+                data = await upload.read()
+                dest_path.write_bytes(data)
+                info = manifest_map.get(orig_name, {})
+                variants.append(
+                    {
+                        "media_path": safe_name,
+                        "media_type": _media_type_for(orig_name),
+                        "caption": info.get("caption"),
+                        "meta": info.get("meta"),
+                    }
+                )
+
+            db.create_request(
+                req_id,
+                title,
+                project,
+                kind,
+                context,
+                variants,
+                before_media_path=before_media_path,
+                before_media_type=before_media_type,
+            )
+            break
+        except ValueError as exc:
+            shutil.rmtree(dest_dir, ignore_errors=True)
+            detail = str(exc)
+            status = 409 if "closed" in detail else 400
+            raise HTTPException(status_code=status, detail=detail) from exc
+        except sqlite3.IntegrityError:
+            shutil.rmtree(dest_dir, ignore_errors=True)
+            await _rewind_uploads(all_uploads)
+            continue
+        except Exception:
+            shutil.rmtree(dest_dir, ignore_errors=True)
+            raise
+    else:
+        raise HTTPException(status_code=500, detail="could not allocate unique request id")
 
     server_cfg = config.load_config()
     url = f"{server_cfg['url']}/r/{req_id}?token={server_cfg['token']}"
@@ -286,6 +357,8 @@ async def create_stream(request: Request):
         body = await request.json()
     except json.JSONDecodeError as exc:
         raise HTTPException(status_code=400, detail=f"invalid JSON: {exc}") from exc
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="JSON body must be an object")
     slug = _validate_slug(_bounded_text(body.get("slug"), "slug", 128))
     kind = _bounded_text(body.get("kind"), "kind", 32)
     if kind not in STREAM_KINDS:
@@ -314,6 +387,7 @@ def get_stream(request: Request, slug: str):
     stream = db.get_stream_with_posts(slug)
     if stream is None:
         raise HTTPException(status_code=404, detail="stream not found")
+    stream["posts"] = [_add_stream_slug_to_post(post, stream["slug"]) for post in stream["posts"]]
     return stream
 
 
@@ -347,34 +421,49 @@ async def create_stream_post(
         if db.get_request(request_id) is None:
             raise HTTPException(status_code=404, detail="request not found")
 
-    post_id = db.new_post_id()
     uploads = _coerce_uploads(files)
-    stored_files, total_bytes = await _save_post_files(post_id, uploads)
-    if post_type == "report":
-        body_obj = {**body_obj, "files": stored_files}
-    elif stored_files:
-        body_obj = {**body_obj, "files": stored_files}
+    post = None
+    total_bytes = 0
+    for _ in range(5):
+        post_id = db.new_post_id()
+        media_dir_created = False
+        try:
+            stored_files, total_bytes, media_dir_created = await _save_post_files(post_id, uploads)
+            post_body = body_obj
+            if post_type == "report":
+                post_body = {**body_obj, "files": stored_files}
+            elif stored_files:
+                post_body = {**body_obj, "files": stored_files}
+            post = db.create_post_for_stream(
+                slug,
+                post_type,
+                title,
+                author,
+                post_body,
+                post_id=post_id,
+            )
+            break
+        except FileExistsError:
+            continue
+        except ValueError as exc:
+            if media_dir_created:
+                shutil.rmtree(config.media_dir() / post_id, ignore_errors=True)
+            detail = str(exc)
+            status = 409 if "closed" in detail else 404
+            raise HTTPException(status_code=status, detail=detail) from exc
+        except sqlite3.IntegrityError:
+            if media_dir_created:
+                shutil.rmtree(config.media_dir() / post_id, ignore_errors=True)
+            await _rewind_uploads(uploads)
+            continue
+        except Exception:
+            if media_dir_created:
+                shutil.rmtree(config.media_dir() / post_id, ignore_errors=True)
+            raise
+    if post is None:
+        raise HTTPException(status_code=500, detail="could not allocate unique post id")
 
-    try:
-        post = db.create_post_for_stream(
-            slug,
-            post_type,
-            title,
-            author,
-            body_obj,
-            auto_create=True,
-            post_id=post_id,
-        )
-    except ValueError as exc:
-        shutil.rmtree(config.media_dir() / post_id, ignore_errors=True)
-        detail = str(exc)
-        status = 409 if "closed" in detail else 404
-        raise HTTPException(status_code=status, detail=detail) from exc
-    except sqlite3.IntegrityError as exc:
-        shutil.rmtree(config.media_dir() / post_id, ignore_errors=True)
-        raise HTTPException(status_code=409, detail="post already exists") from exc
-
-    response = {"post": post}
+    response = {"post": _add_stream_slug_to_post(post, slug)}
     if total_bytes > POST_UPLOAD_SOFT_CAP_BYTES:
         response["warning"] = f"post upload exceeded {POST_UPLOAD_SOFT_CAP_BYTES} byte soft cap"
     return response
@@ -387,7 +476,7 @@ def get_stream_post(request: Request, slug: str, post_id: str):
     post = db.get_stream_post(slug, post_id)
     if post is None:
         raise HTTPException(status_code=404, detail="post not found")
-    return post
+    return _add_stream_slug_to_post(post, slug)
 
 
 def _apply_verdict(req_id: str, body: dict) -> dict:
@@ -407,7 +496,12 @@ def _apply_verdict(req_id: str, body: dict) -> dict:
     if bad:
         raise HTTPException(status_code=400, detail=f"selected indices not found on this request: {bad}")
 
-    return db.record_verdict(req_id, selected, ratings, comment)
+    try:
+        return db.record_verdict(req_id, selected, ratings, comment)
+    except ValueError as exc:
+        detail = str(exc)
+        status = 409 if "closed" in detail else 400
+        raise HTTPException(status_code=status, detail=detail) from exc
 
 
 @app.post("/api/requests/{req_id}/verdict")
@@ -427,8 +521,7 @@ def get_media(request: Request, req_id: str, filename: str):
     if (
         not SAFE_SEGMENT_RE.fullmatch(req_id)
         or req_id in {".", ".."}
-        or not SAFE_SEGMENT_RE.fullmatch(filename)
-        or filename in {".", ".."}
+        or not _safe_media_filename(filename)
     ):
         raise HTTPException(status_code=404, detail="media not found")
     media_root = config.media_dir().resolve()

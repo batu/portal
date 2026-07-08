@@ -357,16 +357,13 @@ def create_post_for_stream(
     author: str,
     body: dict,
     *,
-    auto_create: bool = False,
     created_at: str | None = None,
     post_id: str | None = None,
 ) -> dict:
     conn = connect()
     with _lock:
         try:
-            stream = _ensure_stream(conn, slug) if auto_create else _get_stream_by_slug(conn, slug)
-            if stream is None:
-                raise ValueError(f"stream not found: {slug}")
+            stream = _ensure_stream(conn, slug)
             post = _create_post(
                 conn,
                 stream["id"],

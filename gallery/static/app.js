@@ -15,6 +15,7 @@
   // order[] holds selected variant indices in the order they were tapped.
   // For pick-one/approve this is at most one element; for rank, order matters.
   var order = [];
+  var pickOneKinds = { "pick-one": true, "before-after": true };
 
   function idxOf(el) {
     return parseInt(el.dataset.idx, 10);
@@ -43,7 +44,7 @@
   function toggleVariant(el) {
     var i = idxOf(el);
     var pos = order.indexOf(i);
-    if (kind === "pick-one") {
+    if (pickOneKinds[kind]) {
       order = pos === -1 ? [i] : [];
     } else if (kind === "pick-many" || kind === "rank") {
       if (pos === -1) {
@@ -55,7 +56,7 @@
     renderSelection();
   }
 
-  if (kind === "pick-one" || kind === "pick-many" || kind === "rank") {
+  if (pickOneKinds[kind] || kind === "pick-many" || kind === "rank") {
     variants.forEach(function (el) {
       el.addEventListener("click", function () {
         toggleVariant(el);
@@ -98,7 +99,7 @@
     });
   } else if (decideBtn) {
     decideBtn.addEventListener("click", function () {
-      if (kind === "pick-one" && order.length === 0) {
+      if (pickOneKinds[kind] && order.length === 0) {
         alert("Pick a variant first.");
         return;
       }

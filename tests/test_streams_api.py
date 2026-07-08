@@ -1,6 +1,7 @@
 import json
 
 from gallery import client as gallery_client
+from gallery import config
 from gallery import server
 
 
@@ -80,6 +81,7 @@ def test_report_post_to_unknown_stream_auto_creates_and_serves_media(client, tok
     payload = create.json()
     post = payload["post"]
     assert post["id"].startswith("p_")
+    assert post["stream"] == "session-0708"
     assert post["type"] == "report"
     assert post["body"]["summary"] == "ok"
     assert post["body"]["files"][0]["media_type"] == "image/png"
@@ -90,11 +92,27 @@ def test_report_post_to_unknown_stream_auto_creates_and_serves_media(client, tok
     stream = stream_get.json()
     assert stream["kind"] == "session"
     assert [p["id"] for p in stream["posts"]] == [post["id"]]
+    assert stream["posts"][0]["stream"] == "session-0708"
 
     media = client.get(f"/media/{post['id']}/{media_path}?token={token}")
     assert media.status_code == 200
     assert media.headers["x-content-type-options"] == "nosniff"
     assert media.content == tiny_png_bytes()
+
+
+def test_stream_post_get_includes_public_stream_slug(client, token):
+    create = client.post(
+        "/api/streams/public-slug/posts",
+        headers=auth_headers(token),
+        data={"type": "report", "title": "Report", "author": "codex"},
+    )
+    assert create.status_code == 200
+    post = create.json()["post"]
+
+    get = client.get(f"/api/streams/public-slug/posts/{post['id']}", headers=auth_headers(token))
+
+    assert get.status_code == 200
+    assert get.json()["stream"] == "public-slug"
 
 
 def test_legacy_requests_are_visible_in_project_and_inbox_streams(client, token):
@@ -161,6 +179,27 @@ def test_stream_decision_post_references_existing_request_and_is_stream_scoped(c
     assert client.get(f"/api/streams/other/posts/{post['id']}", headers=auth_headers(token)).status_code == 404
 
 
+def test_stream_decision_post_rejects_missing_or_unknown_request(client, token):
+    missing = client.post(
+        "/api/streams/decisions/posts",
+        headers=auth_headers(token),
+        data={"type": "decision", "title": "Missing", "author": "codex", "body": "{}"},
+    )
+    unknown = client.post(
+        "/api/streams/decisions/posts",
+        headers=auth_headers(token),
+        data={
+            "type": "decision",
+            "title": "Unknown",
+            "author": "codex",
+            "body": json.dumps({"request_id": "req_missing"}),
+        },
+    )
+
+    assert missing.status_code == 400
+    assert unknown.status_code == 404
+
+
 def test_oversized_report_post_warns_but_succeeds(client, token, monkeypatch):
     monkeypatch.setattr(server, "POST_UPLOAD_SOFT_CAP_BYTES", 4)
 
@@ -173,6 +212,40 @@ def test_oversized_report_post_warns_but_succeeds(client, token, monkeypatch):
     assert create.status_code == 200
     assert "warning" in create.json()
     assert create.json()["post"]["body"]["files"][0]["size"] == 6
+
+
+def test_stream_create_rejects_non_object_json(client, token):
+    create = client.post("/api/streams", headers=auth_headers(token), json=["not", "an", "object"])
+
+    assert create.status_code == 400
+    assert create.json()["detail"] == "JSON body must be an object"
+
+
+def test_stream_create_rejects_response_unsafe_text(client, token):
+    create = client.post(
+        "/api/streams",
+        headers={**auth_headers(token), "Content-Type": "application/json"},
+        content=b'{"slug":"unsafe-text","kind":"session","title":"\\ud800"}',
+    )
+
+    assert create.status_code == 400
+    assert create.json()["detail"] == "body JSON contains invalid unicode"
+
+
+def test_stream_post_rejects_response_unsafe_body_json(client, token):
+    nan_body = client.post(
+        "/api/streams/unsafe-json/posts",
+        headers=auth_headers(token),
+        data={"type": "report", "title": "NaN", "author": "codex", "body": '{"x": NaN}'},
+    )
+    surrogate_body = client.post(
+        "/api/streams/unsafe-json/posts",
+        headers=auth_headers(token),
+        data={"type": "report", "title": "Surrogate", "author": "codex", "body": '{"x": "\\ud800"}'},
+    )
+
+    assert nan_body.status_code == 400
+    assert surrogate_body.status_code == 400
 
 
 def test_media_serves_active_content_as_attachment(client, token):
@@ -190,6 +263,63 @@ def test_media_serves_active_content_as_attachment(client, token):
     assert media.status_code == 200
     assert media.headers["x-content-type-options"] == "nosniff"
     assert "attachment" in media.headers["content-disposition"]
+
+
+def test_media_serves_legacy_single_segment_filenames_with_spaces(client, token):
+    media_dir = config.media_dir() / "req_legacy"
+    media_dir.mkdir(parents=True)
+    (media_dir / "01_Screen Shot.png").write_bytes(tiny_png_bytes())
+
+    media = client.get(f"/media/req_legacy/01_Screen%20Shot.png?token={token}")
+
+    assert media.status_code == 200
+    assert media.content == tiny_png_bytes()
+
+
+def test_media_rejects_traversal_and_uploads_use_safe_filenames(client, token):
+    outside = config.media_dir().parent / "outside.png"
+    outside.write_bytes(b"outside")
+
+    traversal = client.get(f"/media/req_legacy/..%2Foutside.png?token={token}")
+    assert traversal.status_code == 404
+
+    create = client.post(
+        "/api/streams/safe-name/posts",
+        headers=auth_headers(token),
+        data={"type": "report", "title": "Safe", "author": "codex"},
+        files=[("files", ("nested/report image.png", b"safe", "image/png"))],
+    )
+    assert create.status_code == 200
+    media_path = create.json()["post"]["body"]["files"][0]["media_path"]
+    assert "/" not in media_path
+    assert "\\" not in media_path
+
+
+def test_post_id_collision_does_not_delete_existing_media(client, token, monkeypatch):
+    first = client.post(
+        "/api/streams/collision/posts",
+        headers=auth_headers(token),
+        data={"type": "report", "title": "First", "author": "codex"},
+        files=[("files", ("report.png", b"first", "image/png"))],
+    )
+    assert first.status_code == 200
+    first_post = first.json()["post"]
+    first_media_path = first_post["body"]["files"][0]["media_path"]
+    ids = iter([first_post["id"], "p_retry123"])
+    monkeypatch.setattr(server.db, "new_post_id", lambda: next(ids))
+
+    second = client.post(
+        "/api/streams/collision/posts",
+        headers=auth_headers(token),
+        data={"type": "report", "title": "Second", "author": "codex"},
+        files=[("files", ("report.png", b"second", "image/png"))],
+    )
+
+    assert second.status_code == 200
+    assert second.json()["post"]["id"] == "p_retry123"
+    old_media = client.get(f"/media/{first_post['id']}/{first_media_path}?token={token}")
+    assert old_media.status_code == 200
+    assert old_media.content == b"first"
 
 
 def test_client_stream_helpers_call_expected_methods_paths_and_payloads(monkeypatch, tmp_path):
@@ -220,12 +350,17 @@ def test_client_stream_helpers_call_expected_methods_paths_and_payloads(monkeypa
 
     assert calls[0]["method"] == "POST"
     assert calls[0]["url"] == "http://gallery/api/streams"
+    assert calls[0]["headers"]["Authorization"] == "Bearer tok"
+    assert calls[0]["headers"]["Content-Type"] == "application/json"
     assert calls[1]["url"] == "http://gallery/api/streams/alpha/close"
     assert calls[2]["method"] == "GET"
     assert calls[2]["url"] == "http://gallery/api/streams/alpha"
     assert calls[3]["url"] == "http://gallery/api/streams/alpha/posts/p_123456"
+    assert calls[3]["headers"]["Authorization"] == "Bearer tok"
     assert calls[4]["method"] == "POST"
     assert calls[4]["url"] == "http://gallery/api/streams/alpha/posts"
+    assert calls[4]["headers"]["Authorization"] == "Bearer tok"
+    assert calls[4]["headers"]["Content-Type"].startswith("multipart/form-data; boundary=")
     assert b'name="body"' in calls[4]["data"]
     assert b'"summary": "ok"' in calls[4]["data"]
     assert b'name="files"; filename="report.html"' in calls[4]["data"]

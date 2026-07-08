@@ -57,7 +57,7 @@
     <button type="button" class="btn decide" id="decide-btn">{{ "Done" if r.kind == "comment" else "Decide" }}</button>
     {% endif %}
     <div class="hint">
-      {% if r.kind == "pick-one" %}Tap one variant, then Decide.
+      {% if r.kind == "pick-one" or r.kind == "before-after" %}Tap one variant, then Decide.
       {% elif r.kind == "pick-many" %}Tap any number of variants, then Decide.
       {% elif r.kind == "rank" %}Tap variants in order (tap again to remove), then Decide.
       {% elif r.kind == "comment" %}Just leave a comment and press Done.
