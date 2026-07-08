@@ -10,6 +10,7 @@ import sqlite3
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import quote
 
 import markdown as md_lib
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -118,6 +119,32 @@ def _safe_media_filename(filename: str) -> bool:
     if "/" in filename or "\\" in filename:
         return False
     return not any(ord(ch) < 32 for ch in filename)
+
+
+def _is_text_html(media_type: str | None) -> bool:
+    return bool(media_type and media_type.split(";", 1)[0].strip().lower() == "text/html")
+
+
+def _report_html_media_type(owner_id: str, filename: str, guessed_media_type: str | None) -> str | None:
+    post = db.get_post(owner_id)
+    if post is None or post.get("type") != "report":
+        return None
+    body = post.get("body")
+    files = body.get("files") if isinstance(body, dict) else None
+    if not isinstance(files, list):
+        return None
+    for file_info in files:
+        if not isinstance(file_info, dict):
+            continue
+        if file_info.get("media_path") != filename:
+            continue
+        stored_media_type = file_info.get("media_type")
+        if _is_text_html(stored_media_type):
+            return "text/html"
+        if _is_text_html(guessed_media_type):
+            return guessed_media_type
+        return None
+    return None
 
 
 def _before_media_path(filename: str | None) -> str:
@@ -536,14 +563,18 @@ def get_media(request: Request, req_id: str, filename: str):
         raise HTTPException(status_code=404, detail="media not found")
     media_type, _ = mimetypes.guess_type(str(path))
     headers = {"X-Content-Type-Options": "nosniff"}
-    inline = bool(
+    report_html_type = _report_html_media_type(req_id, filename, media_type)
+    browser_safe_media = bool(
         media_type
         and (
             media_type.startswith("video/")
             or (media_type.startswith("image/") and media_type != "image/svg+xml")
         )
     )
-    if inline:
+    if report_html_type is not None:
+        headers["Content-Security-Policy"] = "sandbox allow-same-origin"
+        return FileResponse(path, media_type=report_html_type, headers=headers)
+    if browser_safe_media:
         return FileResponse(path, media_type=media_type, headers=headers)
     return FileResponse(
         path,
@@ -557,17 +588,179 @@ def get_media(request: Request, req_id: str, filename: str):
 # --- web UI ---
 
 
+def _media_url(owner_id: str, filename: str) -> str:
+    return f"/media/{quote(owner_id, safe='')}/{quote(filename, safe='')}"
+
+
+def _select_report_file(post: dict) -> dict | None:
+    body = post.get("body")
+    files = body.get("files") if isinstance(body, dict) else None
+    if not isinstance(files, list):
+        return None
+
+    candidates = []
+    for file_info in files:
+        if not isinstance(file_info, dict):
+            continue
+        filename = file_info.get("media_path")
+        if not isinstance(filename, str) or not _safe_media_filename(filename):
+            continue
+        media_type = file_info.get("media_type")
+        if not isinstance(media_type, str):
+            media_type = mimetypes.guess_type(filename)[0] or ""
+        original_name = file_info.get("original_name")
+        label = original_name if isinstance(original_name, str) and original_name else filename
+        is_html = media_type == "text/html" or Path(filename).suffix.lower() in {".html", ".htm"}
+        candidates.append(
+            {
+                "filename": filename,
+                "label": label,
+                "media_type": media_type,
+                "url": _media_url(str(post.get("id", "")), filename),
+                "is_html": is_html,
+            }
+        )
+
+    if not candidates:
+        return None
+    return next((candidate for candidate in candidates if candidate["is_html"]), candidates[0])
+
+
+def _decision_request_id(post: dict) -> str | None:
+    body = post.get("body")
+    request_id = body.get("request_id") if isinstance(body, dict) else None
+    if not isinstance(request_id, str) or not request_id:
+        return None
+    return request_id
+
+
+def _request_summaries_for_posts(posts: list[dict]) -> dict[str, dict]:
+    request_ids = []
+    seen = set()
+    for post in posts:
+        if post.get("type") != "decision":
+            continue
+        request_id = _decision_request_id(post)
+        if request_id and request_id not in seen:
+            seen.add(request_id)
+            request_ids.append(request_id)
+    if not request_ids:
+        return {}
+
+    placeholders = ", ".join("?" for _ in request_ids)
+    conn = db.connect()
+    with db._lock:
+        rows = conn.execute(
+            f"SELECT id, title, status FROM requests WHERE id IN ({placeholders})",
+            request_ids,
+        ).fetchall()
+    return {row["id"]: dict(row) for row in rows}
+
+
+def _decision_post_context(post: dict, request_summaries: dict[str, dict]) -> dict | None:
+    request_id = _decision_request_id(post)
+    if request_id is None:
+        return None
+    request_row = request_summaries.get(request_id)
+    if request_row is None:
+        return None
+    status = "decided" if request_row.get("status") == "decided" else "pending"
+    return {
+        "request_id": request_id,
+        "title": request_row.get("title") or request_id,
+        "status": status,
+        "href": f"/r/{quote(request_id, safe='')}",
+    }
+
+
+def _stream_post_context(post: dict, request_summaries: dict[str, dict]) -> dict:
+    post_type = post.get("type")
+    item = {
+        "id": post.get("id"),
+        "type": post_type,
+        "title": post.get("title") or "Untitled post",
+        "author": post.get("author") or "",
+        "created_at": post.get("created_at"),
+        "report": None,
+        "decision": None,
+    }
+    if post_type == "report":
+        item["report"] = _select_report_file(post)
+    elif post_type == "decision":
+        item["decision"] = _decision_post_context(post, request_summaries)
+    return item
+
+
+def _request_stream_closed(request_row: dict) -> bool:
+    stream_id = request_row.get("stream_id")
+    if not stream_id:
+        return False
+    conn = db.connect()
+    with db._lock:
+        row = conn.execute("SELECT closed_at FROM streams WHERE id = ?", (stream_id,)).fetchone()
+    return bool(row and row["closed_at"] is not None)
+
+
+def _list_stream_summaries() -> list[dict]:
+    conn = db.connect()
+    with db._lock:
+        rows = conn.execute(
+            """
+            SELECT
+                s.slug,
+                s.kind,
+                s.title,
+                s.created_at,
+                s.closed_at,
+                COUNT(p.id) AS post_count,
+                COALESCE(MAX(p.created_at), s.created_at) AS latest_activity
+            FROM streams s
+            LEFT JOIN posts p ON p.stream_id = s.id
+            GROUP BY s.id
+            ORDER BY latest_activity DESC, s.created_at DESC
+            """
+        ).fetchall()
+    streams = []
+    for row in rows:
+        stream = dict(row)
+        stream["post_count"] = int(stream["post_count"])
+        stream["archived"] = stream["closed_at"] is not None
+        streams.append(stream)
+    return streams
+
+
 @app.get("/", response_class=HTMLResponse)
 def web_index(request: Request, q: str | None = None):
     if not web_token_ok(request):
         raise HTTPException(status_code=401, detail="missing or invalid token")
     open_requests = db.list_requests(status="open")
     decided = db.list_requests(status="decided", q=q)
+    streams = _list_stream_summaries()
     response = templates.TemplateResponse(
         request,
         "index.html",
-        {"open_requests": open_requests, "decided": decided, "q": q or ""},
+        {"open_requests": open_requests, "decided": decided, "q": q or "", "streams": streams},
     )
+    _maybe_set_cookie(response, request)
+    return response
+
+
+@app.get("/s/{slug}", response_class=HTMLResponse)
+def web_stream_detail(request: Request, slug: str):
+    if not web_token_ok(request):
+        raise HTTPException(status_code=401, detail="missing or invalid token")
+    _validate_slug(slug)
+    stream = db.get_stream_with_posts(slug)
+    if stream is None:
+        raise HTTPException(status_code=404, detail="stream not found")
+    posts = sorted(stream["posts"], key=lambda post: post.get("created_at") or "", reverse=True)
+    request_summaries = _request_summaries_for_posts(posts)
+    response = templates.TemplateResponse(
+        request,
+        "stream.html",
+        {"stream": stream, "posts": [_stream_post_context(post, request_summaries) for post in posts]},
+    )
+    response.headers["Referrer-Policy"] = "no-referrer"
     _maybe_set_cookie(response, request)
     return response
 
@@ -581,11 +774,12 @@ def web_request_detail(request: Request, req_id: str):
         raise HTTPException(status_code=404, detail="request not found")
 
     context_html = md_lib.markdown(r["context_md"]) if r.get("context_md") else ""
+    stream_read_only = _request_stream_closed(r)
 
     response = templates.TemplateResponse(
         request,
         "request.html",
-        {"r": r, "context_html": context_html},
+        {"r": r, "context_html": context_html, "stream_read_only": stream_read_only},
     )
     _maybe_set_cookie(response, request)
     return response

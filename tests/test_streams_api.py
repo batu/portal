@@ -2,6 +2,7 @@ import json
 
 from gallery import client as gallery_client
 from gallery import config
+from gallery import db
 from gallery import server
 
 
@@ -248,20 +249,21 @@ def test_stream_post_rejects_response_unsafe_body_json(client, token):
     assert surrogate_body.status_code == 400
 
 
-def test_media_serves_active_content_as_attachment(client, token):
+def test_media_serves_html_variants_as_attachment(client, token):
     create = client.post(
-        "/api/streams/html-report/posts",
+        "/api/requests",
         headers=auth_headers(token),
-        data={"type": "report", "title": "HTML", "author": "codex"},
-        files=[("files", ("report.html", b"<script>alert(1)</script>", "text/html"))],
+        data={"title": "HTML variant", "kind": "pick-one"},
+        files=[("files", ("variant.html", b"<script>alert(1)</script>", "text/html"))],
     )
     assert create.status_code == 200
-    post = create.json()["post"]
-    media_path = post["body"]["files"][0]["media_path"]
+    req_id = create.json()["id"]
+    media_path = db.get_request(req_id)["variants"][0]["media_path"]
 
-    media = client.get(f"/media/{post['id']}/{media_path}?token={token}")
+    media = client.get(f"/media/{req_id}/{media_path}?token={token}")
     assert media.status_code == 200
     assert media.headers["x-content-type-options"] == "nosniff"
+    assert "content-security-policy" not in media.headers
     assert "attachment" in media.headers["content-disposition"]
 
 

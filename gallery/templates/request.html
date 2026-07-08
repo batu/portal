@@ -21,6 +21,10 @@
   </div>
   {% endif %}
 
+  {% if stream_read_only %}
+  <div class="archive-note">Archived stream. This request is read-only.</div>
+  {% endif %}
+
   <div class="variant-grid">
     {% for v in r.variants %}
     <div class="variant" data-idx="{{ v.idx }}">
@@ -42,7 +46,7 @@
     {% endfor %}
   </div>
 
-  {% if r.status == "open" %}
+  {% if r.status == "open" and not stream_read_only %}
   <div class="decision-panel">
     {% if r.kind == "approve" %}
     <div class="approve-buttons">
