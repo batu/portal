@@ -96,7 +96,7 @@ def _preflight_stream(base_url: str, token: str, slug: str) -> None:
 
 
 def _sleep_if_time_remains(deadline: float, interval: int) -> bool:
-    remaining = deadline - time.time()
+    remaining = deadline - time.monotonic()
     if remaining <= 0:
         return False
     time.sleep(min(interval, remaining))
@@ -230,7 +230,7 @@ def cmd_wait(args):
 
 def cmd_ask(args):
     base_url, token = config.client_config()
-    started_at = time.time()
+    started_at = time.monotonic()
     deadline = started_at + args.timeout
     try:
         ask_message = client.create_stream_message(base_url, token, args.stream, "to_human", args.question)
@@ -251,7 +251,7 @@ def cmd_ask(args):
                         {
                             "reply": reply["text"],
                             "message_id": reply["id"],
-                            "elapsed_s": time.time() - started_at,
+                            "elapsed_s": time.monotonic() - started_at,
                         }
                     )
                 )
@@ -265,7 +265,7 @@ def cmd_ask(args):
 
 def cmd_pull(args):
     base_url, token = config.client_config()
-    deadline = time.time() + args.timeout
+    deadline = time.monotonic() + args.timeout
     try:
         while True:
             messages = client.list_stream_messages(

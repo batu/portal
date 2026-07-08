@@ -673,11 +673,27 @@ def test_new_command_client_errors_exit_1(monkeypatch, capsys):
     [
         (
             ["portal", "ask", "--help"],
-            ["client-side polling", '{"timeout": true}', "success 0", "client/API error 1", "timeout 2"],
+            [
+                "client-side polling",
+                '{"reply": "...", "message_id": "...", "elapsed_s": 1.23}',
+                '{"timeout": true}',
+                "success 0",
+                "client/API error 1",
+                "timeout 2",
+                "argparse usage error 2",
+            ],
         ),
         (
             ["portal", "pull", "--help"],
-            ["client-side polling", '{"empty": true}', "success 0", "client/API error 1", "empty 3"],
+            [
+                "client-side polling",
+                '{"text": "...", "message_id": "..."}',
+                '{"empty": true}',
+                "success 0",
+                "client/API error 1",
+                "empty 3",
+                "argparse usage error 2",
+            ],
         ),
     ],
 )
@@ -723,7 +739,8 @@ def test_ask_posts_question_polls_consumes_reply_and_prints_json(monkeypatch, ca
     times = iter([10.0, 12.5])
 
     monkeypatch.setattr(cli.config, "client_config", lambda: ("http://gallery", "tok"))
-    monkeypatch.setattr(cli.time, "time", lambda: next(times))
+    monkeypatch.setattr(cli.time, "monotonic", lambda: next(times))
+    monkeypatch.setattr(cli.time, "time", lambda: pytest.fail("ask elapsed must not use wall-clock time"))
     monkeypatch.setattr(cli.time, "sleep", lambda _seconds: pytest.fail("immediate reply must not sleep"))
 
     def fake_create(base_url, token, slug, direction, text):
@@ -753,6 +770,35 @@ def test_ask_posts_question_polls_consumes_reply_and_prints_json(monkeypatch, ca
     }
 
 
+def test_ask_consume_error_exits_1_without_success_json(monkeypatch, capsys):
+    monkeypatch.setattr(cli.config, "client_config", lambda: ("http://gallery", "tok"))
+    monkeypatch.setattr(cli.time, "sleep", lambda _seconds: pytest.fail("immediate reply must not sleep"))
+    monkeypatch.setattr(
+        cli.client,
+        "create_stream_message",
+        lambda *_args: {"id": "m_ask", "created_at": "2026-07-08T10:00:00Z"},
+    )
+    monkeypatch.setattr(
+        cli.client,
+        "list_stream_messages",
+        lambda *_args, **_kwargs: [{"id": "m_reply", "text": "Go"}],
+    )
+
+    def boom(*_args, **_kwargs):
+        raise cli.client.GalleryClientError(409, "stream is closed: alpha")
+
+    monkeypatch.setattr(cli.client, "consume_message", boom)
+    monkeypatch.setattr("sys.argv", ["portal", "ask", "--stream", "alpha", "Proceed?"])
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+
+    captured = capsys.readouterr()
+    assert exc.value.code == 1
+    assert captured.out == ""
+    assert "error: HTTP 409: stream is closed: alpha" in captured.err
+
+
 def test_ask_sleeps_between_empty_poll_and_reply(monkeypatch, capsys):
     replies = iter([[], [{"id": "m_reply", "text": "Continue"}]])
     sleeps = []
@@ -766,7 +812,7 @@ def test_ask_sleeps_between_empty_poll_and_reply(monkeypatch, capsys):
     )
     monkeypatch.setattr(cli.client, "list_stream_messages", lambda *_args, **_kwargs: next(replies))
     monkeypatch.setattr(cli.client, "consume_message", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr(cli.time, "time", lambda: next(times))
+    monkeypatch.setattr(cli.time, "monotonic", lambda: next(times))
     monkeypatch.setattr(cli.time, "sleep", lambda seconds: sleeps.append(seconds))
     monkeypatch.setattr(
         "sys.argv",
@@ -792,7 +838,7 @@ def test_ask_timeout_prints_json_exit_2_and_caps_sleep(monkeypatch, capsys):
     )
     monkeypatch.setattr(cli.client, "list_stream_messages", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(cli.client, "consume_message", lambda *args, **kwargs: consumed.append(args))
-    monkeypatch.setattr(cli.time, "time", lambda: next(times))
+    monkeypatch.setattr(cli.time, "monotonic", lambda: next(times))
     monkeypatch.setattr(cli.time, "sleep", lambda seconds: sleeps.append(seconds))
     monkeypatch.setattr(
         "sys.argv",
@@ -851,6 +897,30 @@ def test_pull_consumes_oldest_message_and_prints_json(monkeypatch, capsys):
     assert json.loads(capsys.readouterr().out) == {"text": "First", "message_id": "m_oldest"}
 
 
+def test_pull_consume_error_exits_1_without_success_json(monkeypatch, capsys):
+    monkeypatch.setattr(cli.config, "client_config", lambda: ("http://gallery", "tok"))
+    monkeypatch.setattr(cli.time, "sleep", lambda _seconds: pytest.fail("immediate pull must not sleep"))
+    monkeypatch.setattr(
+        cli.client,
+        "list_stream_messages",
+        lambda *_args, **_kwargs: [{"id": "m_oldest", "text": "First"}],
+    )
+
+    def boom(*_args, **_kwargs):
+        raise cli.client.GalleryClientError(409, "stream is closed: alpha")
+
+    monkeypatch.setattr(cli.client, "consume_message", boom)
+    monkeypatch.setattr("sys.argv", ["portal", "pull", "--stream", "alpha"])
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+
+    captured = capsys.readouterr()
+    assert exc.value.code == 1
+    assert captured.out == ""
+    assert "error: HTTP 409: stream is closed: alpha" in captured.err
+
+
 def test_pull_blocks_with_interval_until_message_arrives(monkeypatch, capsys):
     replies = iter([[], [{"id": "m_note", "text": "Use blue"}]])
     sleeps = []
@@ -859,7 +929,7 @@ def test_pull_blocks_with_interval_until_message_arrives(monkeypatch, capsys):
     monkeypatch.setattr(cli.config, "client_config", lambda: ("http://gallery", "tok"))
     monkeypatch.setattr(cli.client, "list_stream_messages", lambda *_args, **_kwargs: next(replies))
     monkeypatch.setattr(cli.client, "consume_message", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr(cli.time, "time", lambda: next(times))
+    monkeypatch.setattr(cli.time, "monotonic", lambda: next(times))
     monkeypatch.setattr(cli.time, "sleep", lambda seconds: sleeps.append(seconds))
     monkeypatch.setattr(
         "sys.argv",
@@ -870,6 +940,32 @@ def test_pull_blocks_with_interval_until_message_arrives(monkeypatch, capsys):
 
     assert sleeps == [3]
     assert json.loads(capsys.readouterr().out) == {"text": "Use blue", "message_id": "m_note"}
+
+
+def test_pull_timeout_empty_prints_json_exit_3_and_caps_sleep(monkeypatch, capsys):
+    sleeps = []
+    consumed = []
+    times = iter([0.0, 0.2, 1.0])
+
+    monkeypatch.setattr(cli.config, "client_config", lambda: ("http://gallery", "tok"))
+    monkeypatch.setattr(cli.client, "list_stream_messages", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(cli.client, "consume_message", lambda *args, **kwargs: consumed.append(args))
+    monkeypatch.setattr(cli.time, "monotonic", lambda: next(times))
+    monkeypatch.setattr(cli.time, "sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setattr(
+        "sys.argv",
+        ["portal", "pull", "--stream", "alpha", "--timeout", "1", "--interval", "15"],
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+
+    captured = capsys.readouterr()
+    assert exc.value.code == 3
+    assert json.loads(captured.out) == {"empty": True}
+    assert captured.err == ""
+    assert consumed == []
+    assert sleeps == [0.8]
 
 
 @pytest.mark.parametrize(
