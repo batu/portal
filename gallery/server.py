@@ -29,6 +29,7 @@ POST_UPLOAD_SOFT_CAP_BYTES = 200 * 1024 * 1024
 UPLOAD_CHUNK_SIZE = 1024 * 1024
 MAX_TITLE_LENGTH = 300
 MAX_AUTHOR_LENGTH = 200
+MAX_MESSAGE_TEXT_LENGTH = 20_000
 MAX_BODY_JSON_BYTES = 1_000_000
 STREAM_SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?$")
 SAFE_SEGMENT_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
@@ -199,6 +200,16 @@ def _parse_body_field(body: str | None) -> dict:
     return parsed
 
 
+async def _json_object_body(request: Request) -> dict:
+    try:
+        body = await request.json()
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail=f"invalid JSON: {exc}") from exc
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="JSON body must be an object")
+    return body
+
+
 def _reject_json_constant(value: str) -> None:
     raise ValueError(f"invalid JSON constant: {value}")
 
@@ -261,6 +272,63 @@ def _add_stream_slug_to_post(post: dict, slug: str) -> dict:
     post = dict(post)
     post["stream"] = slug
     return post
+
+
+def _validate_message_direction(value: object) -> str:
+    direction = _bounded_text(value, "direction", 32)
+    if direction not in db.MESSAGE_DIRECTIONS:
+        raise HTTPException(status_code=400, detail=f"invalid message direction: {direction}")
+    return direction
+
+
+def _validate_optional_message_direction(value: str | None) -> str | None:
+    if value is None:
+        return None
+    return _validate_message_direction(value)
+
+
+def _validate_since(value: str | None) -> str | None:
+    if value is None:
+        return None
+    if not value.strip():
+        raise HTTPException(status_code=400, detail="since must be an ISO timestamp")
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="since must be an ISO timestamp") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise HTTPException(status_code=400, detail="since must include a timezone")
+    return parsed.astimezone(timezone.utc).isoformat(timespec="seconds")
+
+
+def _parse_unconsumed(value: str | None) -> bool:
+    if value is None:
+        return False
+    if value != "1":
+        raise HTTPException(status_code=400, detail="unconsumed must be 1 when supplied")
+    return True
+
+
+def _message_mutation_status(exc: ValueError) -> int:
+    if isinstance(exc, db.StreamClosedError):
+        return 409
+    if isinstance(exc, (db.MessageNotFoundError, db.StreamNotFoundError)):
+        return 404
+    return 400
+
+
+def _notify_to_human_message(slug: str, text: str) -> None:
+    try:
+        server_cfg = config.load_config()
+        url = f"{server_cfg['url']}/s/{quote(slug, safe='')}?token={server_cfg['token']}"
+        notify_text = f"Portal question in {slug}: {text} - {url}"
+        threading.Thread(
+            target=notify.send_text,
+            args=(server_cfg, notify_text),
+            daemon=True,
+        ).start()
+    except Exception as exc:  # noqa: BLE001 - notification startup must never fail message creation
+        log.warning("message notification failed to start: %s", exc)
 
 
 @app.post("/api/requests")
@@ -418,6 +486,53 @@ def get_stream(request: Request, slug: str):
     return stream
 
 
+@app.post("/api/streams/{slug}/messages")
+async def create_stream_message(request: Request, slug: str):
+    require_api_token(request)
+    _validate_slug(slug)
+    body = await _json_object_body(request)
+    direction = _validate_message_direction(body.get("direction"))
+    text = _bounded_text(body.get("text"), "text", MAX_MESSAGE_TEXT_LENGTH)
+    message = None
+    for _ in range(5):
+        try:
+            message = db.create_message_for_stream(slug, direction, text)
+            break
+        except sqlite3.IntegrityError:
+            continue
+        except ValueError as exc:
+            raise HTTPException(status_code=_message_mutation_status(exc), detail=str(exc)) from exc
+    if message is None:
+        raise HTTPException(status_code=500, detail="could not allocate unique message id")
+    if direction == "to_human":
+        _notify_to_human_message(slug, text)
+    return message
+
+
+@app.get("/api/streams/{slug}/messages")
+def list_stream_messages(
+    request: Request,
+    slug: str,
+    since: str | None = None,
+    direction: str | None = None,
+    unconsumed: str | None = None,
+):
+    require_api_token(request)
+    _validate_slug(slug)
+    direction = _validate_optional_message_direction(direction)
+    since = _validate_since(since)
+    unconsumed_only = _parse_unconsumed(unconsumed)
+    stream = db.get_stream(slug)
+    if stream is None:
+        raise HTTPException(status_code=404, detail="stream not found")
+    return db.list_messages(
+        stream["id"],
+        since=since,
+        direction=direction,
+        unconsumed=unconsumed_only,
+    )
+
+
 @app.post("/api/streams/{slug}/posts")
 async def create_stream_post(
     request: Request,
@@ -504,6 +619,17 @@ def get_stream_post(request: Request, slug: str, post_id: str):
     if post is None:
         raise HTTPException(status_code=404, detail="post not found")
     return _add_stream_slug_to_post(post, slug)
+
+
+@app.post("/api/messages/{message_id}/consume")
+def consume_message(request: Request, message_id: str):
+    require_api_token(request)
+    if not SAFE_SEGMENT_RE.fullmatch(message_id) or message_id in {".", ".."}:
+        raise HTTPException(status_code=400, detail="invalid message id")
+    try:
+        return db.consume_message(message_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=_message_mutation_status(exc), detail=str(exc)) from exc
 
 
 def _apply_verdict(req_id: str, body: dict) -> dict:

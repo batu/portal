@@ -124,18 +124,19 @@ def _variant():
     return {"media_path": "01_a.png", "media_type": "image", "caption": "A", "meta": {"score": 1}}
 
 
-def test_fresh_db_has_portal_schema_v1(data_dir):
+def test_fresh_db_has_portal_schema_v2(data_dir):
     conn = db.connect()
 
-    assert _user_version(conn) == 1
-    assert {"requests", "variants", "verdicts", "streams", "posts"} <= _table_names(conn)
-    assert "messages" not in _table_names(conn)
+    assert _user_version(conn) == 2
+    assert {"requests", "variants", "verdicts", "streams", "posts", "messages"} <= _table_names(conn)
     assert {"stream_id", "before_media_path", "before_media_type"} <= _column_names(conn, "requests")
+    assert {"id", "stream_id", "direction", "text", "created_at", "consumed_at"} <= _column_names(conn, "messages")
     assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
     assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
 
     request_fks = conn.execute("PRAGMA foreign_key_list(requests)").fetchall()
     post_fks = conn.execute("PRAGMA foreign_key_list(posts)").fetchall()
+    message_fks = conn.execute("PRAGMA foreign_key_list(messages)").fetchall()
     assert any(
         row["from"] == "stream_id" and row["table"] == "streams" and row["on_delete"] == "NO ACTION"
         for row in request_fks
@@ -144,6 +145,15 @@ def test_fresh_db_has_portal_schema_v1(data_dir):
         row["from"] == "stream_id" and row["table"] == "streams" and row["on_delete"] == "NO ACTION"
         for row in post_fks
     )
+    assert any(
+        row["from"] == "stream_id" and row["table"] == "streams" and row["on_delete"] == "NO ACTION"
+        for row in message_fks
+    )
+    table_sql = conn.execute("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'messages'").fetchone()[
+        "sql"
+    ]
+    assert "to_agent" in table_sql
+    assert "to_human" in table_sql
 
 
 def test_legacy_db_upgrade_preserves_existing_rows(data_dir):
@@ -153,8 +163,8 @@ def test_legacy_db_upgrade_preserves_existing_rows(data_dir):
 
     conn = db.connect()
 
-    assert _user_version(conn) == 1
-    assert {"streams", "posts"} <= _table_names(conn)
+    assert _user_version(conn) == 2
+    assert {"streams", "posts", "messages"} <= _table_names(conn)
     assert {"stream_id", "before_media_path", "before_media_type"} <= _column_names(conn, "requests")
     assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
     assert _rows(
@@ -184,6 +194,7 @@ def test_legacy_db_upgrade_preserves_existing_rows(data_dir):
     assert request["verdict"]["ratings"] == {"2": 5}
     assert request["verdict"]["comment"] == "latest"
     assert conn.execute("SELECT COUNT(*) FROM posts").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0] == 0
 
 
 def test_reconnecting_migrated_db_is_noop(data_dir):
@@ -191,7 +202,7 @@ def test_reconnecting_migrated_db_is_noop(data_dir):
     db.create_stream("stable", "session", "Stable")
     before = {
         table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-        for table in ("requests", "variants", "verdicts", "streams", "posts")
+        for table in ("requests", "variants", "verdicts", "streams", "posts", "messages")
     }
 
     db.reset_connection()
@@ -199,9 +210,9 @@ def test_reconnecting_migrated_db_is_noop(data_dir):
 
     after = {
         table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-        for table in ("requests", "variants", "verdicts", "streams", "posts")
+        for table in ("requests", "variants", "verdicts", "streams", "posts", "messages")
     }
-    assert _user_version(conn) == 1
+    assert _user_version(conn) == 2
     assert after == before
 
 
@@ -220,9 +231,10 @@ def test_partial_v1_db_completes_migration(data_dir):
 
     conn = db.connect()
 
-    assert _user_version(conn) == 1
+    assert _user_version(conn) == 2
     assert {"stream_id", "before_media_path", "before_media_type"} <= _column_names(conn, "requests")
     assert "posts" in _table_names(conn)
+    assert "messages" in _table_names(conn)
     assert db.get_request("req_old")["verdict"]["comment"] == "latest"
 
 
@@ -280,8 +292,176 @@ def test_failed_migration_rolls_back_and_connect_can_retry(data_dir, monkeypatch
 
     monkeypatch.setattr(db, "MIGRATIONS", original_migrations)
     conn = db.connect()
-    assert _user_version(conn) == 1
-    assert {"streams", "posts"} <= _table_names(conn)
+    assert _user_version(conn) == 2
+    assert {"streams", "posts", "messages"} <= _table_names(conn)
+
+
+def test_user_version_two_requires_messages_schema_shape(data_dir):
+    path = config.db_path()
+    _create_legacy_db(path)
+    conn = _raw_conn(path)
+    conn.execute(
+        "CREATE TABLE streams ("
+        "id TEXT PRIMARY KEY, slug TEXT NOT NULL UNIQUE, kind TEXT NOT NULL, "
+        "title TEXT NOT NULL, created_at TEXT NOT NULL, closed_at TEXT)"
+    )
+    conn.execute("ALTER TABLE requests ADD COLUMN stream_id TEXT REFERENCES streams(id)")
+    conn.execute("ALTER TABLE requests ADD COLUMN before_media_path TEXT")
+    conn.execute("ALTER TABLE requests ADD COLUMN before_media_type TEXT")
+    conn.execute(
+        "CREATE TABLE posts ("
+        "id TEXT PRIMARY KEY, stream_id TEXT NOT NULL REFERENCES streams(id), "
+        "type TEXT NOT NULL, title TEXT NOT NULL, author TEXT NOT NULL, "
+        "body_json TEXT NOT NULL, created_at TEXT NOT NULL)"
+    )
+    conn.execute(
+        "CREATE TABLE messages ("
+        "id TEXT PRIMARY KEY, stream_id TEXT NOT NULL, direction TEXT NOT NULL, "
+        "text TEXT NOT NULL, created_at TEXT NOT NULL, consumed_at TEXT)"
+    )
+    conn.execute("PRAGMA user_version = 2")
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(RuntimeError, match="schema v2 messages missing stream_id foreign key"):
+        db.connect()
+
+    assert db._conn is None
+
+
+def test_user_version_two_requires_all_message_columns(data_dir):
+    path = config.db_path()
+    _create_legacy_db(path)
+    conn = _raw_conn(path)
+    conn.execute(
+        "CREATE TABLE streams ("
+        "id TEXT PRIMARY KEY, slug TEXT NOT NULL UNIQUE, kind TEXT NOT NULL, "
+        "title TEXT NOT NULL, created_at TEXT NOT NULL, closed_at TEXT)"
+    )
+    conn.execute("ALTER TABLE requests ADD COLUMN stream_id TEXT REFERENCES streams(id)")
+    conn.execute("ALTER TABLE requests ADD COLUMN before_media_path TEXT")
+    conn.execute("ALTER TABLE requests ADD COLUMN before_media_type TEXT")
+    conn.execute(
+        "CREATE TABLE posts ("
+        "id TEXT PRIMARY KEY, stream_id TEXT NOT NULL REFERENCES streams(id), "
+        "type TEXT NOT NULL, title TEXT NOT NULL, author TEXT NOT NULL, "
+        "body_json TEXT NOT NULL, created_at TEXT NOT NULL)"
+    )
+    conn.execute(
+        "CREATE TABLE messages ("
+        "id TEXT PRIMARY KEY, stream_id TEXT NOT NULL REFERENCES streams(id), "
+        "direction TEXT NOT NULL CHECK (direction IN ('to_agent', 'to_human')), "
+        "text TEXT NOT NULL, created_at TEXT NOT NULL)"
+    )
+    conn.execute("PRAGMA user_version = 2")
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(RuntimeError, match="schema v2 missing messages columns: consumed_at"):
+        db.connect()
+
+    assert db._conn is None
+
+
+def test_user_version_two_requires_message_direction_constraint(data_dir):
+    path = config.db_path()
+    _create_legacy_db(path)
+    conn = _raw_conn(path)
+    conn.execute(
+        "CREATE TABLE streams ("
+        "id TEXT PRIMARY KEY, slug TEXT NOT NULL UNIQUE, kind TEXT NOT NULL, "
+        "title TEXT NOT NULL, created_at TEXT NOT NULL, closed_at TEXT)"
+    )
+    conn.execute("ALTER TABLE requests ADD COLUMN stream_id TEXT REFERENCES streams(id)")
+    conn.execute("ALTER TABLE requests ADD COLUMN before_media_path TEXT")
+    conn.execute("ALTER TABLE requests ADD COLUMN before_media_type TEXT")
+    conn.execute(
+        "CREATE TABLE posts ("
+        "id TEXT PRIMARY KEY, stream_id TEXT NOT NULL REFERENCES streams(id), "
+        "type TEXT NOT NULL, title TEXT NOT NULL, author TEXT NOT NULL, "
+        "body_json TEXT NOT NULL, created_at TEXT NOT NULL)"
+    )
+    conn.execute(
+        "CREATE TABLE messages ("
+        "id TEXT PRIMARY KEY, stream_id TEXT NOT NULL REFERENCES streams(id), "
+        "direction TEXT NOT NULL, text TEXT NOT NULL, created_at TEXT NOT NULL, consumed_at TEXT)"
+    )
+    conn.execute("PRAGMA user_version = 2")
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(RuntimeError, match="schema v2 messages missing direction constraint"):
+        db.connect()
+
+    assert db._conn is None
+
+
+def test_user_version_two_rejects_partial_message_direction_constraint(data_dir):
+    path = config.db_path()
+    _create_legacy_db(path)
+    conn = _raw_conn(path)
+    conn.execute(
+        "CREATE TABLE streams ("
+        "id TEXT PRIMARY KEY, slug TEXT NOT NULL UNIQUE, kind TEXT NOT NULL, "
+        "title TEXT NOT NULL, created_at TEXT NOT NULL, closed_at TEXT)"
+    )
+    conn.execute("ALTER TABLE requests ADD COLUMN stream_id TEXT REFERENCES streams(id)")
+    conn.execute("ALTER TABLE requests ADD COLUMN before_media_path TEXT")
+    conn.execute("ALTER TABLE requests ADD COLUMN before_media_type TEXT")
+    conn.execute(
+        "CREATE TABLE posts ("
+        "id TEXT PRIMARY KEY, stream_id TEXT NOT NULL REFERENCES streams(id), "
+        "type TEXT NOT NULL, title TEXT NOT NULL, author TEXT NOT NULL, "
+        "body_json TEXT NOT NULL, created_at TEXT NOT NULL)"
+    )
+    conn.execute(
+        "CREATE TABLE messages ("
+        "id TEXT PRIMARY KEY, stream_id TEXT NOT NULL REFERENCES streams(id), "
+        "direction TEXT NOT NULL CHECK (direction IN ('to_agent')), "
+        "text TEXT NOT NULL, created_at TEXT NOT NULL, consumed_at TEXT)"
+    )
+    conn.execute("PRAGMA user_version = 2")
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(RuntimeError, match="schema v2 messages missing direction constraint"):
+        db.connect()
+
+    assert db._conn is None
+
+
+def test_user_version_two_rejects_overbroad_message_direction_constraint(data_dir):
+    path = config.db_path()
+    _create_legacy_db(path)
+    conn = _raw_conn(path)
+    conn.execute(
+        "CREATE TABLE streams ("
+        "id TEXT PRIMARY KEY, slug TEXT NOT NULL UNIQUE, kind TEXT NOT NULL, "
+        "title TEXT NOT NULL, created_at TEXT NOT NULL, closed_at TEXT)"
+    )
+    conn.execute("ALTER TABLE requests ADD COLUMN stream_id TEXT REFERENCES streams(id)")
+    conn.execute("ALTER TABLE requests ADD COLUMN before_media_path TEXT")
+    conn.execute("ALTER TABLE requests ADD COLUMN before_media_type TEXT")
+    conn.execute(
+        "CREATE TABLE posts ("
+        "id TEXT PRIMARY KEY, stream_id TEXT NOT NULL REFERENCES streams(id), "
+        "type TEXT NOT NULL, title TEXT NOT NULL, author TEXT NOT NULL, "
+        "body_json TEXT NOT NULL, created_at TEXT NOT NULL)"
+    )
+    conn.execute(
+        "CREATE TABLE messages ("
+        "id TEXT PRIMARY KEY, stream_id TEXT NOT NULL REFERENCES streams(id), "
+        "direction TEXT NOT NULL CHECK (direction != 'other'), "
+        "text TEXT NOT NULL, created_at TEXT NOT NULL, consumed_at TEXT)"
+    )
+    conn.execute("PRAGMA user_version = 2")
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(RuntimeError, match="schema v2 messages missing direction constraint"):
+        db.connect()
+
+    assert db._conn is None
 
 
 def test_concurrent_first_connect_is_serialized(data_dir, monkeypatch):

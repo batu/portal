@@ -7,6 +7,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
+from typing import cast
 
 
 class GalleryClientError(Exception):
@@ -20,7 +21,7 @@ def _auth_headers(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
 
 
-def _request(method: str, url: str, headers: dict, data: bytes | None = None) -> dict:
+def _request(method: str, url: str, headers: dict, data: bytes | None = None) -> dict | list:
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
@@ -35,7 +36,7 @@ def _request(method: str, url: str, headers: dict, data: bytes | None = None) ->
         raise GalleryClientError(exc.code, detail) from exc
 
 
-def get_json(base_url: str, token: str, path: str) -> dict:
+def get_json(base_url: str, token: str, path: str) -> dict | list:
     return _request("GET", base_url + path, _auth_headers(token))
 
 
@@ -120,3 +121,37 @@ def get_stream_post(base_url: str, token: str, slug: str, post_id: str) -> dict:
     slug = urllib.parse.quote(slug, safe="")
     post_id = urllib.parse.quote(post_id, safe="")
     return get_json(base_url, token, f"/api/streams/{slug}/posts/{post_id}")
+
+
+def create_stream_message(base_url: str, token: str, slug: str, direction: str, text: str) -> dict:
+    slug = urllib.parse.quote(slug, safe="")
+    return post_json(base_url, token, f"/api/streams/{slug}/messages", {"direction": direction, "text": text})
+
+
+def list_stream_messages(
+    base_url: str,
+    token: str,
+    slug: str,
+    *,
+    since: str | None = None,
+    direction: str | None = None,
+    unconsumed: bool = False,
+) -> list[dict]:
+    slug = urllib.parse.quote(slug, safe="")
+    params = {}
+    if since is not None:
+        params["since"] = since
+    if direction is not None:
+        params["direction"] = direction
+    if unconsumed:
+        params["unconsumed"] = "1"
+    query = urllib.parse.urlencode(params)
+    path = f"/api/streams/{slug}/messages"
+    if query:
+        path = f"{path}?{query}"
+    return cast(list[dict], get_json(base_url, token, path))
+
+
+def consume_message(base_url: str, token: str, message_id: str) -> dict:
+    message_id = urllib.parse.quote(message_id, safe="")
+    return post_json(base_url, token, f"/api/messages/{message_id}/consume", {})

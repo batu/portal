@@ -15,6 +15,7 @@ from pathlib import Path
 from . import config
 
 KINDS = ("pick-one", "pick-many", "rank", "approve", "comment", "before-after")
+MESSAGE_DIRECTIONS = ("to_agent", "to_human")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS requests (
@@ -57,6 +58,18 @@ _init_lock = threading.Lock()
 _conn: sqlite3.Connection | None = None
 
 
+class StreamNotFoundError(ValueError):
+    pass
+
+
+class StreamClosedError(ValueError):
+    pass
+
+
+class MessageNotFoundError(ValueError):
+    pass
+
+
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -71,6 +84,10 @@ def new_stream_id() -> str:
 
 def new_post_id() -> str:
     return "p_" + secrets.token_hex(3)
+
+
+def new_message_id() -> str:
+    return "m_" + secrets.token_hex(3)
 
 
 def _column_names(conn: sqlite3.Connection, table: str) -> set[str]:
@@ -95,9 +112,58 @@ def _validate_v1_schema(conn: sqlite3.Connection) -> None:
             raise RuntimeError(f"schema v1 missing {table} columns: {missing_list}")
 
 
+def _validate_message_direction_constraint(conn: sqlite3.Connection) -> None:
+    suffix = secrets.token_hex(4)
+    stream_id = f"__schema_validation_stream_{suffix}__"
+    conn.execute("SAVEPOINT validate_message_direction")
+    try:
+        conn.execute(
+            "INSERT INTO streams (id, slug, kind, title, created_at) VALUES (?, ?, ?, ?, ?)",
+            (stream_id, f"schema-validation-{suffix}", "session", "Schema validation", now_iso()),
+        )
+        for direction in MESSAGE_DIRECTIONS:
+            try:
+                conn.execute(
+                    "INSERT INTO messages (id, stream_id, direction, text, created_at) VALUES (?, ?, ?, ?, ?)",
+                    (f"__schema_validation_message_{direction}_{suffix}__", stream_id, direction, "probe", now_iso()),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise RuntimeError("schema v2 messages missing direction constraint") from exc
+        try:
+            conn.execute(
+                "INSERT INTO messages (id, stream_id, direction, text, created_at) VALUES (?, ?, ?, ?, ?)",
+                (f"__schema_validation_message_invalid_{suffix}__", stream_id, "other", "probe", now_iso()),
+            )
+        except sqlite3.IntegrityError:
+            return
+        raise RuntimeError("schema v2 messages missing direction constraint")
+    finally:
+        conn.execute("ROLLBACK TO validate_message_direction")
+        conn.execute("RELEASE validate_message_direction")
+
+
+def _validate_v2_schema(conn: sqlite3.Connection) -> None:
+    missing = {"id", "stream_id", "direction", "text", "created_at", "consumed_at"} - _column_names(
+        conn, "messages"
+    )
+    if missing:
+        missing_list = ", ".join(sorted(missing))
+        raise RuntimeError(f"schema v2 missing messages columns: {missing_list}")
+    message_fks = conn.execute("PRAGMA foreign_key_list(messages)").fetchall()
+    if not any(row["from"] == "stream_id" and row["table"] == "streams" and row["to"] == "id" for row in message_fks):
+        raise RuntimeError("schema v2 messages missing stream_id foreign key")
+    table_row = conn.execute("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'messages'").fetchone()
+    table_sql = re.sub(r"\s+", " ", (table_row["sql"] or "").lower()) if table_row is not None else ""
+    if not re.search(r"check\s*\(\s*direction\s+in\s*\(\s*'to_agent'\s*,\s*'to_human'\s*\)\s*\)", table_sql):
+        raise RuntimeError("schema v2 messages missing direction constraint")
+    _validate_message_direction_constraint(conn)
+
+
 def _validate_schema_version(conn: sqlite3.Connection, version: int) -> None:
     if version >= 1:
         _validate_v1_schema(conn)
+    if version >= 2:
+        _validate_v2_schema(conn)
 
 
 def _migrate_v1(conn: sqlite3.Connection) -> None:
@@ -132,7 +198,24 @@ def _migrate_v1(conn: sqlite3.Connection) -> None:
     _add_column_if_missing(conn, "requests", "before_media_type", "before_media_type TEXT")
 
 
-MIGRATIONS = [(1, _migrate_v1)]
+def _migrate_v2(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS messages (
+            id TEXT PRIMARY KEY,
+            stream_id TEXT NOT NULL REFERENCES streams(id),
+            direction TEXT NOT NULL CHECK (direction IN ('to_agent', 'to_human')),
+            text TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            consumed_at TEXT
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_stream_created ON messages(stream_id, created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_stream_unconsumed ON messages(stream_id, consumed_at, created_at)")
+
+
+MIGRATIONS = [(1, _migrate_v1), (2, _migrate_v2)]
 
 
 def _user_version(conn: sqlite3.Connection) -> int:
@@ -202,6 +285,10 @@ def _post_from_row(row: sqlite3.Row | None) -> dict | None:
     post = dict(row)
     post["body"] = json.loads(post.pop("body_json"))
     return post
+
+
+def _message_from_row(row: sqlite3.Row | None) -> dict | None:
+    return dict(row) if row is not None else None
 
 
 def _get_stream_by_slug(conn: sqlite3.Connection, slug: str) -> dict | None:
@@ -302,9 +389,9 @@ def close_stream(slug: str) -> dict:
 def _require_open_stream(conn: sqlite3.Connection, stream_id: str) -> dict:
     stream = _get_stream_by_id(conn, stream_id)
     if stream is None:
-        raise ValueError(f"stream not found: {stream_id}")
+        raise StreamNotFoundError(f"stream not found: {stream_id}")
     if stream["closed_at"] is not None:
-        raise ValueError(f"stream is closed: {stream_id}")
+        raise StreamClosedError(f"stream is closed: {stream_id}")
     return stream
 
 
@@ -410,6 +497,152 @@ def get_stream_post(slug: str, post_id: str) -> dict | None:
             (slug, post_id),
         ).fetchone()
         return _post_from_row(row)
+
+
+def _validate_message_direction(direction: str) -> None:
+    if direction not in MESSAGE_DIRECTIONS:
+        raise ValueError(f"invalid message direction: {direction}")
+
+
+def _normalize_message_since(since: str) -> str:
+    try:
+        parsed = datetime.fromisoformat(since)
+    except ValueError as exc:
+        raise ValueError("since must be an ISO timestamp") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("since must include a timezone")
+    return parsed.astimezone(timezone.utc).isoformat(timespec="seconds")
+
+
+def _get_message_by_id(conn: sqlite3.Connection, message_id: str) -> dict | None:
+    return _message_from_row(conn.execute("SELECT * FROM messages WHERE id = ?", (message_id,)).fetchone())
+
+
+def _create_message(
+    conn: sqlite3.Connection,
+    stream_id: str,
+    direction: str,
+    text: str,
+    *,
+    created_at: str | None = None,
+    message_id: str | None = None,
+) -> dict:
+    _validate_message_direction(direction)
+    _require_open_stream(conn, stream_id)
+    message_id = message_id or new_message_id()
+    conn.execute(
+        "INSERT INTO messages (id, stream_id, direction, text, created_at) VALUES (?, ?, ?, ?, ?)",
+        (message_id, stream_id, direction, text, created_at or now_iso()),
+    )
+    message = _get_message_by_id(conn, message_id)
+    assert message is not None
+    return message
+
+
+def create_message(
+    stream_id: str,
+    direction: str,
+    text: str,
+    *,
+    created_at: str | None = None,
+    message_id: str | None = None,
+) -> dict:
+    conn = connect()
+    with _lock:
+        try:
+            message = _create_message(
+                conn,
+                stream_id,
+                direction,
+                text,
+                created_at=created_at,
+                message_id=message_id,
+            )
+            conn.commit()
+            return message
+        except Exception:
+            conn.rollback()
+            raise
+
+
+def create_message_for_stream(
+    slug: str,
+    direction: str,
+    text: str,
+    *,
+    created_at: str | None = None,
+    message_id: str | None = None,
+) -> dict:
+    conn = connect()
+    with _lock:
+        try:
+            stream = _ensure_stream(conn, slug)
+            message = _create_message(
+                conn,
+                stream["id"],
+                direction,
+                text,
+                created_at=created_at,
+                message_id=message_id,
+            )
+            conn.commit()
+            return message
+        except Exception:
+            conn.rollback()
+            raise
+
+
+def list_messages(
+    stream_id: str,
+    *,
+    since: str | None = None,
+    direction: str | None = None,
+    unconsumed: bool = False,
+) -> list[dict]:
+    if direction is not None:
+        _validate_message_direction(direction)
+    if since is not None:
+        since = _normalize_message_since(since)
+    conn = connect()
+    with _lock:
+        clauses = ["stream_id = ?"]
+        params: list = [stream_id]
+        if since is not None:
+            clauses.append("created_at > ?")
+            params.append(since)
+        if direction is not None:
+            clauses.append("direction = ?")
+            params.append(direction)
+        if unconsumed:
+            clauses.append("consumed_at IS NULL")
+        rows = conn.execute(
+            "SELECT * FROM messages WHERE " + " AND ".join(clauses) + " ORDER BY created_at, rowid",
+            params,
+        ).fetchall()
+        return [_message_from_row(row) for row in rows]
+
+
+def consume_message(message_id: str) -> dict:
+    """Mark a message consumed once; repeated consumes are no-ops that return the original timestamp."""
+    conn = connect()
+    with _lock:
+        try:
+            message = _get_message_by_id(conn, message_id)
+            if message is None:
+                raise MessageNotFoundError(f"message not found: {message_id}")
+            _require_open_stream(conn, message["stream_id"])
+            if message["consumed_at"] is None:
+                conn.execute(
+                    "UPDATE messages SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL",
+                    (now_iso(), message_id),
+                )
+            conn.commit()
+            message = _get_message_by_id(conn, message_id)
+            assert message is not None
+            return message
+        except Exception:
+            conn.rollback()
+            raise
 
 
 def _stream_slug_for_project(project: str | None) -> str:
