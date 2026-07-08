@@ -3,6 +3,9 @@
 import json
 import logging
 import mimetypes
+import re
+import shutil
+import sqlite3
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,6 +21,15 @@ from . import config, db, notify
 log = logging.getLogger("gallery.server")
 
 VIDEO_EXTS = {".mp4", ".mov", ".webm", ".m4v", ".avi"}
+STREAM_KINDS = {"session", "pinned"}
+POST_TYPES = {"report", "decision"}
+POST_UPLOAD_SOFT_CAP_BYTES = 200 * 1024 * 1024
+UPLOAD_CHUNK_SIZE = 1024 * 1024
+MAX_TITLE_LENGTH = 300
+MAX_AUTHOR_LENGTH = 200
+MAX_BODY_JSON_BYTES = 1_000_000
+STREAM_SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?$")
+SAFE_SEGMENT_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 app = FastAPI(title="Gallery")
 
@@ -93,6 +105,90 @@ def _media_type_for(filename: str) -> str:
     return "video" if ext in VIDEO_EXTS else "image"
 
 
+def _safe_upload_name(filename: str | None, fallback: str) -> str:
+    name = Path(filename or fallback).name
+    name = re.sub(r"[^A-Za-z0-9._-]+", "_", name).strip("._")
+    return (name or fallback)[:120]
+
+
+def _before_media_path(filename: str | None) -> str:
+    suffix = Path(filename or "").suffix.lower()
+    if not re.fullmatch(r"\.[a-z0-9]{1,16}", suffix):
+        suffix = ".bin"
+    return f"__before{suffix}"
+
+
+async def _write_upload(upload: UploadFile, dest_path: Path) -> int:
+    total = 0
+    with dest_path.open("wb") as out:
+        while True:
+            chunk = await upload.read(UPLOAD_CHUNK_SIZE)
+            if not chunk:
+                break
+            total += len(chunk)
+            out.write(chunk)
+    return total
+
+
+def _validate_slug(slug: str) -> str:
+    if not STREAM_SLUG_RE.fullmatch(slug):
+        raise HTTPException(status_code=400, detail="invalid stream slug")
+    return slug
+
+
+def _bounded_text(value: object, name: str, max_length: int) -> str:
+    if not isinstance(value, str):
+        raise HTTPException(status_code=400, detail=f"{name} must be a string")
+    value = value.strip()
+    if not value:
+        raise HTTPException(status_code=400, detail=f"{name} is required")
+    if len(value) > max_length:
+        raise HTTPException(status_code=400, detail=f"{name} is too long")
+    return value
+
+
+def _parse_body_field(body: str | None) -> dict:
+    if body is None or body == "":
+        return {}
+    if len(body.encode("utf-8")) > MAX_BODY_JSON_BYTES:
+        raise HTTPException(status_code=400, detail="body JSON is too large")
+    try:
+        parsed = json.loads(body)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail=f"invalid body JSON: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise HTTPException(status_code=400, detail="body JSON must be an object")
+    return parsed
+
+
+def _coerce_uploads(files: list[UploadFile] | None) -> list[UploadFile]:
+    return list(files or [])
+
+
+async def _save_post_files(post_id: str, uploads: list[UploadFile]) -> tuple[list[dict], int]:
+    if not uploads:
+        return [], 0
+    dest_dir = config.media_dir() / post_id
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    stored = []
+    total_bytes = 0
+    for i, upload in enumerate(uploads, start=1):
+        original_name = upload.filename or f"file_{i}"
+        safe_name = f"{i:02d}_{_safe_upload_name(original_name, f'file_{i}')}"
+        dest_path = dest_dir / safe_name
+        size = await _write_upload(upload, dest_path)
+        total_bytes += size
+        stored.append(
+            {
+                "media_path": safe_name,
+                "media_type": upload.content_type or mimetypes.guess_type(safe_name)[0] or "application/octet-stream",
+                "size": size,
+                "original_name": Path(original_name).name,
+            }
+        )
+    return stored, total_bytes
+
+
 @app.post("/api/requests")
 async def create_request(
     request: Request,
@@ -101,6 +197,7 @@ async def create_request(
     kind: str = Form(...),
     context: str | None = Form(None),
     manifest: str | None = Form(None),
+    before: UploadFile | None = File(None),
     files: list[UploadFile] = File(...),
 ):
     require_api_token(request)
@@ -121,10 +218,17 @@ async def create_request(
     dest_dir = config.media_dir() / req_id
     dest_dir.mkdir(parents=True, exist_ok=True)
 
+    before_media_path = None
+    before_media_type = None
+    if before is not None and before.filename:
+        before_media_path = _before_media_path(before.filename)
+        await _write_upload(before, dest_dir / before_media_path)
+        before_media_type = _media_type_for(before.filename)
+
     variants = []
     for i, upload in enumerate(files, start=1):
         orig_name = upload.filename or f"variant_{i}"
-        safe_name = f"{i:02d}_{Path(orig_name).name}"
+        safe_name = f"{i:02d}_{_safe_upload_name(orig_name, f'variant_{i}')}"
         dest_path = dest_dir / safe_name
         data = await upload.read()
         dest_path.write_bytes(data)
@@ -138,7 +242,16 @@ async def create_request(
             }
         )
 
-    db.create_request(req_id, title, project, kind, context, variants)
+    db.create_request(
+        req_id,
+        title,
+        project,
+        kind,
+        context,
+        variants,
+        before_media_path=before_media_path,
+        before_media_type=before_media_type,
+    )
 
     server_cfg = config.load_config()
     url = f"{server_cfg['url']}/r/{req_id}?token={server_cfg['token']}"
@@ -164,6 +277,117 @@ def get_request(request: Request, req_id: str):
     if r is None:
         raise HTTPException(status_code=404, detail="request not found")
     return r
+
+
+@app.post("/api/streams")
+async def create_stream(request: Request):
+    require_api_token(request)
+    try:
+        body = await request.json()
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail=f"invalid JSON: {exc}") from exc
+    slug = _validate_slug(_bounded_text(body.get("slug"), "slug", 128))
+    kind = _bounded_text(body.get("kind"), "kind", 32)
+    if kind not in STREAM_KINDS:
+        raise HTTPException(status_code=400, detail=f"invalid stream kind: {kind}")
+    title = _bounded_text(body.get("title"), "title", MAX_TITLE_LENGTH)
+    try:
+        return db.create_stream(slug, kind, title)
+    except sqlite3.IntegrityError as exc:
+        raise HTTPException(status_code=409, detail="stream already exists") from exc
+
+
+@app.post("/api/streams/{slug}/close")
+def close_stream(request: Request, slug: str):
+    require_api_token(request)
+    _validate_slug(slug)
+    try:
+        return db.close_stream(slug)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/api/streams/{slug}")
+def get_stream(request: Request, slug: str):
+    require_api_token(request)
+    _validate_slug(slug)
+    stream = db.get_stream_with_posts(slug)
+    if stream is None:
+        raise HTTPException(status_code=404, detail="stream not found")
+    return stream
+
+
+@app.post("/api/streams/{slug}/posts")
+async def create_stream_post(
+    request: Request,
+    slug: str,
+    type: str = Form(...),
+    title: str = Form(...),
+    author: str = Form(...),
+    body: str | None = Form(None),
+    files: list[UploadFile] | None = File(None),
+):
+    require_api_token(request)
+    _validate_slug(slug)
+    post_type = _bounded_text(type, "type", 32)
+    if post_type not in POST_TYPES:
+        raise HTTPException(status_code=400, detail=f"invalid post type: {post_type}")
+    title = _bounded_text(title, "title", MAX_TITLE_LENGTH)
+    author = _bounded_text(author, "author", MAX_AUTHOR_LENGTH)
+    body_obj = _parse_body_field(body)
+
+    existing_stream = db.get_stream(slug)
+    if existing_stream is not None and existing_stream["closed_at"] is not None:
+        raise HTTPException(status_code=409, detail=f"stream is closed: {slug}")
+
+    if post_type == "decision":
+        request_id = body_obj.get("request_id")
+        if not isinstance(request_id, str) or not request_id:
+            raise HTTPException(status_code=400, detail="decision posts require body.request_id")
+        if db.get_request(request_id) is None:
+            raise HTTPException(status_code=404, detail="request not found")
+
+    post_id = db.new_post_id()
+    uploads = _coerce_uploads(files)
+    stored_files, total_bytes = await _save_post_files(post_id, uploads)
+    if post_type == "report":
+        body_obj = {**body_obj, "files": stored_files}
+    elif stored_files:
+        body_obj = {**body_obj, "files": stored_files}
+
+    try:
+        post = db.create_post_for_stream(
+            slug,
+            post_type,
+            title,
+            author,
+            body_obj,
+            auto_create=True,
+            post_id=post_id,
+        )
+    except ValueError as exc:
+        shutil.rmtree(config.media_dir() / post_id, ignore_errors=True)
+        detail = str(exc)
+        status = 409 if "closed" in detail else 404
+        raise HTTPException(status_code=status, detail=detail) from exc
+    except sqlite3.IntegrityError as exc:
+        shutil.rmtree(config.media_dir() / post_id, ignore_errors=True)
+        raise HTTPException(status_code=409, detail="post already exists") from exc
+
+    response = {"post": post}
+    if total_bytes > POST_UPLOAD_SOFT_CAP_BYTES:
+        response["warning"] = f"post upload exceeded {POST_UPLOAD_SOFT_CAP_BYTES} byte soft cap"
+    return response
+
+
+@app.get("/api/streams/{slug}/posts/{post_id}")
+def get_stream_post(request: Request, slug: str, post_id: str):
+    require_api_token(request)
+    _validate_slug(slug)
+    post = db.get_stream_post(slug, post_id)
+    if post is None:
+        raise HTTPException(status_code=404, detail="post not found")
+    return post
 
 
 def _apply_verdict(req_id: str, body: dict) -> dict:
@@ -200,11 +424,41 @@ async def post_verdict(request: Request, req_id: str):
 def get_media(request: Request, req_id: str, filename: str):
     if not web_token_ok(request):
         raise HTTPException(status_code=401, detail="missing or invalid token")
-    path = config.media_dir() / req_id / filename
+    if (
+        not SAFE_SEGMENT_RE.fullmatch(req_id)
+        or req_id in {".", ".."}
+        or not SAFE_SEGMENT_RE.fullmatch(filename)
+        or filename in {".", ".."}
+    ):
+        raise HTTPException(status_code=404, detail="media not found")
+    media_root = config.media_dir().resolve()
+    media_dir = (media_root / req_id).resolve()
+    path = (media_dir / filename).resolve()
+    try:
+        path.relative_to(media_dir)
+        media_dir.relative_to(media_root)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="media not found") from exc
     if not path.is_file():
         raise HTTPException(status_code=404, detail="media not found")
     media_type, _ = mimetypes.guess_type(str(path))
-    return FileResponse(path, media_type=media_type)
+    headers = {"X-Content-Type-Options": "nosniff"}
+    inline = bool(
+        media_type
+        and (
+            media_type.startswith("video/")
+            or (media_type.startswith("image/") and media_type != "image/svg+xml")
+        )
+    )
+    if inline:
+        return FileResponse(path, media_type=media_type, headers=headers)
+    return FileResponse(
+        path,
+        media_type=media_type or "application/octet-stream",
+        headers=headers,
+        filename=path.name,
+        content_disposition_type="attachment",
+    )
 
 
 # --- web UI ---

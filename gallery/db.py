@@ -4,7 +4,6 @@ A single module-level connection guarded by a lock is enough for a
 single-user, low-volume review tool (per the project brief).
 """
 
-import hashlib
 import json
 import re
 import secrets
@@ -15,7 +14,7 @@ from pathlib import Path
 
 from . import config
 
-KINDS = ("pick-one", "pick-many", "rank", "approve", "comment")
+KINDS = ("pick-one", "pick-many", "rank", "approve", "comment", "before-after")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS requests (
@@ -255,6 +254,22 @@ def get_stream(slug: str) -> dict | None:
         return _get_stream_by_slug(conn, slug)
 
 
+def get_stream_with_posts(slug: str) -> dict | None:
+    conn = connect()
+    with _lock:
+        stream = _get_stream_by_slug(conn, slug)
+        if stream is None:
+            return None
+        stream["posts"] = [
+            _post_from_row(row)
+            for row in conn.execute(
+                "SELECT * FROM posts WHERE stream_id = ? ORDER BY created_at, rowid",
+                (stream["id"],),
+            ).fetchall()
+        ]
+        return stream
+
+
 def ensure_stream(slug: str) -> dict:
     conn = connect()
     with _lock:
@@ -301,9 +316,10 @@ def _create_post(
     author: str,
     body: dict,
     created_at: str | None = None,
+    post_id: str | None = None,
 ) -> dict:
     _require_open_stream(conn, stream_id)
-    post_id = new_post_id()
+    post_id = post_id or new_post_id()
     conn.execute(
         "INSERT INTO posts (id, stream_id, type, title, author, body_json, created_at) "
         "VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -321,11 +337,46 @@ def create_post(
     author: str,
     body: dict,
     created_at: str | None = None,
+    post_id: str | None = None,
 ) -> dict:
     conn = connect()
     with _lock:
         try:
-            post = _create_post(conn, stream_id, type, title, author, body, created_at=created_at)
+            post = _create_post(conn, stream_id, type, title, author, body, created_at=created_at, post_id=post_id)
+            conn.commit()
+            return post
+        except Exception:
+            conn.rollback()
+            raise
+
+
+def create_post_for_stream(
+    slug: str,
+    type: str,
+    title: str,
+    author: str,
+    body: dict,
+    *,
+    auto_create: bool = False,
+    created_at: str | None = None,
+    post_id: str | None = None,
+) -> dict:
+    conn = connect()
+    with _lock:
+        try:
+            stream = _ensure_stream(conn, slug) if auto_create else _get_stream_by_slug(conn, slug)
+            if stream is None:
+                raise ValueError(f"stream not found: {slug}")
+            post = _create_post(
+                conn,
+                stream["id"],
+                type,
+                title,
+                author,
+                body,
+                created_at=created_at,
+                post_id=post_id,
+            )
             conn.commit()
             return post
         except Exception:
@@ -353,12 +404,22 @@ def get_post(post_id: str) -> dict | None:
         return _get_post_by_id(conn, post_id)
 
 
+def get_stream_post(slug: str, post_id: str) -> dict | None:
+    conn = connect()
+    with _lock:
+        row = conn.execute(
+            "SELECT posts.* FROM posts JOIN streams ON posts.stream_id = streams.id "
+            "WHERE streams.slug = ? AND posts.id = ?",
+            (slug, post_id),
+        ).fetchone()
+        return _post_from_row(row)
+
+
 def _stream_slug_for_project(project: str | None) -> str:
-    if not project:
+    if not project or not project.strip():
         return "inbox"
     slug = re.sub(r"[^a-z0-9]+", "-", project.strip().lower()).strip("-")
-    digest = hashlib.sha1(project.encode("utf-8")).hexdigest()[:16]
-    return f"proj-{slug or 'project'}-{digest}"
+    return f"proj-{slug or 'project'}"
 
 
 def create_request(
@@ -368,6 +429,8 @@ def create_request(
     kind: str,
     context_md: str | None,
     variants: list[dict],
+    before_media_path: str | None = None,
+    before_media_type: str | None = None,
 ) -> str:
     """variants: list of {media_path, media_type, caption, meta} in display order (1-based idx)."""
     conn = connect()
@@ -376,9 +439,20 @@ def create_request(
         try:
             stream = _ensure_stream(conn, _stream_slug_for_project(project))
             conn.execute(
-                "INSERT INTO requests (id, title, project, kind, status, context_md, created_at, stream_id) "
-                "VALUES (?, ?, ?, ?, 'open', ?, ?, ?)",
-                (req_id, title, project, kind, context_md, created_at, stream["id"]),
+                "INSERT INTO requests "
+                "(id, title, project, kind, status, context_md, created_at, stream_id, before_media_path, before_media_type) "
+                "VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?)",
+                (
+                    req_id,
+                    title,
+                    project,
+                    kind,
+                    context_md,
+                    created_at,
+                    stream["id"],
+                    before_media_path,
+                    before_media_type,
+                ),
             )
             for i, v in enumerate(variants, start=1):
                 conn.execute(

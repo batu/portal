@@ -4,6 +4,7 @@ import json
 import mimetypes
 import uuid
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -44,8 +45,8 @@ def post_json(base_url: str, token: str, path: str, obj: dict) -> dict:
     return _request("POST", base_url + path, headers, json.dumps(obj).encode("utf-8"))
 
 
-def post_multipart(base_url: str, token: str, path: str, fields: dict, files: list[Path]) -> dict:
-    """fields: simple string form fields. files: ordered list of file paths uploaded as 'files'."""
+def post_multipart(base_url: str, token: str, path: str, fields: dict, files: list) -> dict:
+    """fields: simple string form fields. files: Path entries, or (field_name, Path) entries."""
     boundary = uuid.uuid4().hex
     parts = []
 
@@ -57,11 +58,17 @@ def post_multipart(base_url: str, token: str, path: str, fields: dict, files: li
         parts.append(str(value).encode("utf-8"))
         parts.append(b"\r\n")
 
-    for file_path in files:
+    for item in files:
+        if isinstance(item, tuple):
+            field_name, file_path = item
+            file_path = Path(file_path)
+        else:
+            field_name = "files"
+            file_path = Path(item)
         content_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
         parts.append(f"--{boundary}\r\n".encode())
         parts.append(
-            f'Content-Disposition: form-data; name="files"; filename="{file_path.name}"\r\n'.encode()
+            f'Content-Disposition: form-data; name="{field_name}"; filename="{file_path.name}"\r\n'.encode()
         )
         parts.append(f"Content-Type: {content_type}\r\n\r\n".encode())
         parts.append(file_path.read_bytes())
@@ -73,3 +80,43 @@ def post_multipart(base_url: str, token: str, path: str, fields: dict, files: li
     headers = _auth_headers(token)
     headers["Content-Type"] = f"multipart/form-data; boundary={boundary}"
     return _request("POST", base_url + path, headers, body)
+
+
+def create_stream(base_url: str, token: str, slug: str, kind: str, title: str) -> dict:
+    return post_json(base_url, token, "/api/streams", {"slug": slug, "kind": kind, "title": title})
+
+
+def close_stream(base_url: str, token: str, slug: str) -> dict:
+    slug = urllib.parse.quote(slug, safe="")
+    return post_json(base_url, token, f"/api/streams/{slug}/close", {})
+
+
+def get_stream(base_url: str, token: str, slug: str) -> dict:
+    slug = urllib.parse.quote(slug, safe="")
+    return get_json(base_url, token, f"/api/streams/{slug}")
+
+
+def create_stream_post(
+    base_url: str,
+    token: str,
+    slug: str,
+    type: str,
+    title: str,
+    author: str,
+    body: dict | None = None,
+    files: list[Path] | None = None,
+) -> dict:
+    slug = urllib.parse.quote(slug, safe="")
+    fields = {
+        "type": type,
+        "title": title,
+        "author": author,
+        "body": json.dumps(body) if body is not None else None,
+    }
+    return post_multipart(base_url, token, f"/api/streams/{slug}/posts", fields, files or [])
+
+
+def get_stream_post(base_url: str, token: str, slug: str, post_id: str) -> dict:
+    slug = urllib.parse.quote(slug, safe="")
+    post_id = urllib.parse.quote(post_id, safe="")
+    return get_json(base_url, token, f"/api/streams/{slug}/posts/{post_id}")

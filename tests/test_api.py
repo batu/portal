@@ -122,6 +122,40 @@ def test_invalid_kind_rejected(client, token):
     assert resp.status_code == 400
 
 
+def test_request_before_upload_is_stored_outside_variants(client, token):
+    create = client.post(
+        "/api/requests",
+        headers=auth_headers(token),
+        data={"title": "Before after", "kind": "before-after"},
+        files=[
+            ("before", ("nested/before.png", tiny_png_bytes(), "image/png")),
+            ("files", ("after-a.png", tiny_png_bytes(), "image/png")),
+            ("files", ("after-b.png", tiny_png_bytes(), "image/png")),
+        ],
+    )
+    assert create.status_code == 200
+    req_id = create.json()["id"]
+
+    detail = client.get(f"/api/requests/{req_id}", headers=auth_headers(token))
+    assert detail.status_code == 200
+    request_body = detail.json()
+    assert request_body["before_media_path"] == "__before.png"
+    assert request_body["before_media_type"] == "image"
+    assert [v["idx"] for v in request_body["variants"]] == [1, 2]
+
+    before_resp = client.get(f"/media/{req_id}/__before.png?token={token}")
+    assert before_resp.status_code == 200
+    assert before_resp.content == tiny_png_bytes()
+
+    verdict = client.post(
+        f"/api/requests/{req_id}/verdict",
+        headers=auth_headers(token),
+        json={"selected": [1], "comment": "after a"},
+    )
+    assert verdict.status_code == 200
+    assert verdict.json()["selected"] == [1]
+
+
 def test_web_index_requires_token(client, token):
     resp = client.get("/", follow_redirects=False)
     assert resp.status_code == 401

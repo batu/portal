@@ -383,7 +383,7 @@ def test_create_request_dual_writes_to_project_and_inbox_streams(data_dir):
     )
 
     stream_slug = db._stream_slug_for_project("fabrika/find_the_dog")
-    assert stream_slug.startswith("proj-fabrika-find-the-dog-")
+    assert stream_slug == "proj-fabrika-find-the-dog"
     stream = db.get_stream(stream_slug)
     request = db.get_request(req_id)
     posts = db.list_posts(stream["id"])
@@ -407,19 +407,30 @@ def test_create_request_dual_writes_to_project_and_inbox_streams(data_dir):
     assert db.get_request(req_id)["verdict"]["comment"] == "yes"
 
 
-def test_project_stream_slugs_are_collision_resistant(data_dir):
+def test_project_stream_slugs_are_http_visible_normalized_contract(data_dir):
     db.create_request("req_slash", "Slash", "a/b", "pick-one", None, [_variant()])
-    db.create_request("req_space", "Space", "a b", "pick-one", None, [_variant()])
 
     slash = db.get_stream(db._stream_slug_for_project("a/b"))
-    space = db.get_stream(db._stream_slug_for_project("a b"))
-    assert slash["slug"].startswith("proj-a-b-")
-    assert space["slug"].startswith("proj-a-b-")
-    assert len(slash["slug"].rsplit("-", 1)[1]) == 16
-    assert len(space["slug"].rsplit("-", 1)[1]) == 16
-    assert slash["id"] != space["id"]
+    assert slash["slug"] == "proj-a-b"
     assert db.get_request("req_slash")["stream_id"] == slash["id"]
-    assert db.get_request("req_space")["stream_id"] == space["id"]
+
+
+def test_create_request_persists_before_metadata_without_variant(data_dir):
+    db.create_request(
+        "req_before",
+        "Before",
+        None,
+        "before-after",
+        None,
+        [_variant()],
+        before_media_path="__before.png",
+        before_media_type="image",
+    )
+
+    request = db.get_request("req_before")
+    assert request["before_media_path"] == "__before.png"
+    assert request["before_media_type"] == "image"
+    assert db.variant_indices("req_before") == {1}
 
 
 def test_create_request_rejects_closed_legacy_stream(data_dir):
