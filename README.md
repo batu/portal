@@ -179,3 +179,4 @@ uv run pytest
 
 Tests use `GALLERY_DATA_DIR` pointed at a pytest tmp dir and FastAPI's
 `TestClient`, so they never touch `~/.gallery`.
+Pipeline learnings: [docs/solutions/](docs/solutions/); draft backlog: [todos/cards/](todos/cards/).
