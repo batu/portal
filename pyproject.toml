@@ -16,6 +16,7 @@ dependencies = [
 ]
 
 [project.scripts]
+portal = "gallery.cli:main"
 gallery = "gallery.cli:main"
 
 [project.optional-dependencies]
