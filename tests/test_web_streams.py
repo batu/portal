@@ -99,9 +99,8 @@ def test_stream_page_renders_report_and_decision_posts_newest_first(client, toke
     assert "Report pass" in page.text
     assert f'href="{media_url}"' in page.text
     assert f'src="{media_url}"' in page.text
-    assert "sandbox" in page.text
+    assert 'sandbox="allow-same-origin"' in page.text
     assert "allow-scripts" not in page.text
-    assert "allow-same-origin" not in page.text
     assert f'href="/r/{req_id}"' in page.text
     assert '<span class="status-badge pending">pending</span>' in page.text
     assert "token=" not in page.text

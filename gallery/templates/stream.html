@@ -39,7 +39,8 @@
         <div class="report-actions">
           <a class="media-link" href="{{ post.report.url }}" target="_blank" rel="noopener noreferrer">{{ post.report.label }}</a>
         </div>
-        <iframe class="report-frame" src="{{ post.report.url }}" sandbox loading="lazy" referrerpolicy="no-referrer" title="{{ post.title }}"></iframe>
+        {# allow-same-origin lets /media receive the gallery_token cookie; scripts stay disabled. #}
+        <iframe class="report-frame" src="{{ post.report.url }}" sandbox="allow-same-origin" loading="lazy" referrerpolicy="no-referrer" title="{{ post.title }}"></iframe>
         {% else %}
         <p class="empty">Report media unavailable.</p>
         {% endif %}
