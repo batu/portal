@@ -58,7 +58,7 @@ Result: no matches. `rg` exits 1 when no matches are found.
 ## Reviewer Assessments
 | Reviewer | Status | Result |
 |---|---|---|
-| N/A | N/A | No separate reviewer was needed; this card is a docs/test/evidence release proof with no product-code changes. |
+| ce-code-review | passed after fixes | Review-stage findings were addressed in the allowed test/evidence scope: browser verdict route coverage, case-insensitive `Content-Disposition` assertions, deterministic evidence IDs, isolated temp data dir, raw-token fail-fast checks, and disabled Telegram side effects in the generator. |
 
 ## Gaps
 - None.
@@ -110,7 +110,13 @@ None.
       "url": null
     }
   ],
-  "reviewers": [],
+  "reviewers": [
+    {
+      "name": "ce-code-review",
+      "status": "passed_after_fixes",
+      "result": "Review findings were fixed in tests/test_e2e_portal.py and docs/evidence/2026-07-08-portal-phase1/**."
+    }
+  ],
   "gaps": [],
   "next_action": null,
   "pr_updated": false

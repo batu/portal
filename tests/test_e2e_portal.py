@@ -13,13 +13,17 @@ def tiny_png_bytes() -> bytes:
     )
 
 
+def content_disposition_type(response) -> str:
+    return response.headers.get("content-disposition", "").split(";", 1)[0].strip().lower()
+
+
 def assert_report_html_inline(response):
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/html")
     assert response.headers["x-content-type-options"] == "nosniff"
     assert response.headers["content-security-policy"] == "sandbox allow-same-origin"
     assert "allow-scripts" not in response.headers["content-security-policy"]
-    assert "attachment" not in response.headers.get("content-disposition", "")
+    assert content_disposition_type(response) != "attachment"
 
 
 def assert_html_attachment(response):
@@ -27,7 +31,7 @@ def assert_html_attachment(response):
     assert response.headers["content-type"].startswith("text/html")
     assert response.headers["x-content-type-options"] == "nosniff"
     assert "content-security-policy" not in response.headers
-    assert "attachment" in response.headers["content-disposition"]
+    assert content_disposition_type(response) == "attachment"
 
 
 def test_portal_phase1_report_decision_verdict_and_archive_flow(client, token):
@@ -166,8 +170,7 @@ def test_portal_phase1_report_decision_verdict_and_archive_flow(client, token):
     assert_html_attachment(decision_media)
 
     verdict = client.post(
-        f"/api/requests/{req_id}/verdict",
-        headers=auth_headers(token),
+        f"/r/{req_id}/decide",
         json={"selected": [1], "comment": "Use the first after state."},
     )
     assert verdict.status_code == 200
@@ -191,8 +194,7 @@ def test_portal_phase1_report_decision_verdict_and_archive_flow(client, token):
     assert "Archived stream. This request is read-only." in archived_request_page.text
 
     rejected_revision = client.post(
-        f"/api/requests/{req_id}/verdict",
-        headers=auth_headers(token),
+        f"/r/{req_id}/decide",
         json={"selected": [2], "comment": "late change"},
     )
     assert rejected_revision.status_code == 409
