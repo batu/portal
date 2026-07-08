@@ -1,0 +1,7 @@
+usage: portal stream close [-h] slug
+
+positional arguments:
+  slug
+
+options:
+  -h, --help  show this help message and exit

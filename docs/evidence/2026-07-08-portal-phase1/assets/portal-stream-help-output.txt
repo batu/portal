@@ -1,0 +1,9 @@
+usage: portal stream [-h] {new,close} ...
+
+positional arguments:
+  {new,close}
+    new        Create a Portal stream
+    close      Close a Portal stream
+
+options:
+  -h, --help   show this help message and exit

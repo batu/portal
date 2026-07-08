@@ -1,0 +1,9 @@
+usage: portal stream new [-h] [--kind {session,pinned}] [--title TITLE] slug
+
+positional arguments:
+  slug
+
+options:
+  -h, --help            show this help message and exit
+  --kind {session,pinned}
+  --title TITLE

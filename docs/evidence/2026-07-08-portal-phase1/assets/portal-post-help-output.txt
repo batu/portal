@@ -1,0 +1,19 @@
+usage: portal post [-h] --title TITLE
+                   --kind {pick-one,pick-many,rank,approve,comment,before-after}
+                   [--project PROJECT] [--stream STREAM] [--before BEFORE]
+                   [--context CONTEXT] [--manifest MANIFEST]
+                   files [files ...]
+
+positional arguments:
+  files                 File paths or globs, in display order
+
+options:
+  -h, --help            show this help message and exit
+  --title TITLE
+  --kind {pick-one,pick-many,rank,approve,comment,before-after}
+  --project PROJECT
+  --stream STREAM       Also attach this decision request to a Portal stream
+  --before BEFORE       Optional before image for before/after decisions
+  --context CONTEXT     Optional markdown context blurb
+  --manifest MANIFEST   Path to a JSON file mapping filename -> {caption,
+                        meta}

@@ -1,0 +1,9 @@
+usage: portal wait [-h] [--timeout TIMEOUT] [--interval INTERVAL] id
+
+positional arguments:
+  id
+
+options:
+  -h, --help           show this help message and exit
+  --timeout TIMEOUT
+  --interval INTERVAL

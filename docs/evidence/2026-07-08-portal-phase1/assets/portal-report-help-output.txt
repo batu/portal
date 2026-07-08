@@ -1,0 +1,10 @@
+usage: portal report [-h] --stream STREAM --title TITLE file_html [assets ...]
+
+positional arguments:
+  file_html
+  assets
+
+options:
+  -h, --help       show this help message and exit
+  --stream STREAM
+  --title TITLE

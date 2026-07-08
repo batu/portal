@@ -1,0 +1,5 @@
+status: 200
+content-type: text/html; charset=utf-8
+x-content-type-options: nosniff
+content-security-policy: sandbox allow-same-origin
+content-disposition: <absent>

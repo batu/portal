@@ -1,0 +1,6 @@
+stream_slug: proj-portal-phase1-e2e
+report_post_id: p_b3c975
+request_id: req_e68a92
+decision_post_id: p_67ab34
+post_close_verdict_revision_status: 409
+post_close_verdict_revision_detail: stream is closed: s_c18954

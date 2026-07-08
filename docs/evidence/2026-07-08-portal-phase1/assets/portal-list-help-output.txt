@@ -1,0 +1,7 @@
+usage: portal list [-h] [--open] [--project PROJECT] [--json]
+
+options:
+  -h, --help         show this help message and exit
+  --open             Only open requests
+  --project PROJECT
+  --json

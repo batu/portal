@@ -1,0 +1,18 @@
+usage: portal [-h] {init,post,stream,report,wait,status,list,serve} ...
+
+Portal review hub for agent outputs and decisions
+
+positional arguments:
+  {init,post,stream,report,wait,status,list,serve}
+    init                Create ~/.gallery/ and generate a bearer token
+    post                Post a new decision request
+    stream              Create or close Portal streams
+    report              Post an HTML report to a Portal stream
+    wait                Block until a request is decided, then print the
+                        verdict
+    status              Print a request's current state
+    list                List requests
+    serve               Run the server in the foreground (used by launchd)
+
+options:
+  -h, --help            show this help message and exit
