@@ -81,7 +81,7 @@ def test_help_aliases_list_portal_verbs(monkeypatch, capsys, binary):
     assert exc.value.code == 0
     out = capsys.readouterr().out
     assert "usage: portal" in out
-    for verb in ["init", "post", "wait", "status", "list", "serve", "stream", "report", "ask", "pull"]:
+    for verb in ["init", "post", "wait", "status", "list", "serve", "stream", "report", "ask", "pull", "trello-watch"]:
         assert verb in out
 
 

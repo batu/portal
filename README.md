@@ -139,10 +139,52 @@ same bearer-token config as the older Gallery request flow. Stream post uploads
 over the 200 MB soft cap return a warning but are not rejected solely for size.
 
 Phase 1 includes streams, report posts, stream pages, legacy decision requests
-in project streams, and before/after review. Phase 2/3 items such as `ask`,
-`pull`, stream note boxes, coworker/Trello integration, and public/per-stream
-auth are planned in `docs/portal-spec.md`; they are not shipped CLI commands
-yet.
+in project streams, and before/after review. Phase 2 added `ask`, `pull`, and
+stream note boxes. Public/per-stream auth remains planned in
+`docs/portal-spec.md`.
+
+### Trello watcher for twf cards
+
+`portal trello-watch` is a foreground polling loop for coworker-created Trello
+cards. It reads the target twf repo's `agents/config.json` `trello` block,
+watches a trigger list, runs one `twf run-card <shortid> --worktree` stage per
+tracked card per poll pass, and mirrors pickup, handoff, failure, and stop
+states into a per-card Portal stream named `trello-<shortid>`.
+
+Required inputs:
+
+- `--repo <path>` points at the twf project to run cards in.
+- `TRELLO_API_KEY` and `TRELLO_TOKEN` must be in the watcher environment.
+- `GALLERY_URL` / `GALLERY_TOKEN`, or `~/.gallery/config.json`, provide the
+  Portal endpoint and bearer token.
+
+```bash
+portal trello-watch --repo /Users/base/dev/appletolye/fabrikav2 \
+  --list todo --interval 60 --max-stage aesthetics_reviewed
+```
+
+`--list` accepts a configured list name/key or a raw Trello list id and defaults
+to the repo board's `todo` list. `--max-stage` defaults to
+`aesthetics_reviewed`; the watcher stops there, on `blocked_on_batu`, or after
+an errored run. It never merges, lands, or advances past `--max-stage`.
+
+For a single test poll:
+
+```bash
+portal trello-watch --repo /Users/base/dev/appletolye/fabrikav2 --once
+```
+
+To leave it running outside an interactive terminal:
+
+```bash
+mkdir -p "${GALLERY_DATA_DIR:-$HOME/.gallery}/logs"
+nohup portal trello-watch --repo /Users/base/dev/appletolye/fabrikav2 \
+  --interval 60 >"${GALLERY_DATA_DIR:-$HOME/.gallery}/logs/trello-watch.log" 2>&1 &
+```
+
+Watcher state lives under `${GALLERY_DATA_DIR:-~/.gallery}/trello-watch/`.
+Errored cards are skipped until a human inspects or clears that context's state
+file.
 
 ## Phone URL
 

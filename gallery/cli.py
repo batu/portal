@@ -9,7 +9,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import client, config
+from . import client, config, trello_watch
 
 STREAM_SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?$")
 STREAM_SLUG_MAX_LENGTH = 128
@@ -297,6 +297,24 @@ def cmd_pull(args):
         _exit_client_error(exc)
 
 
+def cmd_trello_watch(args):
+    try:
+        watcher = trello_watch.build_watcher(
+            Path(args.repo),
+            trigger_list=args.trigger_list,
+            max_stage=args.max_stage,
+        )
+        while True:
+            summary = watcher.poll_once()
+            print(json.dumps(summary), flush=True)
+            if args.once:
+                return
+            time.sleep(args.interval)
+    except (trello_watch.WatchError, client.GalleryClientError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+
 def cmd_status(args):
     base_url, token = config.client_config()
     try:
@@ -428,6 +446,18 @@ def main():
     p.add_argument("--timeout", type=_non_negative_int, default=0)
     p.add_argument("--interval", type=_positive_int, default=15)
 
+    p = sub.add_parser("trello-watch", help="Poll Trello cards and run one twf stage per pass")
+    p.add_argument("--repo", required=True, help="twf project repo whose agents/config.json supplies Trello lists")
+    p.add_argument(
+        "--list",
+        dest="trigger_list",
+        default=None,
+        help="Trigger Trello list id or configured list name (default: todo)",
+    )
+    p.add_argument("--interval", type=_positive_int, default=trello_watch.DEFAULT_INTERVAL_SECONDS)
+    p.add_argument("--once", action="store_true", help="Run one poll pass and exit")
+    p.add_argument("--max-stage", default=trello_watch.DEFAULT_MAX_STAGE, help="Last configured stage the watcher may reach")
+
     p = sub.add_parser("status", help="Print a request's current state")
     p.add_argument("id")
 
@@ -451,6 +481,7 @@ def main():
         "wait": cmd_wait,
         "ask": cmd_ask,
         "pull": cmd_pull,
+        "trello-watch": cmd_trello_watch,
         "status": cmd_status,
         "list": cmd_list,
         "serve": cmd_serve,
