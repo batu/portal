@@ -1,3 +1,11 @@
+---
+title: "Chromium Launch May Be Worker Sandbox Blocked"
+date: "2026-07-08"
+module: "evidence"
+problem_type: "browser-proof-sandbox"
+tags: ["browser-proof", "chromium", "sandbox", "evidence"]
+---
+
 # Chromium Launch May Be Worker Sandbox Blocked
 
 ## Problem

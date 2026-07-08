@@ -2,6 +2,7 @@
 
 Source: `twf` lesson `825e8279` from card `jAQ8bS6C`; Trello card `Nj29W8GT`
 planned-stage handoff.
+Status: Unscheduled draft; not on Trello; requires human conductor scheduling before implementation.
 
 ## Problem
 

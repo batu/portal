@@ -3,6 +3,7 @@
 Source: Trello structured handoff `Surprises` and low `Plan-friction` rows on
 cards `8OEiwp9u`, `3Dlkoks2`, `A9oMiXGV`, `jAQ8bS6C`, `zKUB2Tnl`,
 `TmbwBUm2`, `tHvZgqWB`, `oaxqoVgF`, and `Nj29W8GT`.
+Status: Unscheduled draft; not on Trello; requires human conductor scheduling before implementation.
 
 ## Problem
 

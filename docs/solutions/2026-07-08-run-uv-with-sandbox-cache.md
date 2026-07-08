@@ -1,3 +1,11 @@
+---
+title: "Run Uv With Sandbox Cache"
+date: "2026-07-08"
+module: "workflow"
+problem_type: "sandbox-cache"
+tags: ["uv", "sandbox", "verification", "workflow"]
+---
+
 # Run Uv With Sandbox Cache
 
 ## Problem

@@ -2,6 +2,7 @@
 
 Source: `docs/portal-spec.md` Review log; Trello cards `GNGHjZ9y`,
 `oaxqoVgF`, and `tHvZgqWB`.
+Status: Unscheduled draft; not on Trello; requires human conductor scheduling before implementation.
 
 ## Problem
 

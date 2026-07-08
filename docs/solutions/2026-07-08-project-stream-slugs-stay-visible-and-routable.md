@@ -1,3 +1,11 @@
+---
+title: "Project Stream Slugs Stay Visible And Routable"
+date: "2026-07-08"
+module: "portal"
+problem_type: "stream-routing"
+tags: ["streams", "legacy-compatibility", "slugs", "portal"]
+---
+
 # Project Stream Slugs Stay Visible And Routable
 
 ## Problem

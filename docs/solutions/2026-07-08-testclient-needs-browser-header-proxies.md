@@ -1,3 +1,11 @@
+---
+title: "TestClient Needs Browser Header Proxies"
+date: "2026-07-08"
+module: "testing"
+problem_type: "browser-parity"
+tags: ["testclient", "browser-proof", "headers", "testing"]
+---
+
 # TestClient Needs Browser Header Proxies
 
 ## Problem

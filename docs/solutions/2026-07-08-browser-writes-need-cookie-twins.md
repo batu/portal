@@ -1,3 +1,11 @@
+---
+title: "Browser Writes Need Cookie Twins"
+date: "2026-07-08"
+module: "portal"
+problem_type: "browser-auth"
+tags: ["browser-auth", "cookies", "token-hygiene", "portal"]
+---
+
 # Browser Writes Need Cookie Twins
 
 ## Problem

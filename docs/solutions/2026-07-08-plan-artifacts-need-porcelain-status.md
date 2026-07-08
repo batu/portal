@@ -1,3 +1,11 @@
+---
+title: "Plan Artifacts Need Porcelain Status"
+date: "2026-07-08"
+module: "workflow"
+problem_type: "pipeline-artifact"
+tags: ["twf", "git-status", "plans", "workflow"]
+---
+
 # Plan Artifacts Need Porcelain Status
 
 ## Problem

@@ -1,3 +1,11 @@
+---
+title: "Iframe Report Rendering Needs Both Cookie Sandbox And Inline Media"
+date: "2026-07-08"
+module: "portal"
+problem_type: "browser-rendering"
+tags: ["iframe", "media", "cookie-auth", "browser-proof", "portal"]
+---
+
 # Iframe Report Rendering Needs Both Cookie Sandbox And Inline Media
 
 ## Problem

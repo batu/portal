@@ -1,6 +1,7 @@
 # fix: make explicit stream decisions stream-owned
 
 Source: `docs/portal-spec.md` Review log; Trello card `GNGHjZ9y`.
+Status: Unscheduled draft; not on Trello; requires human conductor scheduling before implementation.
 
 ## Problem
 

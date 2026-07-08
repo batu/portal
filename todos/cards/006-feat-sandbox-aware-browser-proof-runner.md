@@ -2,6 +2,7 @@
 
 Source: `docs/evidence/2026-07-08-stream-web-pages/assets/playwright-launch-attempt.txt`;
 Trello cards `A9oMiXGV`, `jAQ8bS6C`, and `oaxqoVgF`.
+Status: Unscheduled draft; not on Trello; requires human conductor scheduling before implementation.
 
 ## Problem
 

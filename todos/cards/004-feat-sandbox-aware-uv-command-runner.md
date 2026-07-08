@@ -3,6 +3,7 @@
 Source: `twf` lesson `3b565316` from card `8OEiwp9u`; Trello structured
 handoff `Surprises` and `Plan-friction` rows on cards `8OEiwp9u` and
 `tHvZgqWB`.
+Status: Unscheduled draft; not on Trello; requires human conductor scheduling before implementation.
 
 ## Problem
 
