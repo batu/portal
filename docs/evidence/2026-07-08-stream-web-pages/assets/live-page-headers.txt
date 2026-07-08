@@ -1,0 +1,7 @@
+HTTP/1.1 200 OK
+date: Wed, 08 Jul 2026 11:49:29 GMT
+server: uvicorn
+content-length: 1570
+content-type: text/html; charset=utf-8
+referrer-policy: no-referrer
+set-cookie: gallery_token=<redacted-temp-token>; HttpOnly; Max-Age=31536000; Path=/; SameSite=lax

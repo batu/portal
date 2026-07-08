@@ -1,0 +1,10 @@
+HTTP/1.1 200 OK
+date: Wed, 08 Jul 2026 11:49:29 GMT
+server: uvicorn
+x-content-type-options: nosniff
+content-security-policy: sandbox allow-same-origin
+content-type: text/html; charset=utf-8
+accept-ranges: bytes
+content-length: 416
+last-modified: Wed, 08 Jul 2026 11:48:18 GMT
+etag: "8f83959f5e5aa89d4fe667e91ca16068"
