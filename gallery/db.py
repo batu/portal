@@ -83,6 +83,24 @@ def _add_column_if_missing(conn: sqlite3.Connection, table: str, column: str, dd
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
 
 
+def _validate_v1_schema(conn: sqlite3.Connection) -> None:
+    required = {
+        "requests": {"stream_id", "before_media_path", "before_media_type"},
+        "streams": {"id", "slug", "kind", "title", "created_at", "closed_at"},
+        "posts": {"id", "stream_id", "type", "title", "author", "body_json", "created_at"},
+    }
+    for table, columns in required.items():
+        missing = columns - _column_names(conn, table)
+        if missing:
+            missing_list = ", ".join(sorted(missing))
+            raise RuntimeError(f"schema v1 missing {table} columns: {missing_list}")
+
+
+def _validate_schema_version(conn: sqlite3.Connection, version: int) -> None:
+    if version >= 1:
+        _validate_v1_schema(conn)
+
+
 def _migrate_v1(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
@@ -130,12 +148,15 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
         try:
             conn.execute("BEGIN")
             migration(conn)
+            _validate_schema_version(conn, version)
             conn.execute(f"PRAGMA user_version = {version}")
             conn.commit()
         except Exception:
             conn.rollback()
             raise
         current = version
+    if MIGRATIONS:
+        _validate_schema_version(conn, MIGRATIONS[-1][0])
 
 
 def connect() -> sqlite3.Connection:
@@ -336,7 +357,7 @@ def _stream_slug_for_project(project: str | None) -> str:
     if not project:
         return "inbox"
     slug = re.sub(r"[^a-z0-9]+", "-", project.strip().lower()).strip("-")
-    digest = hashlib.sha1(project.encode("utf-8")).hexdigest()[:8]
+    digest = hashlib.sha1(project.encode("utf-8")).hexdigest()[:16]
     return f"proj-{slug or 'project'}-{digest}"
 
 
@@ -407,12 +428,20 @@ def list_requests(status: str | None = None, project: str | None = None, q: str 
             sql += " WHERE " + " AND ".join(clauses)
         sql += " ORDER BY created_at DESC"
         rows = conn.execute(sql, params).fetchall()
+        variant_counts = {}
+        request_ids = [r["id"] for r in rows]
+        if request_ids:
+            placeholders = ", ".join("?" for _ in request_ids)
+            count_rows = conn.execute(
+                "SELECT request_id, COUNT(*) AS variant_count FROM variants "
+                f"WHERE request_id IN ({placeholders}) GROUP BY request_id",
+                request_ids,
+            ).fetchall()
+            variant_counts = {r["request_id"]: r["variant_count"] for r in count_rows}
         out = []
         for r in rows:
             d = dict(r)
-            d["variant_count"] = conn.execute(
-                "SELECT COUNT(*) FROM variants WHERE request_id = ?", (d["id"],)
-            ).fetchone()[0]
+            d["variant_count"] = variant_counts.get(d["id"], 0)
             out.append(d)
         return out
 
@@ -470,6 +499,9 @@ def record_verdict(req_id: str, selected: list[int], ratings: dict | None, comme
     """Insert a new verdict revision and mark the request decided. Latest verdict wins."""
     conn = connect()
     with _lock:
+        request = conn.execute("SELECT stream_id FROM requests WHERE id = ?", (req_id,)).fetchone()
+        if request is not None and request["stream_id"] is not None:
+            _require_open_stream(conn, request["stream_id"])
         conn.execute(
             "INSERT INTO verdicts (request_id, selected_indices, ratings_json, comment, created_at) "
             "VALUES (?, ?, ?, ?, ?)",

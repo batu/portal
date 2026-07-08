@@ -64,6 +64,34 @@ def _user_version(conn):
     return conn.execute("PRAGMA user_version").fetchone()[0]
 
 
+def _rows(conn, sql):
+    return [dict(row) for row in conn.execute(sql).fetchall()]
+
+
+def _legacy_snapshot(path):
+    conn = _raw_conn(path)
+    try:
+        return {
+            "requests": _rows(
+                conn,
+                "SELECT id, title, project, kind, status, context_md, created_at, decided_at "
+                "FROM requests ORDER BY id",
+            ),
+            "variants": _rows(
+                conn,
+                "SELECT request_id, idx, media_path, media_type, caption, meta_json "
+                "FROM variants ORDER BY request_id, idx",
+            ),
+            "verdicts": _rows(
+                conn,
+                "SELECT id, request_id, selected_indices, ratings_json, comment, created_at "
+                "FROM verdicts ORDER BY id",
+            ),
+        }
+    finally:
+        conn.close()
+
+
 def _create_legacy_db(path):
     conn = _raw_conn(path)
     conn.executescript(OLD_SCHEMA)
@@ -121,6 +149,7 @@ def test_fresh_db_has_portal_schema_v1(data_dir):
 def test_legacy_db_upgrade_preserves_existing_rows(data_dir):
     path = config.db_path()
     _create_legacy_db(path)
+    legacy_rows = _legacy_snapshot(path)
 
     conn = db.connect()
 
@@ -128,6 +157,21 @@ def test_legacy_db_upgrade_preserves_existing_rows(data_dir):
     assert {"streams", "posts"} <= _table_names(conn)
     assert {"stream_id", "before_media_path", "before_media_type"} <= _column_names(conn, "requests")
     assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+    assert _rows(
+        conn,
+        "SELECT id, title, project, kind, status, context_md, created_at, decided_at "
+        "FROM requests ORDER BY id",
+    ) == legacy_rows["requests"]
+    assert _rows(
+        conn,
+        "SELECT request_id, idx, media_path, media_type, caption, meta_json "
+        "FROM variants ORDER BY request_id, idx",
+    ) == legacy_rows["variants"]
+    assert _rows(
+        conn,
+        "SELECT id, request_id, selected_indices, ratings_json, comment, created_at "
+        "FROM verdicts ORDER BY id",
+    ) == legacy_rows["verdicts"]
 
     request = db.get_request("req_old")
     assert request["title"] == "Old request"
@@ -180,6 +224,41 @@ def test_partial_v1_db_completes_migration(data_dir):
     assert {"stream_id", "before_media_path", "before_media_type"} <= _column_names(conn, "requests")
     assert "posts" in _table_names(conn)
     assert db.get_request("req_old")["verdict"]["comment"] == "latest"
+
+
+def test_migration_rejects_malformed_existing_portal_tables(data_dir):
+    path = config.db_path()
+    _create_legacy_db(path)
+    conn = _raw_conn(path)
+    conn.execute(
+        "CREATE TABLE posts ("
+        "id TEXT PRIMARY KEY, stream_id TEXT NOT NULL REFERENCES streams(id), "
+        "type TEXT NOT NULL, title TEXT NOT NULL, author TEXT NOT NULL, created_at TEXT NOT NULL)"
+    )
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(RuntimeError, match="schema v1 missing posts columns: body_json"):
+        db.connect()
+
+    assert db._conn is None
+    raw = _raw_conn(path)
+    assert _user_version(raw) == 0
+    raw.close()
+
+
+def test_user_version_one_requires_v1_schema_shape(data_dir):
+    path = config.db_path()
+    _create_legacy_db(path)
+    conn = _raw_conn(path)
+    conn.execute("PRAGMA user_version = 1")
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(RuntimeError, match="schema v1 missing"):
+        db.connect()
+
+    assert db._conn is None
 
 
 def test_failed_migration_rolls_back_and_connect_can_retry(data_dir, monkeypatch):
@@ -336,6 +415,8 @@ def test_project_stream_slugs_are_collision_resistant(data_dir):
     space = db.get_stream(db._stream_slug_for_project("a b"))
     assert slash["slug"].startswith("proj-a-b-")
     assert space["slug"].startswith("proj-a-b-")
+    assert len(slash["slug"].rsplit("-", 1)[1]) == 16
+    assert len(space["slug"].rsplit("-", 1)[1]) == 16
     assert slash["id"] != space["id"]
     assert db.get_request("req_slash")["stream_id"] == slash["id"]
     assert db.get_request("req_space")["stream_id"] == space["id"]
@@ -353,8 +434,24 @@ def test_create_request_rejects_closed_legacy_stream(data_dir):
     assert db.list_posts(stream["id"])[0]["body"] == {"request_id": "req_first"}
 
 
+def test_record_verdict_rejects_closed_request_stream(data_dir):
+    db.create_request("req_closed_verdict", "Closed verdict", "closed/verdict", "pick-one", None, [_variant()])
+    stream = db.get_stream(db._stream_slug_for_project("closed/verdict"))
+    db.close_stream(stream["slug"])
+
+    with pytest.raises(ValueError, match="stream is closed"):
+        db.record_verdict("req_closed_verdict", [1], None, "too late")
+
+    request = db.get_request("req_closed_verdict")
+    assert request["status"] == "open"
+    assert request["verdict"] is None
+
+
 def test_create_request_rolls_back_dual_write_failure(data_dir, monkeypatch):
+    original_create_post = db._create_post
+
     def fail_create_post(*_args, **_kwargs):
+        original_create_post(*_args, **_kwargs)
         raise RuntimeError("post failure")
 
     monkeypatch.setattr(db, "_create_post", fail_create_post)
