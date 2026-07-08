@@ -1,1 +1,39 @@
-{}
+{
+  "trello": {
+    "board_id": "6a462890dbe30131615c88d6",
+    "board_name": "scratch-1",
+    "lists": {
+      "ideas": "6a4628a4ffc72a6482c40747",
+      "todo": "6a4628a46ae7b3c95d749336",
+      "brainstormed": "6a4628a505b536b9c5b3e788",
+      "planned": "6a4628a5b448147bedc0b7fa",
+      "worked": "6a4628a67b801c7e66fa891a",
+      "aesthetics_reviewed": "6a4628a6c5cc62ee004a65f1",
+      "tested_insitu": "6a4628a69c86ce0253321e68",
+      "reviewed": "6a4628a7350bf19222debf3c",
+      "evidence_captured": "6a4628a7f9d8ce4f6eed8fe4",
+      "video_sent": "6a4628a85f8ec402ffa1c7ba",
+      "compounded": "6a4628a838a5a5127a3ff259",
+      "merged": "6a4628a9b6dc06c72bb9f663",
+      "blocked_on_batu": "6a4628a921a32926588d0d90",
+      "archive": "6a4628aacbef3bc9f6316998",
+      "pre_release_check_list": "6a4628aae311289aed847e81"
+    }
+  },
+  "twf_agents": {
+    "default": "claude/opus",
+    "stages": {
+      "reviewed": "claude/fable"
+    }
+  },
+  "twf_gate": {
+    "cmds": [
+      "uv run pytest -q"
+    ]
+  },
+  "project_gate": {
+    "cmds": [
+      "uv run pytest -q"
+    ]
+  }
+}
