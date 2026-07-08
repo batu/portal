@@ -170,13 +170,15 @@ On success `ask` exits `0` with reply JSON. Client/API errors exit `1` with
 stderr only. Timeout exits `2` with `{"timeout": true}`. Argparse usage errors
 also exit `2` with no branch JSON.
 
-`portal pull` reads the oldest unconsumed `to_agent` steering note and consumes
-it before printing. Human notes are submitted from the stream page's note box
+`portal pull` reads the oldest unconsumed `to_agent` message and consumes it
+before printing. Human notes are submitted from the stream page's note box
 through `POST /s/<slug>/note`; delivery is intended for agent turn boundaries,
-not mid-turn interruption. On success `pull` exits `0` with note JSON.
-Client/API errors exit `1`; an empty queue exits `3` with `{"empty": true}`.
-Argparse usage errors exit `2`. `pull` and browser note/answer routes require
-an existing stream; they do not auto-create one.
+not mid-turn interruption. `ask` answers and human notes share this same
+`to_agent` queue, so agents should avoid running `pull` against a stream while
+an `ask` is waiting unless that queue sharing is intentional. On success `pull`
+exits `0` with message JSON. Client/API errors exit `1`; an empty queue exits
+`3` with `{"empty": true}`. Argparse usage errors exit `2`. `pull` and browser
+note/answer routes require an existing stream; they do not auto-create one.
 
 ### Trello watcher for twf cards
 
@@ -224,7 +226,9 @@ nohup portal trello-watch --repo /Users/base/dev/appletolye/fabrikav2 \
 
 Watcher state lives under `${GALLERY_DATA_DIR:-~/.gallery}/trello-watch/`.
 Errored cards are skipped until a human inspects or clears that context's state
-file.
+file. Run only one watcher process per repo/list context; the state file is
+written atomically but is not a cross-process lock, so concurrent watchers can
+race the same card.
 
 ## Phone URL
 

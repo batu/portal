@@ -78,18 +78,20 @@ def test_portal_inbox_cli_browser_twins_rendering_and_closed_streams(client, tok
     answer_text = "Assume the cookie twin path is correct."
     note_text = "Please review the queued steering note next turn."
     rendered_pages = {}
+    reply_polls = 0
     answer_posted = False
+    sleep_calls = []
 
-    def answer_before_reply_poll(method, path):
-        nonlocal answer_posted
-        if answer_posted:
-            return
+    def capture_unanswered_before_reply_poll(method, path):
+        nonlocal reply_polls
         if method != "GET" or not path.startswith(f"/api/streams/{slug}/messages?"):
             return
         parsed_query = urllib.parse.parse_qs(urllib.parse.urlsplit(path).query)
         if parsed_query.get("direction") != ["to_agent"] or parsed_query.get("unconsumed") != ["1"]:
             return
-        answer_posted = True
+        reply_polls += 1
+        if reply_polls != 1:
+            return
         stream = db.get_stream(slug)
         assert stream is not None
         questions = db.list_messages(stream["id"], direction="to_human")
@@ -106,6 +108,18 @@ def test_portal_inbox_cli_browser_twins_rendering_and_closed_streams(client, tok
         assert "data-stream-note-form" in unanswered.text
         assert "token=" not in unanswered.text
         assert token not in unanswered.text
+
+    def answer_during_client_retry(deadline, interval):
+        nonlocal answer_posted
+        sleep_calls.append((deadline, interval))
+        assert reply_polls == 1
+        assert not answer_posted
+        answer_posted = True
+        stream = db.get_stream(slug)
+        assert stream is not None
+        questions = db.list_messages(stream["id"], direction="to_human")
+        assert [message["text"] for message in questions] == [question_text]
+        question = questions[0]
 
         answer = client.post(
             f"/s/{slug}/answer",
@@ -125,9 +139,11 @@ def test_portal_inbox_cli_browser_twins_rendering_and_closed_streams(client, tok
         assert f'value="{question["id"]}"' not in answered_queued.text
         assert "token=" not in answered_queued.text
         assert token not in answered_queued.text
+        return True
 
-    install_testclient_adapter(monkeypatch, client, before_request=answer_before_reply_poll)
+    install_testclient_adapter(monkeypatch, client, before_request=capture_unanswered_before_reply_poll)
     monkeypatch.setattr(cli.config, "client_config", lambda: ("http://portal.test", token))
+    monkeypatch.setattr(cli, "_sleep_if_time_remains", answer_during_client_retry)
     monkeypatch.setattr(db, "now_iso", IsoClock())
     notifications = []
     monkeypatch.setattr(
@@ -148,6 +164,9 @@ def test_portal_inbox_cli_browser_twins_rendering_and_closed_streams(client, tok
     assert ask_output["elapsed_s"] >= 0
     assert ask_output["elapsed_s"] < 1
     assert notifications == [(slug, question_text)]
+    assert len(sleep_calls) == 1
+    assert sleep_calls[0][1] == 1
+    assert reply_polls == 2
 
     after_ask = client.get(f"/s/{slug}")
     assert after_ask.status_code == 200

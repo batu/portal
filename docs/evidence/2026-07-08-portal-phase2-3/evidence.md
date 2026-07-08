@@ -64,10 +64,13 @@ Result: `assets/token-scan-output.txt` contains `no matches`. This scan rejects 
 ## Reviewer Assessments
 | Reviewer | Status | Result |
 |---|---|---|
-| Not run | n/a | This card used direct E2E/full-suite evidence; no separate reviewer agent was required. |
+| Reviewed-stage agents | passed after fixes | Correctness, testing, project-standards, security, CLI-readiness clean; maintainability, reliability, and API-contract findings were fixed in the reviewed stage. |
 
 ## Gaps
-- None.
+- `portal ask` and `portal pull` intentionally share the unconsumed `to_agent`
+  queue in the shipped protocol. This proof sequences the ask answer before the
+  separate steering note, and README documents the concurrency caveat.
+  Correlation-aware replies remain follow-up work.
 
 ## Next Action
 None.
@@ -123,8 +126,15 @@ None.
       "url": null
     }
   ],
-  "reviewers": [],
-  "gaps": [],
+  "reviewers": [
+    {
+      "status": "passed after fixes",
+      "result": "Reviewed-stage agents found no unresolved findings after README, E2E, evidence, and generator fixes."
+    }
+  ],
+  "gaps": [
+    "portal ask and portal pull share the shipped unconsumed to_agent queue; this proof sequences ask answer consumption before separate steering-note consumption and documents the caveat in README."
+  ],
   "next_action": null,
   "pr_updated": false
 }

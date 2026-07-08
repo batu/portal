@@ -185,9 +185,6 @@ class FakePortal:
 
 
 def generate_stream_and_header_assets(client: TestClient, token: str, id_map: dict[str, str], id_counters: dict[str, int]) -> None:
-    from gallery import server
-
-    server._notify_to_human_message = lambda *_args, **_kwargs: None
     slug = "phase23-inbox-evidence"
     question_text = "Which rollout should I assume?"
     answer_text = "Assume the cookie twin path is correct."
@@ -445,7 +442,17 @@ def main() -> None:
     ASSETS.mkdir(parents=True, exist_ok=True)
     id_map: dict[str, str] = {}
     id_counters: dict[str, int] = {}
-    old_data_dir = os.environ.get("GALLERY_DATA_DIR")
+    env_names = [
+        "GALLERY_DATA_DIR",
+        "GALLERY_TELEGRAM_BOT_TOKEN",
+        "GALLERY_TELEGRAM_CHAT_ID",
+    ]
+    old_env = {name: os.environ.get(name) for name in env_names}
+    old_env_present = {name: name in os.environ for name in env_names}
+    old_now_iso = db.now_iso
+    from gallery import server
+
+    old_notify_to_human_message = server._notify_to_human_message
     os.environ.pop("GALLERY_TELEGRAM_BOT_TOKEN", None)
     os.environ.pop("GALLERY_TELEGRAM_CHAT_ID", None)
     try:
@@ -453,6 +460,7 @@ def main() -> None:
             os.environ["GALLERY_DATA_DIR"] = data_dir
             db.reset_connection()
             db.now_iso = IsoClock()
+            server._notify_to_human_message = lambda *_args, **_kwargs: None
             cfg = config.init_config(force=True)
             token = cfg["token"]
 
@@ -467,11 +475,14 @@ def main() -> None:
                     content = path.read_text(encoding="utf-8", errors="ignore")
                     assert token not in content, path
     finally:
+        server._notify_to_human_message = old_notify_to_human_message
+        db.now_iso = old_now_iso
         db.reset_connection()
-        if old_data_dir is None:
-            os.environ.pop("GALLERY_DATA_DIR", None)
-        else:
-            os.environ["GALLERY_DATA_DIR"] = old_data_dir
+        for name in env_names:
+            if old_env_present[name]:
+                os.environ[name] = old_env[name] or ""
+            else:
+                os.environ.pop(name, None)
 
     print(f"wrote portal phase-2/3 evidence assets to {ASSETS}")
 
