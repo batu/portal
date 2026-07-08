@@ -308,6 +308,8 @@ def cmd_trello_watch(args):
             summary = watcher.poll_once()
             print(json.dumps(summary), flush=True)
             if args.once:
+                if _trello_watch_retryable_summary(summary):
+                    sys.exit(75)
                 return
             time.sleep(args.interval)
     except (trello_watch.WatchError, client.GalleryClientError) as exc:
@@ -322,6 +324,12 @@ def cmd_status(args):
     except client.GalleryClientError as exc:
         _exit_client_error(exc)
     print(json.dumps(r, indent=2))
+
+
+def _trello_watch_retryable_summary(summary: dict) -> bool:
+    return bool(summary.get("transient_error")) or any(
+        isinstance(card, dict) and card.get("retryable") for card in summary.get("cards", [])
+    )
 
 
 def cmd_list(args):
@@ -377,6 +385,23 @@ Exit/stdout contract:
   success 0: {"text": "...", "message_id": "..."}
   client/API error 1: stderr only, no branch JSON
   empty 3: {"empty": true}
+  argparse usage error 2: stderr only, no branch JSON
+"""
+
+
+TRELLO_WATCH_EPILOG = """\
+foreground polling: each poll prints one JSON summary line. Use --once for a
+single machine-checkable pass.
+
+Summary shape:
+  {"picked_up": 0, "advanced": 0, "stopped": 0, "errored": 0, "skipped": 0,
+   "cards": [{"card_id": "...", "short_link": "...", "stream_slug": "...",
+              "status": "...", "action": "...", "reason": "..."}]}
+
+Exit/stdout contract:
+  success 0: one JSON summary line
+  retryable one-shot failure 75: JSON summary includes "transient_error"
+  client/config/API error 1: stderr only, no branch JSON
   argparse usage error 2: stderr only, no branch JSON
 """
 
@@ -446,7 +471,12 @@ def main():
     p.add_argument("--timeout", type=_non_negative_int, default=0)
     p.add_argument("--interval", type=_positive_int, default=15)
 
-    p = sub.add_parser("trello-watch", help="Poll Trello cards and run one twf stage per pass")
+    p = sub.add_parser(
+        "trello-watch",
+        help="Poll Trello cards and run one twf stage per pass",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=TRELLO_WATCH_EPILOG,
+    )
     p.add_argument("--repo", required=True, help="twf project repo whose agents/config.json supplies Trello lists")
     p.add_argument(
         "--list",

@@ -15,7 +15,7 @@ import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
 from . import client, config
 
@@ -237,6 +237,7 @@ class Watcher:
         runner: Callable[[Path, str, dict[str, str]], RunResult] | None = None,
         clock: Callable[[], float] | None = None,
         env: dict[str, str] | None = None,
+        redaction_secrets: Iterable[str] | None = None,
     ):
         self.config = watch_config
         self.trello = trello
@@ -245,6 +246,7 @@ class Watcher:
         self.runner = runner or run_twf_card
         self.clock = clock or time.time
         self.env = env or dict(os.environ)
+        self.redaction_secrets = tuple(secret for secret in redaction_secrets or () if secret)
 
     def poll_once(self) -> dict[str, Any]:
         state = self.state_store.load()
@@ -255,7 +257,14 @@ class Watcher:
             "trigger_list_id": self.config.trigger_list_id,
             "max_stage": self.config.max_stage,
         }
-        summary: dict[str, Any] = {"picked_up": 0, "advanced": 0, "stopped": 0, "errored": 0, "skipped": 0}
+        summary: dict[str, Any] = {
+            "picked_up": 0,
+            "advanced": 0,
+            "stopped": 0,
+            "errored": 0,
+            "skipped": 0,
+            "cards": [],
+        }
 
         try:
             trigger_cards = self.trello.list_cards(self.config.trigger_list_id)
@@ -276,6 +285,9 @@ class Watcher:
             action = card_state.pop("last_action", None)
             if action in {"advanced", "stopped", "errored", "skipped"}:
                 summary[action] += 1
+                if card_state.get("last_transient_error") and not summary.get("transient_error"):
+                    summary["transient_error"] = card_state["last_transient_error"]
+                summary["cards"].append(_summary_card(card_state, action))
         self.state_store.save(state)
         return summary
 
@@ -299,14 +311,18 @@ class Watcher:
             "last_seen_list_id": card.get("idList"),
         }
         self.state_store.save(state)
-        self._post_pickup(state["cards"][card_id])
-        state["cards"][card_id]["pickup_reported"] = True
+        if self._post_pickup(state["cards"][card_id]):
+            state["cards"][card_id]["pickup_reported"] = True
         self.state_store.save(state)
         return True
 
     def _process_card(self, state: dict[str, Any], card_state: dict[str, Any]) -> None:
+        card_state.pop("last_transient_error", None)
         if not card_state.get("pickup_reported"):
-            self._post_pickup(card_state)
+            if not self._post_pickup(card_state):
+                card_state["last_action"] = "skipped"
+                self.state_store.save(state)
+                return
             card_state["pickup_reported"] = True
             self.state_store.save(state)
 
@@ -319,14 +335,19 @@ class Watcher:
             )
             return
         if status == "errored":
+            self._ensure_failure_reported(state, card_state)
             self._ensure_human_notified(state, card_state, card_state.get("stop_message") or "Card is errored.")
             card_state["last_action"] = "skipped"
             return
         if status == "pending_report":
             self._finish_success_report(state, card_state)
-            card_state["last_action"] = "advanced"
+            if card_state.get("status") == "tracking":
+                card_state["last_action"] = "advanced"
+            else:
+                card_state["last_action"] = "skipped"
             return
         if status == "stopped":
+            self._ensure_human_notified(state, card_state, card_state.get("stop_message") or "Card is stopped.")
             card_state["last_action"] = "skipped"
             return
 
@@ -353,16 +374,31 @@ class Watcher:
 
         self._run_one_stage(state, card_state)
 
-    def _post_pickup(self, card_state: dict[str, Any]) -> None:
-        title = f"Picked up {card_state['title']}"
+    def _post_pickup(self, card_state: dict[str, Any]) -> bool:
+        safe_title = self._safe_text(card_state["title"])
+        card_ref = self._safe_text(card_state.get("card_url") or card_state["short_link"])
+        title = f"Picked up {safe_title}"
         text = "\n".join(
             [
-                f"Picked up {card_state['title']}.",
-                f"Trello card: {card_state.get('card_url') or card_state['short_link']}",
+                f"Picked up {safe_title}.",
+                f"Trello card: {card_ref}",
                 f"Watcher stream: {self.portal.stream_url(card_state['stream_slug'])}",
             ]
         )
-        self.portal.post_report(card_state["stream_slug"], title, text, kind="pickup", card_url=card_state.get("card_url"))
+        try:
+            self.portal.post_report(
+                card_state["stream_slug"],
+                title,
+                text,
+                kind="pickup",
+                card_url=self._safe_optional_text(card_state.get("card_url")),
+            )
+        except client.GalleryClientError as exc:
+            if _is_transient_portal_error(exc):
+                card_state["last_transient_error"] = str(exc)
+                return False
+            raise
+        return True
 
     def _stop_message(self, card_state: dict[str, Any], card: dict[str, Any]) -> str | None:
         if card.get("closed"):
@@ -391,7 +427,7 @@ class Watcher:
 
         env = build_runner_env(self.env)
         result = self.runner(self.config.repo, card_state["short_link"], env)
-        tail = sanitize_text(_tail(result.output), self.env)
+        tail = _tail(sanitize_text(result.output, self.env, self.redaction_secrets))
         finished_at = _iso_now(self.clock)
         card_state["last_run"] = {
             "started_at": started_at,
@@ -431,25 +467,40 @@ class Watcher:
             handoff = newest_handoff_comment(actions, since=run.get("started_at"))
             if handoff is None:
                 handoff = "No structured twf handoff comment was found after this run. Human review required."
-            handoff = sanitize_text(handoff, self.env)
-            title = f"twf handoff for {card_state['title']}"
-            self.portal.post_report(
-                card_state["stream_slug"],
-                title,
-                handoff,
-                kind="handoff",
-                card_url=card_state.get("card_url"),
-            )
+            handoff = sanitize_text(handoff, self.env, self.redaction_secrets)
+            title = f"twf handoff for {self._safe_text(card_state['title'])}"
+            try:
+                self.portal.post_report(
+                    card_state["stream_slug"],
+                    title,
+                    handoff,
+                    kind="handoff",
+                    card_url=self._safe_optional_text(card_state.get("card_url")),
+                )
+            except client.GalleryClientError as exc:
+                if _is_transient_portal_error(exc):
+                    card_state["last_transient_error"] = str(exc)
+                    self.state_store.save(state)
+                    return
+                raise
             run["handoff_text"] = handoff
             run["handoff_reported"] = True
             self.state_store.save(state)
 
         if not run.get("trello_commented"):
             stream_url = self.portal.stream_url(card_state["stream_slug"])
-            self.trello.add_comment(
-                card_state["card_id"],
-                f"Portal report: {stream_url}\nStatus: completed one twf stage for {card_state['short_link']}.",
-            )
+            try:
+                self.trello.add_comment(
+                    card_state["card_id"],
+                    f"Portal report: {stream_url}\nStatus: completed one twf stage for {card_state['short_link']}.",
+                )
+            except TrelloAPIError as exc:
+                if exc.transient:
+                    card_state["last_transient_error"] = str(exc)
+                    self.state_store.save(state)
+                    return
+                self._mark_error(state, card_state, f"Could not add Trello result comment: {exc}")
+                return
             run["trello_commented"] = True
             self.state_store.save(state)
 
@@ -459,29 +510,49 @@ class Watcher:
 
     def _mark_error(self, state: dict[str, Any], card_state: dict[str, Any], reason: str) -> None:
         run = card_state.get("last_run") or {}
-        tail = run.get("tail") or reason
-        message = f"{reason}\n\nOutput tail:\n{tail}"
         card_state["status"] = "errored"
+        card_state["error_reason"] = reason
         card_state["stop_message"] = f"Trello watcher needs human help for {card_state['short_link']}: {reason}"
         self.state_store.save(state)
+        self._ensure_failure_reported(state, card_state)
+        self._ensure_human_notified(state, card_state, card_state["stop_message"])
+        card_state["last_action"] = "errored"
+
+    def _ensure_failure_reported(self, state: dict[str, Any], card_state: dict[str, Any]) -> None:
+        run = card_state.get("last_run") or {}
         if not run.get("failure_reported"):
-            self.portal.post_report(
-                card_state["stream_slug"],
-                f"twf failed for {card_state['title']}",
-                message,
-                kind="failure",
-                card_url=card_state.get("card_url"),
-            )
+            reason = str(card_state.get("error_reason") or card_state.get("stop_message") or "Card is errored.")
+            tail = run.get("tail") or reason
+            message = f"{reason}\n\nOutput tail:\n{tail}"
+            try:
+                self.portal.post_report(
+                    card_state["stream_slug"],
+                    f"twf failed for {self._safe_text(card_state['title'])}",
+                    message,
+                    kind="failure",
+                    card_url=self._safe_optional_text(card_state.get("card_url")),
+                )
+            except client.GalleryClientError as exc:
+                if _is_transient_portal_error(exc):
+                    card_state["last_transient_error"] = str(exc)
+                    self.state_store.save(state)
+                    return
+                raise
             run["failure_reported"] = True
             card_state["last_run"] = run
             self.state_store.save(state)
-        self._ensure_human_notified(state, card_state, card_state["stop_message"])
-        card_state["last_action"] = "errored"
 
     def _ensure_human_notified(self, state: dict[str, Any], card_state: dict[str, Any], text: str) -> None:
         if card_state.get("human_notified"):
             return
-        self.portal.post_human_message(card_state["stream_slug"], text)
+        try:
+            self.portal.post_human_message(card_state["stream_slug"], text)
+        except client.GalleryClientError as exc:
+            if _is_transient_portal_error(exc):
+                card_state["last_transient_error"] = str(exc)
+                self.state_store.save(state)
+                return
+            raise
         card_state["human_notified"] = True
         self.state_store.save(state)
 
@@ -492,6 +563,14 @@ class Watcher:
                 f"Trello card {card.get('id') or '<unknown>'} belongs to board {board_id}, "
                 f"not configured board {self.config.board_id}"
             )
+
+    def _safe_text(self, value: Any) -> str:
+        return sanitize_text(str(value), self.env, self.redaction_secrets)
+
+    def _safe_optional_text(self, value: Any) -> str | None:
+        if not isinstance(value, str) or not value:
+            return None
+        return self._safe_text(value)
 
 
 def build_watcher(repo: Path, trigger_list: str | None = None, max_stage: str = DEFAULT_MAX_STAGE) -> Watcher:
@@ -506,21 +585,8 @@ def build_watcher(repo: Path, trigger_list: str | None = None, max_stage: str = 
         TrelloClient(env["TRELLO_API_KEY"], env["TRELLO_TOKEN"]),
         PortalReporter(base_url, token),
         env=env,
+        redaction_secrets=redaction_secrets(env, portal_token=token),
     )
-
-
-def run_loop(
-    watcher: Watcher,
-    *,
-    interval: int = DEFAULT_INTERVAL_SECONDS,
-    once: bool = False,
-    sleep: Callable[[float], None] = time.sleep,
-) -> None:
-    while True:
-        watcher.poll_once()
-        if once:
-            return
-        sleep(interval)
 
 
 def load_watch_config(repo: Path, *, trigger_list: str | None = None, max_stage: str = DEFAULT_MAX_STAGE) -> WatchConfig:
@@ -597,6 +663,23 @@ def build_runner_env(source: dict[str, str] | None = None) -> dict[str, str]:
     return env
 
 
+def redaction_secrets(source: dict[str, str] | None = None, *, portal_token: str | None = None) -> list[str]:
+    source = source or os.environ
+    values = []
+    for name in SECRET_ENV_NAMES:
+        if source.get(name):
+            values.append(source[name])
+    if portal_token:
+        values.append(portal_token)
+    try:
+        telegram_token, _chat_id = config.telegram_creds(config.load_config())
+    except (FileNotFoundError, json.JSONDecodeError, KeyError):
+        telegram_token = None
+    if telegram_token:
+        values.append(telegram_token)
+    return list(dict.fromkeys(values))
+
+
 def run_twf_card(repo: Path, short_link: str, env: dict[str, str]) -> RunResult:
     try:
         completed = subprocess.run(
@@ -615,6 +698,8 @@ def run_twf_card(repo: Path, short_link: str, env: dict[str, str]) -> RunResult:
         stderr = exc.stderr or ""
         output = f"{stdout}\n{stderr}\ntwf run-card timed out after {RUN_TIMEOUT_SECONDS}s"
         return RunResult(124, output, timed_out=True)
+    except OSError as exc:
+        return RunResult(127, f"twf run-card could not start: {exc}")
 
 
 def newest_handoff_comment(actions: list[dict[str, Any]], *, since: str | None = None) -> str | None:
@@ -634,21 +719,33 @@ def newest_handoff_comment(actions: list[dict[str, Any]], *, since: str | None =
     return candidates[0][1]
 
 
-def sanitize_text(text: str, secrets_source: dict[str, str] | None = None) -> str:
+SECRET_ENV_NAMES = {
+    "TRELLO_API_KEY",
+    "TRELLO_TOKEN",
+    "GALLERY_TOKEN",
+    "GALLERY_TELEGRAM_BOT_TOKEN",
+    "TELEGRAM_BOT_TOKEN",
+    "TELEGRAM_TOKEN",
+}
+
+
+def sanitize_text(
+    text: str,
+    secrets_source: dict[str, str] | None = None,
+    additional_secrets: Iterable[str] | None = None,
+) -> str:
     scrubbed = text
     secrets_source = secrets_source or os.environ
-    secret_names = {
-        "TRELLO_API_KEY",
-        "TRELLO_TOKEN",
-        "GALLERY_TOKEN",
-        "GALLERY_TELEGRAM_BOT_TOKEN",
-        "TELEGRAM_BOT_TOKEN",
-        "TELEGRAM_TOKEN",
-    }
-    for name in secret_names:
+    secret_values = []
+    for name in SECRET_ENV_NAMES:
         value = secrets_source.get(name)
         if value:
-            scrubbed = scrubbed.replace(value, "[redacted]")
+            secret_values.append(value)
+    for value in additional_secrets or ():
+        if value:
+            secret_values.append(value)
+    for value in sorted(dict.fromkeys(secret_values), key=len, reverse=True):
+        scrubbed = scrubbed.replace(value, "[redacted]")
     scrubbed = re.sub(r"(?i)(authorization:\s*bearer\s+)[^\s]+", r"\1[redacted]", scrubbed)
     scrubbed = re.sub(r"(?i)([?&](?:token|key)=)[^&#\s]+", r"\1[redacted]", scrubbed)
     return scrubbed
@@ -730,3 +827,24 @@ def _required_card_field(card: dict[str, Any], key: str) -> str:
 
 def _tail(text: str) -> str:
     return text[-OUTPUT_TAIL_CHARS:]
+
+
+def _is_transient_portal_error(exc: client.GalleryClientError) -> bool:
+    return exc.status == 0 or exc.status == 429 or exc.status >= 500
+
+
+def _summary_card(card_state: dict[str, Any], action: str) -> dict[str, Any]:
+    transient_reason = card_state.get("last_transient_error")
+    reason = transient_reason or card_state.get("stop_message") or card_state.get("error_reason")
+    item = {
+        "card_id": card_state.get("card_id"),
+        "short_link": card_state.get("short_link"),
+        "stream_slug": card_state.get("stream_slug"),
+        "status": card_state.get("status"),
+        "action": action,
+    }
+    if transient_reason:
+        item["retryable"] = True
+    if reason:
+        item["reason"] = reason
+    return item
