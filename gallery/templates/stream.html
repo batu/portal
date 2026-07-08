@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}{{ stream.title }} — Stream{% endblock %}
+{% block content %}
+<section class="stream-detail">
+  <div class="stream-header">
+    <h1>{{ stream.title }}</h1>
+    <div class="request-meta">
+      <span class="tag">/s/{{ stream.slug }}</span>
+      <span class="tag kind">{{ stream.kind }}</span>
+      <span class="age">created {{ stream.created_at|ago }}</span>
+      {% if stream.closed_at %}<span class="tag archived">Archived</span>{% endif %}
+    </div>
+  </div>
+
+  {% if stream.closed_at %}
+  <p class="archive-note">Archived stream. Posts and decisions are read-only.</p>
+  {% endif %}
+
+  {% if not posts %}
+  <p class="empty">No posts yet.</p>
+  {% endif %}
+
+  <ul class="post-list">
+    {% for post in posts %}
+    <li class="post-card post-{{ post.type }}">
+      <div class="post-header">
+        <div>
+          <div class="post-title">{{ post.title }}</div>
+          <div class="request-meta">
+            <span class="tag kind">{{ post.type }}</span>
+            {% if post.author %}<span class="tag">{{ post.author }}</span>{% endif %}
+            <span class="age">{{ post.created_at|ago }}</span>
+          </div>
+        </div>
+      </div>
+
+      {% if post.type == "report" %}
+        {% if post.report %}
+        <div class="report-actions">
+          <a class="media-link" href="{{ post.report.url }}" target="_blank" rel="noopener noreferrer">{{ post.report.label }}</a>
+        </div>
+        <iframe class="report-frame" src="{{ post.report.url }}" sandbox loading="lazy" referrerpolicy="no-referrer" title="{{ post.title }}"></iframe>
+        {% else %}
+        <p class="empty">Report media unavailable.</p>
+        {% endif %}
+      {% elif post.type == "decision" %}
+        {% if post.decision %}
+        <a class="decision-link" href="{{ post.decision.href }}">
+          <span>{{ post.decision.title }}</span>
+          <span class="status-badge {{ post.decision.status }}">{{ post.decision.status }}</span>
+        </a>
+        {% else %}
+        <p class="empty">Decision unavailable.</p>
+        {% endif %}
+      {% else %}
+      <p class="empty">Unsupported post type.</p>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endblock %}

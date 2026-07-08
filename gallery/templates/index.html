@@ -24,6 +24,29 @@
 </section>
 
 <section>
+  <h2>Streams ({{ streams|length }})</h2>
+  {% if not streams %}
+    <p class="empty">No streams yet.</p>
+  {% endif %}
+  <ul class="request-list stream-list">
+    {% for s in streams %}
+    <li>
+      <a class="request-card stream-card" href="/s/{{ s.slug }}">
+        <div class="request-title">{{ s.title }}</div>
+        <div class="request-meta">
+          <span class="tag">/s/{{ s.slug }}</span>
+          <span class="tag kind">{{ s.kind }}</span>
+          <span class="tag">{{ s.post_count }} post{{ 's' if s.post_count != 1 else '' }}</span>
+          <span class="age">latest {{ s.latest_activity|ago }}</span>
+          {% if s.archived %}<span class="tag archived">Archived</span>{% endif %}
+        </div>
+      </a>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+
+<section>
   <details {% if q %}open{% endif %}>
     <summary><h2 style="display:inline">Decided ({{ decided|length }})</h2></summary>
     <form method="get" class="search-form">

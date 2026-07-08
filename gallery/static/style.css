@@ -93,6 +93,100 @@ h2 { font-size: 1.05rem; }
 
 .tag.kind { color: var(--accent); }
 
+.tag.archived {
+  color: #ffd580;
+}
+
+.stream-header {
+  margin-bottom: 12px;
+}
+
+.archive-note {
+  margin: 12px 0 16px;
+  color: var(--muted);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+.post-list {
+  list-style: none;
+  margin: 0 0 24px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.post-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px;
+}
+
+.post-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.post-title {
+  color: var(--fg);
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.report-actions {
+  margin: 12px 0 10px;
+}
+
+.media-link {
+  font-weight: 600;
+}
+
+.report-frame {
+  display: block;
+  width: 100%;
+  min-height: 320px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.decision-link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--fg);
+  background: #151820;
+}
+
+.status-badge {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  padding: 3px 9px;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.status-badge.pending {
+  background: #2f2818;
+  color: #ffd580;
+}
+
+.status-badge.decided {
+  background: #16301e;
+  color: #71d083;
+}
+
 .search-form {
   display: flex;
   gap: 8px;
@@ -254,6 +348,10 @@ h2 { font-size: 1.05rem; }
     --border: #e3e6ea;
   }
   .tag { background: #eef0f3; }
+  .tag.archived { color: #8a5a00; }
   .verdict-banner { background: #eafaf0; border-color: #bfe8cd; }
   .variant-number { background: #eef0f3; }
+  .decision-link { background: #f7f8fa; }
+  .status-badge.pending { background: #fff3cf; color: #7a4c00; }
+  .status-badge.decided { background: #eafaf0; color: #1f7a3a; }
 }
