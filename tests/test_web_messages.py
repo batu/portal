@@ -26,6 +26,13 @@ def test_note_twin_creates_to_agent_message_visible_via_api(client, token):
     assert listed.status_code == 200
     assert [item["text"] for item in listed.json()] == ["Steer here"]
 
+    unconsumed = client.get(
+        "/api/streams/alpha/messages?direction=to_agent&unconsumed=1",
+        headers=auth_headers(token),
+    )
+    assert unconsumed.status_code == 200
+    assert [item["text"] for item in unconsumed.json()] == ["Steer here"]
+
 
 def test_answer_twin_creates_to_agent_message_and_consumes_question_once(client, token):
     stream = db.create_stream("alpha", "session", "Alpha stream")
@@ -54,6 +61,13 @@ def test_answer_twin_creates_to_agent_message_and_consumes_question_once(client,
 
     listed = client.get("/api/streams/alpha/messages?direction=to_agent", headers=auth_headers(token))
     assert [item["text"] for item in listed.json()] == ["Use option B"]
+
+    unconsumed = client.get(
+        "/api/streams/alpha/messages?direction=to_agent&unconsumed=1",
+        headers=auth_headers(token),
+    )
+    assert unconsumed.status_code == 200
+    assert [item["text"] for item in unconsumed.json()] == ["Use option B"]
 
 
 def test_web_message_twins_require_web_auth(client):
@@ -169,6 +183,8 @@ def test_stream_page_renders_questions_and_message_states_newest_first(client, t
 
     assert page.status_code == 200
     assert "data-stream-note-form" in page.text
+    assert 'method="post" action="/s/alpha/note"' in page.text
+    assert 'method="post" action="/s/alpha/answer"' in page.text
     assert "Agent asks" in page.text
     assert page.text.index("Newer question?") < page.text.index("Older question?")
     assert f'value="{newer["id"]}"' in page.text
@@ -196,3 +212,18 @@ def test_stream_page_escapes_message_text_and_does_not_leak_token(client, token)
     assert "&lt;script&gt;" in page.text
     assert "&lt;b&gt;raw&lt;/b&gt;" in page.text
     assert "token=" not in page.text
+
+
+def test_static_stream_message_js_posts_without_query_token_and_handles_status(client):
+    script = client.get("/static/app.js")
+
+    assert script.status_code == 200
+    assert 'return "/s/" + encodeURIComponent(slug) + "/" + action;' in script.text
+    assert 'return "/s/" + encodeURIComponent(slug) + "/" + action + window.location.search;' not in script.text
+    assert 'credentials: "same-origin"' in script.text
+    assert '"Content-Type": "application/json"' in script.text
+    assert "data-stream-note-form" in script.text
+    assert "data-answer-form" in script.text
+    assert "data-form-status" in script.text
+    assert "window.location.reload()" in script.text
+    assert "button.disabled = false" in script.text

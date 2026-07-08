@@ -20,7 +20,7 @@
     <h2 id="stream-messages-title">Messages</h2>
 
     {% if not stream.closed_at %}
-    <form class="message-form note-form" data-stream-note-form>
+    <form class="message-form note-form" method="post" action="/s/{{ stream.slug }}/note" data-stream-note-form>
       <label for="stream-note">Note to agent</label>
       <textarea id="stream-note" name="text" class="comment-box" rows="3" autocomplete="off"></textarea>
       <button class="btn message-send" type="submit">Send</button>
@@ -41,7 +41,7 @@
             </div>
             <p class="message-text">{{ message.text }}</p>
             {% if not stream.closed_at %}
-            <form class="message-form answer-form" data-answer-form>
+            <form class="message-form answer-form" method="post" action="/s/{{ stream.slug }}/answer" data-answer-form>
               <input type="hidden" name="question_id" value="{{ message.id }}">
               <label for="answer-{{ message.id }}">Answer</label>
               <textarea id="answer-{{ message.id }}" name="text" class="comment-box" rows="2" autocomplete="off"></textarea>

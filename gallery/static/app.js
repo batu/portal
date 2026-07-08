@@ -235,7 +235,7 @@
   if (!slug) return;
 
   function endpoint(action) {
-    return "/s/" + encodeURIComponent(slug) + "/" + action + window.location.search;
+    return "/s/" + encodeURIComponent(slug) + "/" + action;
   }
 
   function statusFor(form) {
