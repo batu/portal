@@ -1,4 +1,20 @@
 {
+  "twf_agents": {
+    "default": "claude/opus",
+    "stages": {
+      "reviewed": "claude/fable"
+    }
+  },
+  "twf_gate": {
+    "cmds": [
+      "uv run pytest -q"
+    ]
+  },
+  "project_gate": {
+    "cmds": [
+      "uv run pytest -q"
+    ]
+  },
   "trello": {
     "board_id": "6a462890dbe30131615c88d6",
     "board_name": "scratch-1",
@@ -19,21 +35,5 @@
       "archive": "6a4628aacbef3bc9f6316998",
       "pre_release_check_list": "6a4628aae311289aed847e81"
     }
-  },
-  "twf_agents": {
-    "default": "claude/opus",
-    "stages": {
-      "reviewed": "claude/fable"
-    }
-  },
-  "twf_gate": {
-    "cmds": [
-      "uv run pytest -q"
-    ]
-  },
-  "project_gate": {
-    "cmds": [
-      "uv run pytest -q"
-    ]
   }
 }
