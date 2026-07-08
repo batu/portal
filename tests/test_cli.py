@@ -26,6 +26,21 @@ def test_legacy_stream_slug_matches_db_bounded_project_slug():
 
     assert slug == db._stream_slug_for_project(project)
     assert len(slug) <= db.STREAM_SLUG_MAX_LENGTH
+    assert cli.STREAM_SLUG_RE.fullmatch(slug)
+
+
+def test_legacy_stream_slug_hashes_overlong_project_tail():
+    common_prefix = "ab/" * 80
+    first = cli._legacy_stream_slug(f"{common_prefix}first")
+    second = cli._legacy_stream_slug(f"{common_prefix}second")
+
+    assert first == db._stream_slug_for_project(f"{common_prefix}first")
+    assert second == db._stream_slug_for_project(f"{common_prefix}second")
+    assert first != second
+    assert len(first) <= db.STREAM_SLUG_MAX_LENGTH
+    assert len(second) <= db.STREAM_SLUG_MAX_LENGTH
+    assert cli.STREAM_SLUG_RE.fullmatch(first)
+    assert cli.STREAM_SLUG_RE.fullmatch(second)
 
 
 def test_client_network_error_becomes_gallery_client_error(monkeypatch):
@@ -39,6 +54,14 @@ def test_client_network_error_becomes_gallery_client_error(monkeypatch):
 
     assert exc.value.status == 0
     assert "server down" in exc.value.message
+
+
+def test_client_malformed_url_becomes_gallery_client_error():
+    with pytest.raises(cli.client.GalleryClientError) as exc:
+        cli.client.get_json("http://[::1", "tok", "/api/health")
+
+    assert exc.value.status == 0
+    assert "invalid URL" in exc.value.message
 
 
 def test_no_command_prints_help_and_exits(monkeypatch, capsys):

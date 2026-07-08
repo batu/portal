@@ -2,6 +2,7 @@
 
 import argparse
 import glob
+import hashlib
 import json
 import re
 import sys
@@ -71,7 +72,12 @@ def _legacy_stream_slug(project: str | None) -> str:
         return "inbox"
     slug = re.sub(r"[^a-z0-9]+", "-", project.strip().lower()).strip("-")
     max_project_slug_length = STREAM_SLUG_MAX_LENGTH - len(PROJECT_STREAM_PREFIX)
-    slug = (slug or "project")[:max_project_slug_length].strip("-") or "project"
+    slug = slug or "project"
+    if len(slug) > max_project_slug_length:
+        digest = hashlib.sha256(slug.encode("utf-8")).hexdigest()[:8]
+        suffix = f"-{digest}"
+        stem = slug[: max_project_slug_length - len(suffix)].strip("-") or "project"
+        slug = f"{stem}{suffix}"
     return f"{PROJECT_STREAM_PREFIX}{slug}"
 
 

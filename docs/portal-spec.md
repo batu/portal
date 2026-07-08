@@ -111,7 +111,12 @@ a function that may `ALTER TABLE`. Version 1 adds to `requests`:
 existing `POST /api/requests` / `gallery post` path:
 
 - If `project` is set: the request lands in stream `proj-<project-slug>`
-  (kind `session`), lazily created on first use.
+  (kind `session`), lazily created on first use. `project-slug` is the
+  lowercased project with non-`[a-z0-9]` runs replaced by `-`, edge hyphens
+  stripped, and `project` used if normalization is empty. The full route slug
+  remains capped at 128 characters including the five-character `proj-` prefix;
+  overlong normalized project slugs keep the leading stem plus `-` and the
+  first 8 hex characters of `sha256(project-slug)`.
 - If `project` is `None`: it lands in the lazily-created stream `inbox`.
 - `create_request` writes the `requests`/`variants` rows **and** a `posts`
   row (type `decision`, `body_json` pointing at the request id) in the same
@@ -316,8 +321,9 @@ front of the same service — no schema change anticipated.
   auto-creates missing session streams, while read/pull and browser twin routes
   require an existing stream.
 - 2026-07-08 integration review: fixed legacy project-derived stream slugs so
-  long project names remain within the route slug contract and are routable via
-  `/s/<slug>` and `/api/streams/{slug}`.
+  long project names remain within the route slug contract, keep a
+  deterministic hash suffix when truncated, and are routable via `/s/<slug>`
+  and `/api/streams/{slug}`.
 - 2026-07-08 integration review: fixed notification/config failure paths so
   legacy decision request creation does not fail after persistence when the
   doorbell thread cannot start or config would otherwise be reloaded for the

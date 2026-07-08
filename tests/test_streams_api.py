@@ -164,6 +164,40 @@ def test_legacy_project_stream_slug_is_bounded_and_routable(client, token):
     assert stream.json()["posts"][0]["body"] == {"request_id": create.json()["id"]}
 
 
+def test_overlong_legacy_project_stream_slugs_do_not_collide_after_close(client, token):
+    common_prefix = "ab/" * 80
+    first_project = f"{common_prefix}first"
+    second_project = f"{common_prefix}second"
+    first_slug = db._stream_slug_for_project(first_project)
+    second_slug = db._stream_slug_for_project(second_project)
+
+    assert first_slug != second_slug
+
+    first = client.post(
+        "/api/requests",
+        headers=auth_headers(token),
+        data={"title": "First long project", "project": first_project, "kind": "pick-one"},
+        files=_request_uploads(1),
+    )
+    assert first.status_code == 200
+    assert client.post(f"/api/streams/{first_slug}/close", headers=auth_headers(token)).status_code == 200
+
+    second = client.post(
+        "/api/requests",
+        headers=auth_headers(token),
+        data={"title": "Second long project", "project": second_project, "kind": "pick-one"},
+        files=_request_uploads(1),
+    )
+    assert second.status_code == 200
+
+    first_stream = client.get(f"/api/streams/{first_slug}", headers=auth_headers(token))
+    second_stream = client.get(f"/api/streams/{second_slug}", headers=auth_headers(token))
+    assert first_stream.status_code == 200
+    assert second_stream.status_code == 200
+    assert first_stream.json()["posts"][0]["body"] == {"request_id": first.json()["id"]}
+    assert second_stream.json()["posts"][0]["body"] == {"request_id": second.json()["id"]}
+
+
 def test_stream_decision_post_references_existing_request_and_is_stream_scoped(client, token):
     request_create = client.post(
         "/api/requests",

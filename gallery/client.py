@@ -22,7 +22,10 @@ def _auth_headers(token: str) -> dict:
 
 
 def _request(method: str, url: str, headers: dict, data: bytes | None = None) -> dict | list:
-    req = urllib.request.Request(url, data=data, headers=headers, method=method)
+    try:
+        req = urllib.request.Request(url, data=data, headers=headers, method=method)
+    except ValueError as exc:
+        raise GalleryClientError(0, f"invalid URL {url!r}: {exc}") from exc
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             body = resp.read()
