@@ -107,8 +107,9 @@ def test_stream_page_renders_report_and_decision_posts_newest_first(client, toke
 
     media = client.get(media_url)
     assert media.status_code == 200
+    assert media.headers["x-content-type-options"] == "nosniff"
     assert media.content == b"<html><body>Report pass</body></html>"
-    assert "attachment" in media.headers["content-disposition"]
+    assert "attachment" not in media.headers.get("content-disposition", "")
 
     decide = client.post(f"/api/requests/{req_id}/verdict", headers=auth_headers(token), json={"selected": [1]})
     assert decide.status_code == 200
@@ -135,6 +136,116 @@ def test_stream_report_prefers_html_file_for_iframe(client, token):
     assert 'href="/media/p_multi_file/report.html"' in page.text
     assert 'src="/media/p_multi_file/report.html"' in page.text
     assert "/media/p_multi_file/notes.txt" not in page.text
+
+
+def test_report_html_media_is_inline_but_html_variant_stays_attachment(client, token):
+    db.create_stream("inline-report", "session", "Inline report stream")
+    report = _add_report_post(
+        "inline-report",
+        "p_inline_report",
+        "Inline report",
+        "2026-07-08T09:00:00+00:00",
+    )
+    variant = client.post(
+        "/api/requests",
+        headers=auth_headers(token),
+        data={"title": "HTML variant", "kind": "pick-one"},
+        files=[("files", ("variant.html", b"<html><body>variant</body></html>", "text/html"))],
+    )
+    assert variant.status_code == 200
+    req_id = variant.json()["id"]
+    request_body = db.get_request(req_id)
+    variant_path = request_body["variants"][0]["media_path"]
+
+    report_media = client.get(f"/media/{report['id']}/report.html?token={token}")
+    variant_media = client.get(f"/media/{req_id}/{variant_path}?token={token}")
+
+    assert report_media.status_code == 200
+    assert report_media.headers["content-type"].startswith("text/html")
+    assert report_media.headers["x-content-type-options"] == "nosniff"
+    assert report_media.headers["content-security-policy"] == "sandbox allow-same-origin"
+    assert "allow-scripts" not in report_media.headers["content-security-policy"]
+    assert "attachment" not in report_media.headers.get("content-disposition", "")
+    assert variant_media.status_code == 200
+    assert variant_media.headers["content-type"].startswith("text/html")
+    assert variant_media.headers["x-content-type-options"] == "nosniff"
+    assert "content-security-policy" not in variant_media.headers
+    assert "attachment" in variant_media.headers["content-disposition"]
+
+
+def test_report_html_media_uses_stored_type_and_csp_sandbox(client, token):
+    db.create_stream("stored-html", "session", "Stored HTML stream")
+    _add_report_post_files(
+        "stored-html",
+        "p_stored_html",
+        "Stored type report",
+        "2026-07-08T09:00:00+00:00",
+        [
+            ("report.bin", "text/html", b"<html><body><script>alert(1)</script></body></html>"),
+            ("extension.html", "text/plain", b"<html><body>extension</body></html>"),
+            ("html-image.png", "text/html; charset=utf-8", b"<html><body>image name</body></html>"),
+        ],
+    )
+
+    stored_type = client.get(f"/media/p_stored_html/report.bin?token={token}")
+    html_extension = client.get(f"/media/p_stored_html/extension.html?token={token}")
+    image_extension = client.get(f"/media/p_stored_html/html-image.png?token={token}")
+    cookie_seed = client.get(f"/s/stored-html?token={token}")
+    cookie_only = client.get("/media/p_stored_html/report.bin")
+
+    assert cookie_seed.status_code == 200
+    assert stored_type.status_code == 200
+    assert stored_type.headers["content-type"].startswith("text/html")
+    assert stored_type.headers["x-content-type-options"] == "nosniff"
+    assert stored_type.headers["content-security-policy"] == "sandbox allow-same-origin"
+    assert "allow-scripts" not in stored_type.headers["content-security-policy"]
+    assert "attachment" not in stored_type.headers.get("content-disposition", "")
+    assert html_extension.status_code == 200
+    assert html_extension.headers["content-type"].startswith("text/html")
+    assert html_extension.headers["content-security-policy"] == "sandbox allow-same-origin"
+    assert "attachment" not in html_extension.headers.get("content-disposition", "")
+    assert image_extension.status_code == 200
+    assert image_extension.headers["content-type"].startswith("text/html")
+    assert image_extension.headers["content-security-policy"] == "sandbox allow-same-origin"
+    assert "attachment" not in image_extension.headers.get("content-disposition", "")
+    assert cookie_only.status_code == 200
+    assert cookie_only.headers["content-security-policy"] == "sandbox allow-same-origin"
+    assert "attachment" not in cookie_only.headers.get("content-disposition", "")
+
+
+def test_non_report_post_html_media_stays_attachment(client, token):
+    db.create_stream("decision-files", "session", "Decision files stream")
+    req_id = _create_request(client, token)
+    media_dir = config.media_dir() / "p_decision_file"
+    media_dir.mkdir(parents=True)
+    media_body = b"<html><body>decision file</body></html>"
+    (media_dir / "decision.html").write_bytes(media_body)
+    db.create_post_for_stream(
+        "decision-files",
+        "decision",
+        "Decision with file",
+        "codex",
+        {
+            "request_id": req_id,
+            "files": [
+                {
+                    "media_path": "decision.html",
+                    "media_type": "text/html",
+                    "size": len(media_body),
+                    "original_name": "decision.html",
+                }
+            ],
+        },
+        created_at="2026-07-08T09:00:00+00:00",
+        post_id="p_decision_file",
+    )
+
+    media = client.get(f"/media/p_decision_file/decision.html?token={token}")
+
+    assert media.status_code == 200
+    assert media.headers["x-content-type-options"] == "nosniff"
+    assert "content-security-policy" not in media.headers
+    assert "attachment" in media.headers["content-disposition"]
 
 
 def test_stream_page_handles_archived_empty_and_malformed_posts(client, token):

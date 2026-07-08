@@ -121,6 +121,32 @@ def _safe_media_filename(filename: str) -> bool:
     return not any(ord(ch) < 32 for ch in filename)
 
 
+def _is_text_html(media_type: str | None) -> bool:
+    return bool(media_type and media_type.split(";", 1)[0].strip().lower() == "text/html")
+
+
+def _report_html_media_type(owner_id: str, filename: str, guessed_media_type: str | None) -> str | None:
+    post = db.get_post(owner_id)
+    if post is None or post.get("type") != "report":
+        return None
+    body = post.get("body")
+    files = body.get("files") if isinstance(body, dict) else None
+    if not isinstance(files, list):
+        return None
+    for file_info in files:
+        if not isinstance(file_info, dict):
+            continue
+        if file_info.get("media_path") != filename:
+            continue
+        stored_media_type = file_info.get("media_type")
+        if _is_text_html(stored_media_type):
+            return "text/html"
+        if _is_text_html(guessed_media_type):
+            return guessed_media_type
+        return None
+    return None
+
+
 def _before_media_path(filename: str | None) -> str:
     suffix = Path(filename or "").suffix.lower()
     if not re.fullmatch(r"\.[a-z0-9]{1,16}", suffix):
@@ -537,14 +563,18 @@ def get_media(request: Request, req_id: str, filename: str):
         raise HTTPException(status_code=404, detail="media not found")
     media_type, _ = mimetypes.guess_type(str(path))
     headers = {"X-Content-Type-Options": "nosniff"}
-    inline = bool(
+    report_html_type = _report_html_media_type(req_id, filename, media_type)
+    browser_safe_media = bool(
         media_type
         and (
             media_type.startswith("video/")
             or (media_type.startswith("image/") and media_type != "image/svg+xml")
         )
     )
-    if inline:
+    if report_html_type is not None:
+        headers["Content-Security-Policy"] = "sandbox allow-same-origin"
+        return FileResponse(path, media_type=report_html_type, headers=headers)
+    if browser_safe_media:
         return FileResponse(path, media_type=media_type, headers=headers)
     return FileResponse(
         path,
