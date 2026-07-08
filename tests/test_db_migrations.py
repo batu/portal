@@ -197,6 +197,58 @@ def test_legacy_db_upgrade_preserves_existing_rows(data_dir):
     assert conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0] == 0
 
 
+def test_user_version_one_db_upgrades_to_v2_and_preserves_portal_rows(data_dir):
+    path = config.db_path()
+    _create_legacy_db(path)
+    conn = _raw_conn(path)
+    db._migrate_v1(conn)
+    conn.execute(
+        "INSERT INTO streams (id, slug, kind, title, created_at) "
+        "VALUES ('s_existing', 'existing', 'session', 'Existing', '2026-07-08T10:00:00+00:00')"
+    )
+    conn.execute(
+        "INSERT INTO posts (id, stream_id, type, title, author, body_json, created_at) "
+        "VALUES ('p_existing', 's_existing', 'report', 'Existing report', 'codex', "
+        "'{\"path\": \"report.html\"}', '2026-07-08T10:01:00+00:00')"
+    )
+    conn.execute("UPDATE requests SET stream_id = 's_existing' WHERE id = 'req_old'")
+    conn.execute("PRAGMA user_version = 1")
+    conn.commit()
+    conn.close()
+
+    conn = db.connect()
+
+    assert _user_version(conn) == 2
+    assert "messages" in _table_names(conn)
+    assert _column_names(conn, "messages") == {"id", "stream_id", "direction", "text", "created_at", "consumed_at"}
+    assert _rows(conn, "SELECT id, slug, kind, title, created_at, closed_at FROM streams ORDER BY id") == [
+        {
+            "id": "s_existing",
+            "slug": "existing",
+            "kind": "session",
+            "title": "Existing",
+            "created_at": "2026-07-08T10:00:00+00:00",
+            "closed_at": None,
+        }
+    ]
+    assert _rows(
+        conn,
+        "SELECT id, stream_id, type, title, author, body_json, created_at FROM posts ORDER BY id",
+    ) == [
+        {
+            "id": "p_existing",
+            "stream_id": "s_existing",
+            "type": "report",
+            "title": "Existing report",
+            "author": "codex",
+            "body_json": '{"path": "report.html"}',
+            "created_at": "2026-07-08T10:01:00+00:00",
+        }
+    ]
+    assert db.get_request("req_old")["stream_id"] == "s_existing"
+    assert conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0] == 0
+
+
 def test_reconnecting_migrated_db_is_noop(data_dir):
     conn = db.connect()
     db.create_stream("stable", "session", "Stable")
