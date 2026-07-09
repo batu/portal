@@ -1145,6 +1145,13 @@ def web_request_detail(request: Request, req_id: str):
     stream_read_only = _request_stream_closed(r)
     before_media = _before_media_context(r)
     view_entry = _view_entry_media_path(r)
+    back = {"href": "/", "label": "Home"}
+    if r.get("stream_id"):
+        conn = db.connect()
+        with db._lock:
+            row = conn.execute("SELECT slug, title FROM streams WHERE id = ?", (r["stream_id"],)).fetchone()
+        if row is not None:
+            back = {"href": f"/s/{quote(row['slug'], safe='')}", "label": row["title"] or row["slug"]}
 
     response = templates.TemplateResponse(
         request,
@@ -1155,6 +1162,7 @@ def web_request_detail(request: Request, req_id: str):
             "stream_read_only": stream_read_only,
             "before_media": before_media,
             "view_entry_url": _media_url(r["id"], view_entry) if view_entry else None,
+            "back": back,
         },
     )
     _maybe_set_cookie(response, request)

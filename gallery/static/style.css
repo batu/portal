@@ -631,3 +631,16 @@ h2 { font-size: 1.05rem; }
   .status-badge.queued { background: #fff3cf; color: #7a4c00; }
   .status-badge.picked-up { background: #eafaf0; color: #1f7a3a; }
 }
+
+.back-link {
+  display: inline-block;
+  margin-bottom: 10px;
+  color: var(--muted, #888);
+  font-size: 0.9rem;
+  text-decoration: none;
+}
+
+.back-link:hover {
+  color: var(--fg);
+  text-decoration: underline;
+}
