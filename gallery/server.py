@@ -90,7 +90,9 @@ class _ContextSanitizer(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self._parts: list[str] = []
+        self._open_tags: list[str] = []
         self._skip_depth = 0
+        self._finished = False
 
     def handle_starttag(self, tag: str, attrs: list) -> None:
         if tag in _CONTEXT_DROP_CONTENT_TAGS:
@@ -99,6 +101,8 @@ class _ContextSanitizer(HTMLParser):
         if self._skip_depth or tag not in _CONTEXT_ALLOWED_TAGS:
             return
         self._parts.append(self._render_open(tag, attrs))
+        if tag not in _CONTEXT_VOID_TAGS:
+            self._open_tags.append(tag)
 
     def handle_startendtag(self, tag: str, attrs: list) -> None:
         if tag in _CONTEXT_DROP_CONTENT_TAGS or self._skip_depth:
@@ -106,6 +110,8 @@ class _ContextSanitizer(HTMLParser):
         if tag not in _CONTEXT_ALLOWED_TAGS:
             return
         self._parts.append(self._render_open(tag, attrs))
+        if tag not in _CONTEXT_VOID_TAGS:
+            self._parts.append(f"</{tag}>")
 
     def handle_endtag(self, tag: str) -> None:
         if tag in _CONTEXT_DROP_CONTENT_TAGS:
@@ -114,9 +120,17 @@ class _ContextSanitizer(HTMLParser):
             return
         if self._skip_depth or tag not in _CONTEXT_ALLOWED_TAGS:
             return
-        if tag in _CONTEXT_VOID_TAGS:
+        if tag in _CONTEXT_VOID_TAGS or tag not in self._open_tags:
             return
-        self._parts.append(f"</{tag}>")
+        # Close any elements nested inside the requested end tag first. This
+        # turns malformed input such as ``<p><a>text</p>`` into a balanced
+        # fragment rather than allowing the browser's active-formatting repair
+        # rules to extend the attacker-controlled link past the context block.
+        while self._open_tags:
+            open_tag = self._open_tags.pop()
+            self._parts.append(f"</{open_tag}>")
+            if open_tag == tag:
+                break
 
     def handle_data(self, data: str) -> None:
         if self._skip_depth:
@@ -137,6 +151,10 @@ class _ContextSanitizer(HTMLParser):
         return f"<{tag}{''.join(rendered)}>"
 
     def get_html(self) -> str:
+        if not self._finished:
+            while self._open_tags:
+                self._parts.append(f"</{self._open_tags.pop()}>")
+            self._finished = True
         return "".join(self._parts)
 
 

@@ -138,3 +138,50 @@ def test_sanitizer_escapes_stray_text_angle_brackets():
     assert "bad()" not in out
     assert "&lt; 3" in out
     assert out.endswith(" tail")
+
+
+@pytest.mark.parametrize(
+    ("html_text", "expected"),
+    [
+        (
+            '<p><a href="https://example.com">unclosed link</p>',
+            '<p><a href="https://example.com">unclosed link</a></p>',
+        ),
+        (
+            "<p><strong><em>unclosed formatting</p>",
+            "<p><strong><em>unclosed formatting</em></strong></p>",
+        ),
+        (
+            "<blockquote><ul><li>unclosed list",
+            "<blockquote><ul><li>unclosed list</li></ul></blockquote>",
+        ),
+        (
+            "<a><strong>crossed tags</a> tail</strong>",
+            "<a><strong>crossed tags</strong></a> tail",
+        ),
+        ("<a/>self-closing link", "<a></a>self-closing link"),
+    ],
+)
+def test_sanitizer_balances_allowed_tags(html_text, expected):
+    assert _sanitize_context_html(html_text) == expected
+
+
+def test_unclosed_context_link_cannot_wrap_trusted_request_controls(client, token):
+    page = _render(client, token, '<a href="https://attacker.example">captured')
+    body = page.text
+    context_start = body.index('<div class="context">')
+    link_close = body.index("</a>", context_start)
+    context_close = body.index("</div>", context_start)
+    variant_grid = body.index('<div class="variant-grid"', context_start)
+    decide_button = body.index('id="decide-btn"', context_start)
+
+    assert link_close < context_close < variant_grid < decide_button
+
+
+def test_balancing_keeps_attribute_and_url_filtering_intact():
+    out = _sanitize_context_html(
+        '<a href="javascript:alert(1)" onclick="alert(2)" title="safe">link'
+        '<img src="data:text/html,bad" onerror="alert(3)" alt="safe">'
+    )
+
+    assert out == '<a title="safe">link<img alt="safe"></a>'
