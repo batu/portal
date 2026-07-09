@@ -5,6 +5,7 @@ import logging
 import math
 import mimetypes
 import re
+import secrets
 import shutil
 import sqlite3
 import threading
@@ -14,7 +15,7 @@ from urllib.parse import quote
 
 import markdown as md_lib
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
@@ -97,6 +98,37 @@ def _maybe_set_cookie(response, request: Request) -> None:
     qs_token = request.query_params.get("token")
     if qs_token and qs_token == _server_token():
         response.set_cookie(COOKIE_NAME, qs_token, httponly=True, samesite="lax", max_age=3600 * 24 * 365)
+
+
+def _safe_next_path(value: str | None) -> str:
+    if isinstance(value, str) and value.startswith("/") and not value.startswith("//"):
+        return value
+    return "/"
+
+
+def _login_redirect(request: Request) -> RedirectResponse:
+    return RedirectResponse(url=f"/login?next={quote(request.url.path, safe='/')}", status_code=303)
+
+
+@app.get("/login", response_class=HTMLResponse)
+def web_login(request: Request, next: str | None = None):
+    if web_token_ok(request):
+        return RedirectResponse(url=_safe_next_path(next), status_code=303)
+    return templates.TemplateResponse(request, "login.html", {"error": None, "next_path": _safe_next_path(next)})
+
+
+@app.post("/login")
+async def web_login_submit(request: Request, password: str = Form(""), next: str = Form("/")):
+    if secrets.compare_digest(password, _server_token()):
+        response = RedirectResponse(url=_safe_next_path(next), status_code=303)
+        response.set_cookie(COOKIE_NAME, password, httponly=True, samesite="lax", max_age=3600 * 24 * 365)
+        return response
+    return templates.TemplateResponse(
+        request,
+        "login.html",
+        {"error": "Wrong passphrase.", "next_path": _safe_next_path(next)},
+        status_code=401,
+    )
 
 
 # --- health (unauthenticated) ---
@@ -1035,7 +1067,7 @@ def _list_stream_summaries() -> list[dict]:
 @app.get("/", response_class=HTMLResponse)
 def web_index(request: Request, q: str | None = None):
     if not web_token_ok(request):
-        raise HTTPException(status_code=401, detail="missing or invalid token")
+        return _login_redirect(request)
     open_requests = db.list_requests(status="open")
     decided = db.list_requests(status="decided", q=q)
     streams = _list_stream_summaries()
@@ -1051,7 +1083,7 @@ def web_index(request: Request, q: str | None = None):
 @app.get("/s/{slug}", response_class=HTMLResponse)
 def web_stream_detail(request: Request, slug: str):
     if not web_token_ok(request):
-        raise HTTPException(status_code=401, detail="missing or invalid token")
+        return _login_redirect(request)
     _validate_slug(slug)
     stream = db.get_stream_with_posts(slug)
     if stream is None:
@@ -1096,7 +1128,7 @@ async def web_stream_answer(request: Request, slug: str):
 @app.get("/r/{req_id}", response_class=HTMLResponse)
 def web_request_detail(request: Request, req_id: str):
     if not web_token_ok(request):
-        raise HTTPException(status_code=401, detail="missing or invalid token")
+        return _login_redirect(request)
     r = db.get_request(req_id)
     if r is None:
         raise HTTPException(status_code=404, detail="request not found")

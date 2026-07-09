@@ -308,7 +308,8 @@ def test_legacy_verdict_closed_stream_error_is_409(client, token):
 
 def test_web_index_requires_token(client, token):
     resp = client.get("/", follow_redirects=False)
-    assert resp.status_code == 401
+    assert resp.status_code == 303
+    assert resp.headers["location"].startswith("/login")
 
     resp = client.get(f"/?token={token}", follow_redirects=False)
     assert resp.status_code == 200

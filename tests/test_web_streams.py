@@ -68,8 +68,9 @@ def test_stream_page_requires_web_token_and_sets_cookie(client, token):
     cookie_ok = client.get("/s/alpha", follow_redirects=False)
     unknown = client.get(f"/s/missing?token={token}", follow_redirects=False)
 
-    assert missing.status_code == 401
-    assert invalid.status_code == 401
+    assert missing.status_code == 303
+    assert missing.headers["location"].startswith("/login")
+    assert invalid.status_code == 303
     assert ok.status_code == 200
     assert "gallery_token" in ok.cookies
     assert ok.headers["referrer-policy"] == "no-referrer"
