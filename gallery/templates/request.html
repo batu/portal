@@ -4,7 +4,15 @@
 {% set selectable_variants = r.kind in ["pick-one", "before-after", "pick-many", "rank"] %}
 {% set can_decide = r.status == "open" and not stream_read_only %}
 <section class="request-detail" data-req-id="{{ r.id }}" data-kind="{{ r.kind }}" data-status="{{ r.status }}"{% if before_media %} data-before-default-view="{{ before_media.default_view }}" data-can-decide="{{ 'true' if can_decide else 'false' }}"{% endif %}>
-  <a class="back-link" href="{{ back.href }}">&larr; {{ back.label }}</a>
+  <nav class="breadcrumb" aria-label="Breadcrumb">
+    <a href="/">Index</a>
+    {% if back.href != "/" %}
+    <span class="breadcrumb-separator" aria-hidden="true">/</span>
+    <a href="{{ back.href }}">{{ back.label }}</a>
+    {% endif %}
+    <span class="breadcrumb-separator" aria-hidden="true">/</span>
+    <span aria-current="page">{{ r.title }}</span>
+  </nav>
   <h1>{{ r.title }}</h1>
   <div class="request-meta">
     {% if r.project %}<span class="tag">{{ r.project }}</span>{% endif %}

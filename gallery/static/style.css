@@ -632,15 +632,33 @@ h2 { font-size: 1.05rem; }
   .status-badge.picked-up { background: #eafaf0; color: #1f7a3a; }
 }
 
-.back-link {
-  display: inline-block;
+.back-link,
+.breadcrumb {
   margin-bottom: 10px;
   color: var(--muted, #888);
   font-size: 0.9rem;
   text-decoration: none;
 }
 
-.back-link:hover {
+.back-link {
+  display: inline-block;
+}
+
+.breadcrumb {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.breadcrumb a,
+.breadcrumb [aria-current="page"],
+.breadcrumb-separator {
+  color: inherit;
+}
+
+.back-link:hover,
+.breadcrumb a:hover {
   color: var(--fg);
   text-decoration: underline;
 }

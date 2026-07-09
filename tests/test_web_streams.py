@@ -13,15 +13,26 @@ def tiny_png_bytes() -> bytes:
     )
 
 
-def _create_request(client, token, title="Decision source"):
+def _create_request(client, token, title="Decision source", project=None):
+    data = {"title": title, "kind": "pick-one"}
+    if project is not None:
+        data["project"] = project
     create = client.post(
         "/api/requests",
         headers=auth_headers(token),
-        data={"title": title, "kind": "pick-one"},
+        data=data,
         files=[("files", ("variant.png", tiny_png_bytes(), "image/png"))],
     )
     assert create.status_code == 200
     return create.json()["id"]
+
+
+def _breadcrumb_html(html):
+    marker = '<nav class="breadcrumb" aria-label="Breadcrumb">'
+    assert marker in html
+    start = html.index(marker)
+    end = html.index("</nav>", start) + len("</nav>")
+    return html[start:end]
 
 
 def _add_report_post(slug, post_id, title, created_at, filename="report.html"):
@@ -76,6 +87,59 @@ def test_stream_page_requires_web_token_and_sets_cookie(client, token):
     assert ok.headers["referrer-policy"] == "no-referrer"
     assert cookie_ok.status_code == 200
     assert unknown.status_code == 404
+
+
+def test_stream_page_renders_index_breadcrumb_and_brand_link(client, token):
+    db.create_stream("alpha", "session", "Alpha stream")
+
+    page = client.get(f"/s/alpha?token={token}")
+
+    assert page.status_code == 200
+    assert '<a href="/" class="brand">Portal</a>' in page.text
+    breadcrumb = _breadcrumb_html(page.text)
+    assert '<a href="/">Index</a>' in breadcrumb
+    assert '<span aria-current="page">Alpha stream</span>' in breadcrumb
+    assert "token=" not in breadcrumb
+    assert "&larr; Home" not in page.text
+
+
+def test_request_page_renders_index_stream_breadcrumb_and_brand_link(client, token):
+    project = "navigation/project"
+    stream_slug = db._stream_slug_for_project(project)
+    db.create_stream(stream_slug, "session", "Navigation stream")
+    req_id = _create_request(client, token, title="Breadcrumb request", project=project)
+
+    page = client.get(f"/r/{req_id}?token={token}")
+
+    assert page.status_code == 200
+    assert '<a href="/" class="brand">Portal</a>' in page.text
+    breadcrumb = _breadcrumb_html(page.text)
+    index_crumb = '<a href="/">Index</a>'
+    stream_crumb = f'<a href="/s/{stream_slug}">Navigation stream</a>'
+    request_crumb = '<span aria-current="page">Breadcrumb request</span>'
+    assert index_crumb in breadcrumb
+    assert stream_crumb in breadcrumb
+    assert request_crumb in breadcrumb
+    assert breadcrumb.index(index_crumb) < breadcrumb.index(stream_crumb) < breadcrumb.index(request_crumb)
+    assert "token=" not in breadcrumb
+    assert f'<a class="back-link" href="/s/{stream_slug}">' not in page.text
+
+
+def test_request_page_without_stream_uses_index_request_breadcrumb(client, token):
+    req_id = _create_request(client, token, title="Legacy request")
+    conn = db.connect()
+    conn.execute("UPDATE requests SET stream_id = NULL WHERE id = ?", (req_id,))
+    conn.commit()
+
+    page = client.get(f"/r/{req_id}?token={token}")
+
+    assert page.status_code == 200
+    breadcrumb = _breadcrumb_html(page.text)
+    assert breadcrumb.count('<a href="/">Index</a>') == 1
+    assert '<span aria-current="page">Legacy request</span>' in breadcrumb
+    assert 'href="/s/' not in breadcrumb
+    assert "Home" not in breadcrumb
+    assert "token=" not in breadcrumb
 
 
 def test_stream_page_renders_report_and_decision_posts_newest_first(client, token):
