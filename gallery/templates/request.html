@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}{{ r.title }} — Gallery{% endblock %}
+{% block title %}{{ r.title }} — Portal{% endblock %}
 {% block content %}
 {% set selectable_variants = r.kind in ["pick-one", "before-after", "pick-many", "rank"] %}
 {% set can_decide = r.status == "open" and not stream_read_only %}

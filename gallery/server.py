@@ -1,5 +1,6 @@
 """Gallery FastAPI app: JSON API + server-rendered web UI + media serving."""
 
+import asyncio
 import json
 import logging
 import math
@@ -119,10 +120,17 @@ def web_login(request: Request, next: str | None = None):
 
 @app.post("/login")
 async def web_login_submit(request: Request, password: str = Form(""), next: str = Form("/")):
-    if secrets.compare_digest(password, _server_token()):
+    # Humans may use the short config `passphrase`; the machine token also works.
+    # The cookie always carries the token, so web_token_ok stays single-source.
+    passphrase = config.load_config().get("passphrase") or ""
+    ok = secrets.compare_digest(password, _server_token()) or (
+        bool(passphrase) and secrets.compare_digest(password, passphrase)
+    )
+    if ok:
         response = RedirectResponse(url=_safe_next_path(next), status_code=303)
-        response.set_cookie(COOKIE_NAME, password, httponly=True, samesite="lax", max_age=3600 * 24 * 365)
+        response.set_cookie(COOKIE_NAME, _server_token(), httponly=True, samesite="lax", max_age=3600 * 24 * 365)
         return response
+    await asyncio.sleep(0.3)  # blunt brute-force damper; the passphrase is short
     return templates.TemplateResponse(
         request,
         "login.html",

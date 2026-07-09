@@ -46,3 +46,23 @@ def test_authed_login_visit_redirects_home(client, token):
 def test_api_still_requires_bearer_token(client):
     resp = client.get("/api/requests", follow_redirects=False)
     assert resp.status_code == 401
+
+
+def test_login_with_config_passphrase_sets_token_cookie(client, token):
+    from gallery import config
+
+    cfg = config.load_config()
+    cfg["passphrase"] = "base"
+    config.save_config(cfg)
+
+    resp = client.post("/login", data={"password": "base", "next": "/"}, follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.cookies["gallery_token"] == token
+
+    resp = client.get("/", follow_redirects=False)
+    assert resp.status_code == 200
+
+
+def test_empty_passphrase_config_does_not_allow_empty_password(client):
+    resp = client.post("/login", data={"password": "", "next": "/"}, follow_redirects=False)
+    assert resp.status_code == 401
