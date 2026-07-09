@@ -14,10 +14,11 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Iterator
 
 from . import client, config
 
@@ -684,6 +685,21 @@ def redaction_secrets(source: dict[str, str] | None = None, *, portal_token: str
     return list(dict.fromkeys(values))
 
 
+@contextmanager
+def catchable_sigterm() -> Iterator[None]:
+    """Turn SIGTERM into a catchable exception and restore the old handler."""
+    previous_handler = signal.getsignal(signal.SIGTERM)
+
+    def raise_termination(signum: int, _frame: Any) -> None:
+        raise SystemExit(128 + signum)
+
+    signal.signal(signal.SIGTERM, raise_termination)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGTERM, previous_handler)
+
+
 def _read_log_tail(path: Path, limit: int) -> str:
     """Return at most the last ``limit`` bytes of ``path`` as text.
 
@@ -792,9 +808,14 @@ def _run_subprocess(
                 return RunResult(124, f"{tail}\n{note}", timed_out=True)
         tail = _read_log_tail(log_path, RUN_LOG_TAIL_BYTES)
         return RunResult(proc.returncode, tail, timed_out=False)
-    finally:
-        if proc is not None and pgid is not None and proc.poll() is None:
-            _terminate_group(proc, pgid, grace)
+    except BaseException:
+        if proc is not None:
+            # A reaped direct child does not prove its process group is empty:
+            # descendants may still be running. Every exceptional unwind owns
+            # cleanup, while the normal wait/return path leaves a deliberately
+            # daemonized descendant alone.
+            _terminate_group(proc, pgid or proc.pid, grace)
+        raise
 
 
 def run_twf_card(repo: Path, short_link: str, env: dict[str, str]) -> RunResult:

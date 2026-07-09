@@ -8,8 +8,10 @@ or waiting hours. POSIX-only (setsid/killpg).
 
 import os
 import signal
+import subprocess
 import sys
 import time
+from pathlib import Path
 
 import pytest
 
@@ -151,6 +153,146 @@ def test_interruption_reaps_owned_process_group(tmp_path, run_env, monkeypatch):
         if spawned_pid is not None:
             try:
                 os.kill(spawned_pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
+@posix_only
+def test_interruption_reaps_group_after_direct_child_exits(tmp_path, run_env, monkeypatch):
+    pid_file = tmp_path / "pids.txt"
+    ready_file = tmp_path / "grandchild-ready"
+    grandchild_script = (
+        "import signal, time\n"
+        "from pathlib import Path\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        f"Path({str(ready_file)!r}).write_text('ready')\n"
+        "time.sleep(30)\n"
+    )
+    script = f"""
+import os, subprocess, sys, time
+gc = subprocess.Popen([sys.executable, "-c", {grandchild_script!r}])
+deadline = time.monotonic() + 5
+while not os.path.exists({str(ready_file)!r}):
+    if time.monotonic() >= deadline:
+        raise RuntimeError("grandchild did not become ready")
+    time.sleep(0.01)
+open({str(pid_file)!r}, "w").write(str(os.getpid()) + "\\n" + str(gc.pid) + "\\n")
+"""
+    real_popen = trello_watch.subprocess.Popen
+
+    class ExitedThenInterruptedPopen:
+        def __init__(self, *args, **kwargs):
+            self._proc = real_popen(*args, **kwargs)
+            self._interrupt = True
+
+        @property
+        def pid(self):
+            return self._proc.pid
+
+        @property
+        def returncode(self):
+            return self._proc.returncode
+
+        def poll(self):
+            return self._proc.poll()
+
+        def wait(self, timeout=None):
+            result = self._proc.wait(timeout=timeout)
+            if self._interrupt:
+                self._interrupt = False
+                raise KeyboardInterrupt
+            return result
+
+    monkeypatch.setattr(trello_watch.subprocess, "Popen", ExitedThenInterruptedPopen)
+
+    pids = []
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            trello_watch._run_subprocess(
+                [sys.executable, "-c", script],
+                cwd=tmp_path,
+                env=run_env,
+                timeout=30,
+                grace=0.2,
+            )
+
+        pids = [int(line) for line in pid_file.read_text().split()]
+        assert len(pids) == 2
+        assert _pid_dead(pids[0]), "direct child should already be reaped"
+        for _ in range(50):
+            if _pid_dead(pids[1]):
+                break
+            time.sleep(0.05)
+        assert _pid_dead(pids[1]), f"grandchild pid {pids[1]} survived exceptional cleanup"
+    finally:
+        for pid in pids:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
+@posix_only
+def test_sigterm_to_watcher_reaps_active_worker(tmp_path):
+    pid_file = tmp_path / "worker.pid"
+    child_script = (
+        "import os, time\n"
+        "from pathlib import Path\n"
+        f"Path({str(pid_file)!r}).write_text(str(os.getpid()))\n"
+        "time.sleep(30)\n"
+    )
+    wrapper_script = f"""
+import sys
+from pathlib import Path
+from gallery import cli, trello_watch
+
+class FakeWatcher:
+    def poll_once(self):
+        trello_watch._run_subprocess(
+            [sys.executable, "-c", {child_script!r}],
+            cwd=Path({str(tmp_path)!r}),
+            env={{"PATH": {os.environ.get("PATH", "/usr/bin:/bin")!r}}},
+            timeout=30,
+            grace=0.2,
+        )
+        return {{}}
+
+cli.trello_watch.build_watcher = lambda *args, **kwargs: FakeWatcher()
+sys.argv = ["portal", "trello-watch", "--repo", {str(tmp_path)!r}, "--once"]
+cli.main()
+"""
+    env = dict(os.environ)
+    env["GALLERY_DATA_DIR"] = str(tmp_path / "gallery-data")
+    wrapper = subprocess.Popen(
+        [sys.executable, "-c", wrapper_script],
+        cwd=Path(__file__).resolve().parents[1],
+        env=env,
+    )
+    worker_pid = None
+    try:
+        deadline = time.monotonic() + 5
+        while not pid_file.exists():
+            if wrapper.poll() is not None:
+                pytest.fail(f"watcher wrapper exited early with {wrapper.returncode}")
+            if time.monotonic() >= deadline:
+                pytest.fail("worker did not become ready")
+            time.sleep(0.01)
+
+        worker_pid = int(pid_file.read_text())
+        os.kill(wrapper.pid, signal.SIGTERM)
+        assert wrapper.wait(timeout=5) == 128 + signal.SIGTERM
+        for _ in range(50):
+            if _pid_dead(worker_pid):
+                break
+            time.sleep(0.05)
+        assert _pid_dead(worker_pid), f"worker pid {worker_pid} survived watcher SIGTERM"
+    finally:
+        if wrapper.poll() is None:
+            wrapper.kill()
+            wrapper.wait()
+        if worker_pid is not None:
+            try:
+                os.kill(worker_pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
 

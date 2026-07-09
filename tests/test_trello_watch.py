@@ -1,4 +1,5 @@
 import json
+import signal
 import urllib.error
 import urllib.parse
 from io import BytesIO
@@ -892,11 +893,14 @@ def test_cli_trello_watch_help_lists_required_flags(monkeypatch, capsys):
 
 
 def test_cli_trello_watch_once_runs_single_pass_without_sleep(monkeypatch, capsys):
+    previous_sigterm_handler = signal.getsignal(signal.SIGTERM)
+
     class FakeWatcher:
         def __init__(self):
             self.calls = 0
 
         def poll_once(self):
+            assert signal.getsignal(signal.SIGTERM) is not previous_sigterm_handler
             self.calls += 1
             return {"picked_up": self.calls}
 
@@ -911,6 +915,7 @@ def test_cli_trello_watch_once_runs_single_pass_without_sleep(monkeypatch, capsy
     cli.main()
 
     assert fake.calls == 1
+    assert signal.getsignal(signal.SIGTERM) is previous_sigterm_handler
     assert json.loads(capsys.readouterr().out) == {"picked_up": 1}
 
 
