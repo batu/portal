@@ -143,6 +143,34 @@ in project streams, and before/after review. Phase 2 added `ask`, `pull`, and
 stream note boxes. Public/per-stream auth remains planned in
 `docs/portal-spec.md`.
 
+### Interactive views (`--kind view`)
+
+A view is a producer-supplied, self-contained HTML page posted as a decision
+request. The first `.html` file is the entry; sibling uploads (video, images)
+are served next to it with `NN_` order prefixes. View HTML is served
+scripts-enabled (unlike reports, which stay script-blocked) and rendered
+full-bleed in a sandboxed iframe at `/r/<id>`. The page submits its verdict as
+opaque JSON — `POST /r/<id>/decide` with `{"payload": <any JSON>}` and
+same-origin credentials — and `portal wait <id>` returns the payload
+unchanged. Portal stores view verdicts without interpreting them; the verdict
+schema belongs to the view's producer. First producer:
+fabrikav2 `tools/video-refs` (the frame-picker).
+
+**Verify views by looking — Playwright is allowed and suggested.** Views are
+desktop-web surfaces (Portal is PC-first), so browser screenshots are the
+sanctioned verification, before posting and after:
+
+```bash
+npx playwright screenshot --viewport-size=1440,900 --wait-for-timeout=3000 \
+  "https://portal.basegamelab.com/r/<id>?token=$GALLERY_TOKEN" view.png
+```
+
+Render with **realistic data density** (real candidate counts, not a 3-item
+fixture) and read the screenshot before shipping — structural tests cannot
+catch a layout that only breaks at density. This is the opposite of the
+mobile-game rule (browser is never evidence for games); Portal views are web
+pages and the browser IS their real environment.
+
 ### Portal inbox
 
 The Inbox verbs implement the phase 2 steering/questions protocol from
