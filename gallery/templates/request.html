@@ -78,12 +78,13 @@
 
   {% if r.kind == "view" %}
   {% if view_entry_url %}
-  <iframe
-    class="view-frame"
-    src="{{ view_entry_url }}?token={{ request.query_params.get('token', '') }}"
-    sandbox="allow-scripts allow-same-origin allow-forms"
-    style="width: 100%; min-height: 82vh; border: 0; border-radius: 8px; background: #000;"
-  ></iframe>
+  <div class="view-frame-bleed">
+    <iframe
+      class="view-frame"
+      src="{{ view_entry_url }}?token={{ request.query_params.get('token', '') }}"
+      sandbox="allow-scripts allow-same-origin allow-forms"
+    ></iframe>
+  </div>
   {% else %}
   <div class="archive-note">This view request has no HTML entry file.</div>
   {% endif %}

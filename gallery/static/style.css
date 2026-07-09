@@ -644,3 +644,17 @@ h2 { font-size: 1.05rem; }
   color: var(--fg);
   text-decoration: underline;
 }
+
+/* Interactive view posts escape main's 720px cap: the view owns its layout. */
+.view-frame-bleed {
+  width: calc(100vw - 48px);
+  margin-left: calc(50% - 50vw + 24px);
+}
+
+.view-frame {
+  width: 100%;
+  height: 88vh;
+  border: 0;
+  border-radius: 8px;
+  background: #000;
+}
