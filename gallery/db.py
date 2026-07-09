@@ -29,9 +29,7 @@ CREATE TABLE IF NOT EXISTS requests (
     status TEXT NOT NULL DEFAULT 'open',
     context_md TEXT,
     created_at TEXT NOT NULL,
-    decided_at TEXT,
-    superseded_by TEXT REFERENCES requests(id),
-    close_reason TEXT
+    decided_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS variants (
@@ -72,6 +70,18 @@ class StreamClosedError(ValueError):
 
 
 class MessageNotFoundError(ValueError):
+    pass
+
+
+class RequestNotFoundError(ValueError):
+    pass
+
+
+class RequestTerminalError(ValueError):
+    pass
+
+
+class SuccessorNotFoundError(ValueError):
     pass
 
 
@@ -848,7 +858,9 @@ def record_verdict(
     """Insert a new verdict revision and mark the request decided. Latest verdict wins."""
     conn = connect()
     with _lock:
-        request = conn.execute("SELECT stream_id FROM requests WHERE id = ?", (req_id,)).fetchone()
+        request = conn.execute("SELECT stream_id, status FROM requests WHERE id = ?", (req_id,)).fetchone()
+        if request is not None and request["status"] in TERMINAL_STATUSES:
+            raise RequestTerminalError(f"request already {request['status']}: {req_id}")
         if request is not None and request["stream_id"] is not None:
             _require_open_stream(conn, request["stream_id"])
         conn.execute(
@@ -893,9 +905,9 @@ def close_request(req_id: str, reason: str) -> dict:
         try:
             row = conn.execute("SELECT status FROM requests WHERE id = ?", (req_id,)).fetchone()
             if row is None:
-                raise ValueError(f"request not found: {req_id}")
+                raise RequestNotFoundError(f"request not found: {req_id}")
             if row["status"] in TERMINAL_STATUSES:
-                raise ValueError(f"request already {row['status']}: {req_id}")
+                raise RequestTerminalError(f"request already {row['status']}: {req_id}")
             conn.execute(
                 "UPDATE requests SET status = 'closed', close_reason = ? WHERE id = ?",
                 (reason, req_id),
@@ -916,14 +928,16 @@ def supersede_request(req_id: str, successor_id: str) -> dict:
         try:
             row = conn.execute("SELECT status FROM requests WHERE id = ?", (req_id,)).fetchone()
             if row is None:
-                raise ValueError(f"request not found: {req_id}")
+                raise RequestNotFoundError(f"request not found: {req_id}")
             if req_id == successor_id:
                 raise ValueError(f"request cannot supersede itself: {req_id}")
             if row["status"] in TERMINAL_STATUSES:
-                raise ValueError(f"request already {row['status']}: {req_id}")
-            successor = conn.execute("SELECT id FROM requests WHERE id = ?", (successor_id,)).fetchone()
+                raise RequestTerminalError(f"request already {row['status']}: {req_id}")
+            successor = conn.execute("SELECT id, status FROM requests WHERE id = ?", (successor_id,)).fetchone()
             if successor is None:
-                raise ValueError(f"successor not found: {successor_id}")
+                raise SuccessorNotFoundError(f"successor not found: {successor_id}")
+            if successor["status"] in TERMINAL_STATUSES:
+                raise ValueError(f"successor is not live: {successor_id} (status {successor['status']})")
             conn.execute(
                 "UPDATE requests SET status = 'superseded', superseded_by = ? WHERE id = ?",
                 (successor_id, req_id),

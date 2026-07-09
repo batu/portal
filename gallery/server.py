@@ -782,7 +782,7 @@ def _apply_verdict(req_id: str, body: dict) -> dict:
         return db.record_verdict(req_id, selected, ratings, comment, payload=payload)
     except ValueError as exc:
         detail = str(exc)
-        status = 409 if "closed" in detail else 400
+        status = 409 if isinstance(exc, db.RequestTerminalError) or "closed" in detail else 400
         raise HTTPException(status_code=status, detail=detail) from exc
 
 
@@ -794,10 +794,9 @@ async def post_verdict(request: Request, req_id: str):
 
 
 def _lifecycle_mutation_status(exc: ValueError) -> int:
-    detail = str(exc)
-    if "not found" in detail:
+    if isinstance(exc, (db.RequestNotFoundError, db.SuccessorNotFoundError)):
         return 404
-    if "already" in detail:
+    if isinstance(exc, db.RequestTerminalError):
         return 409
     return 400
 
@@ -953,7 +952,8 @@ def _decision_post_context(post: dict, request_summaries: dict[str, dict]) -> di
     request_row = request_summaries.get(request_id)
     if request_row is None:
         return None
-    status = "decided" if request_row.get("status") == "decided" else "pending"
+    raw_status = request_row.get("status")
+    status = raw_status if raw_status in ("decided", "closed", "superseded") else "pending"
     return {
         "request_id": request_id,
         "title": request_row.get("title") or request_id,
@@ -1224,7 +1224,9 @@ def web_request_detail(request: Request, req_id: str):
     stream_read_only = _request_stream_closed(r)
     before_media = _before_media_context(r)
     view_entry = _view_entry_media_path(r)
-    if view_entry is not None:
+    # Terminal views fall through to the Portal page so the lifecycle banner
+    # (successor link / close reason) is reachable instead of the stale producer HTML.
+    if view_entry is not None and r["status"] not in db.TERMINAL_STATUSES:
         # A view owns the whole tab — no iframe box. Cookie auth carries over;
         # forward an explicit ?token= so first-visit links still work.
         qs_token = request.query_params.get("token")

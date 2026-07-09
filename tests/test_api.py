@@ -401,6 +401,59 @@ def test_supersede_self_is_400_and_unknown_successor_404(client, token):
     assert unknown.status_code == 404
 
 
+def test_supersede_requires_auth(client, token):
+    old_id = _create_request(client, token)
+    new_id = _create_request(client, token)
+    resp = client.post(f"/api/requests/{old_id}/supersede", json={"successor": new_id})
+    assert resp.status_code == 401
+
+
+def test_supersede_rejects_terminal_successor(client, token):
+    a_id = _create_request(client, token)
+    b_id = _create_request(client, token)
+    first = client.post(f"/api/requests/{a_id}/supersede", headers=auth_headers(token), json={"successor": b_id})
+    assert first.status_code == 200
+
+    # b -> a would advertise a dead request as the live version (an A<->B cycle)
+    cycle = client.post(f"/api/requests/{b_id}/supersede", headers=auth_headers(token), json={"successor": a_id})
+    assert cycle.status_code == 400
+    assert "not live" in cycle.json()["detail"]
+
+    closed_id = _create_request(client, token)
+    client.post(f"/api/requests/{closed_id}/close", headers=auth_headers(token), json={"reason": "dead"})
+    dead = client.post(f"/api/requests/{b_id}/supersede", headers=auth_headers(token), json={"successor": closed_id})
+    assert dead.status_code == 400
+
+
+def test_closed_request_page_shows_banner_without_decide(client, token):
+    req_id = _create_request(client, token)
+    client.post(f"/api/requests/{req_id}/close", headers=auth_headers(token), json={"reason": "obsolete queue"})
+
+    page = client.get(f"/r/{req_id}?token={token}")
+    assert page.status_code == 200
+    assert "Closed" in page.text
+    assert "obsolete queue" in page.text
+    assert 'id="decide-btn"' not in page.text
+
+
+def test_stream_page_labels_retired_decision_posts(client, token):
+    resp = client.post(
+        "/api/requests",
+        headers=auth_headers(token),
+        data={"title": "Stream lifecycle", "kind": "pick-one", "project": "proj/lifecycle"},
+        files=_upload_files(2),
+    )
+    assert resp.status_code == 200
+    req_id = resp.json()["id"]
+    client.post(f"/api/requests/{req_id}/close", headers=auth_headers(token), json={"reason": "stale"})
+
+    slug = db._stream_slug_for_project("proj/lifecycle")
+    page = client.get(f"/s/{slug}?token={token}")
+    assert page.status_code == 200
+    assert '<span class="status-badge closed">closed</span>' in page.text
+    assert '<span class="status-badge pending">pending</span>' not in page.text
+
+
 def test_decide_on_superseded_returns_409_with_successor(client, token):
     old_id = _create_request(client, token)
     new_id = _create_request(client, token)
@@ -422,6 +475,10 @@ def test_decide_on_closed_returns_409_with_reason(client, token):
     resp = client.post(f"/api/requests/{req_id}/verdict", headers=auth_headers(token), json={"selected": [1]})
     assert resp.status_code == 409
     assert resp.json()["detail"]["reason"] == "obsolete"
+
+    web = client.post(f"/r/{req_id}/decide?token={token}", json={"selected": [1]})
+    assert web.status_code == 409
+    assert web.json()["detail"]["reason"] == "obsolete"
 
 
 def test_redecide_lock_requires_explicit_flag(client, token):

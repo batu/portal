@@ -58,6 +58,27 @@ def test_report_html_stays_script_blocked(client, token):
     assert resp.headers["content-security-policy"] == "sandbox allow-same-origin"
 
 
+def test_superseded_view_renders_banner_instead_of_redirect(client, token):
+    old_id = _create_view(client, token).json()["id"]
+    new_id = _create_view(client, token).json()["id"]
+    resp = client.post(
+        f"/api/requests/{old_id}/supersede",
+        json={"successor": new_id},
+        headers=auth_headers(token),
+    )
+    assert resp.status_code == 200
+
+    # A live view redirects to its producer HTML; a terminal view must fall
+    # through to the Portal page so the lifecycle banner is reachable.
+    live = client.get(f"/r/{new_id}", params={"token": token}, follow_redirects=False)
+    assert live.status_code == 303
+
+    page = client.get(f"/r/{old_id}", params={"token": token}, follow_redirects=False)
+    assert page.status_code == 200
+    assert "Superseded" in page.text
+    assert f'href="/r/{new_id}"' in page.text
+
+
 def test_view_verdict_payload_roundtrip(client, token):
     req_id = _create_view(client, token).json()["id"]
     payload = {"frames": [{"t": 12.4, "label": "menu", "source": "agent"}, {"t": 31.0, "label": "level", "source": "human"}]}

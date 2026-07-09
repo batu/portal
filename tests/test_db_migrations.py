@@ -131,6 +131,23 @@ def test_fresh_db_has_portal_schema_v3(data_dir):
     assert {"requests", "variants", "verdicts", "streams", "posts", "messages"} <= _table_names(conn)
     assert {"stream_id", "before_media_path", "before_media_type"} <= _column_names(conn, "requests")
     assert {"superseded_by", "close_reason"} <= _column_names(conn, "requests")
+    # Exact order pins fresh-DB shape to the migrated-legacy shape: new columns
+    # arrive via ALTER in _migrate_v4, never via the base SCHEMA.
+    assert [row["name"] for row in conn.execute("PRAGMA table_info(requests)")] == [
+        "id",
+        "title",
+        "project",
+        "kind",
+        "status",
+        "context_md",
+        "created_at",
+        "decided_at",
+        "stream_id",
+        "before_media_path",
+        "before_media_type",
+        "superseded_by",
+        "close_reason",
+    ]
     assert "payload_json" in _column_names(conn, "verdicts")
     assert {"id", "stream_id", "direction", "text", "created_at", "consumed_at"} <= _column_names(conn, "messages")
     assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
@@ -186,6 +203,21 @@ def test_legacy_db_upgrade_preserves_existing_rows(data_dir):
     ) == legacy_rows["verdicts"]
 
     assert {"superseded_by", "close_reason"} <= _column_names(conn, "requests")
+    assert [row["name"] for row in conn.execute("PRAGMA table_info(requests)")] == [
+        "id",
+        "title",
+        "project",
+        "kind",
+        "status",
+        "context_md",
+        "created_at",
+        "decided_at",
+        "stream_id",
+        "before_media_path",
+        "before_media_type",
+        "superseded_by",
+        "close_reason",
+    ]
     request = db.get_request("req_old")
     assert request["title"] == "Old request"
     assert request["project"] == "legacy/project"
@@ -751,10 +783,23 @@ def test_close_and_supersede_reject_invalid_transitions(data_dir):
         db.supersede_request("req_lc", "req_lc")
 
     db.close_request("req_lc", "done")
-    with pytest.raises(ValueError, match="already closed"):
+    with pytest.raises(db.RequestTerminalError, match="already closed"):
         db.close_request("req_lc", "again")
-    with pytest.raises(ValueError, match="already closed"):
+    with pytest.raises(db.RequestTerminalError, match="already closed"):
         db.supersede_request("req_lc", "req_succ")
+    with pytest.raises(ValueError, match="successor is not live"):
+        db.supersede_request("req_succ", "req_lc")
+
+
+def test_record_verdict_rejects_terminal_requests(data_dir):
+    db.create_request("req_rv_term", "Terminal", None, "pick-one", None, [_variant()])
+    db.close_request("req_rv_term", "done")
+
+    with pytest.raises(db.RequestTerminalError, match="already closed"):
+        db.record_verdict("req_rv_term", [1], None, "late")
+
+    assert db.get_request("req_rv_term")["status"] == "closed"
+    assert db.count_verdicts("req_rv_term") == 0
 
 
 def test_count_verdicts_tracks_revisions(data_dir):

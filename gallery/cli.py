@@ -250,6 +250,12 @@ def cmd_wait(args):
         if r["status"] == "decided":
             print(json.dumps(r["verdict"]))
             return
+        if r["status"] == "superseded":
+            print(f"request superseded; live version: {r.get('superseded_by')}", file=sys.stderr)
+            sys.exit(3)
+        if r["status"] == "closed":
+            print(f"request closed: {r.get('close_reason')}", file=sys.stderr)
+            sys.exit(3)
         if time.time() >= deadline:
             print(f"timed out after {args.timeout}s waiting for a decision", file=sys.stderr)
             sys.exit(2)

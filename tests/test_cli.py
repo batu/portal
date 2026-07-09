@@ -702,6 +702,38 @@ def test_supersede_client_error_exits_1(monkeypatch, capsys):
     assert "error: HTTP 409: request already closed: req_old" in capsys.readouterr().err
 
 
+def test_wait_exits_3_when_request_closed(monkeypatch, capsys):
+    monkeypatch.setattr(cli.config, "client_config", lambda: ("http://gallery", "tok"))
+    monkeypatch.setattr(
+        cli.client,
+        "get_json",
+        lambda base_url, token, path: {"status": "closed", "close_reason": "stale"},
+    )
+    monkeypatch.setattr("sys.argv", ["portal", "wait", "req_abc", "--timeout", "5"])
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+
+    assert exc.value.code == 3
+    assert "request closed: stale" in capsys.readouterr().err
+
+
+def test_wait_exits_3_when_request_superseded(monkeypatch, capsys):
+    monkeypatch.setattr(cli.config, "client_config", lambda: ("http://gallery", "tok"))
+    monkeypatch.setattr(
+        cli.client,
+        "get_json",
+        lambda base_url, token, path: {"status": "superseded", "superseded_by": "req_new"},
+    )
+    monkeypatch.setattr("sys.argv", ["portal", "wait", "req_abc", "--timeout", "5"])
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+
+    assert exc.value.code == 3
+    assert "request superseded; live version: req_new" in capsys.readouterr().err
+
+
 def test_report_posts_report_with_html_and_assets(monkeypatch, tmp_path, capsys):
     html = tmp_path / "report.html"
     asset = tmp_path / "asset.png"
