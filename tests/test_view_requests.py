@@ -127,3 +127,19 @@ def test_view_wait_shape_via_api_verdict(client, token):
     resp = client.post(f"/api/requests/{req_id}/verdict", json={"payload": payload}, headers=auth_headers(token))
     assert resp.status_code == 200
     assert json.loads(json.dumps(resp.json()["payload"])) == payload
+
+
+def test_producer_html_gets_home_pill(client, token):
+    req_id = _create_view(client, token).json()["id"]
+    resp = client.get(f"/media/{req_id}/01_picker.html", params={"token": token})
+    assert 'href="/"' in resp.text and "Portal</a>" in resp.text
+
+    resp = client.post(
+        "/api/streams/reports/posts",
+        data={"type": "report", "title": "r", "author": "a"},
+        files=[("files", ("report.html", b"<html><body><p>hi</p></body></html>", "text/html"))],
+        headers=auth_headers(token),
+    )
+    post_id = resp.json()["post"]["id"]
+    resp = client.get(f"/media/{post_id}/01_report.html", params={"token": token})
+    assert 'href="/"' in resp.text and "Portal</a>" in resp.text

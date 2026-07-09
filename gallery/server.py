@@ -175,6 +175,29 @@ def _is_text_html(media_type: str | None) -> bool:
     return bool(media_type and media_type.split(";", 1)[0].strip().lower() == "text/html")
 
 
+# Producer HTML (views, report pages) owns the whole tab and bypasses Portal's
+# templates, so it gets no breadcrumbs. Inject a small fixed "Portal" home pill
+# so every producer page has a way back to the index (Batu, 2026-07-09).
+_HOME_PILL = (
+    b'<a href="/" style="position:fixed;left:12px;bottom:12px;z-index:2147483647;'
+    b'background:rgba(20,22,27,.82);color:#f4c542;font:600 13px/1 -apple-system,'
+    b'BlinkMacSystemFont,sans-serif;padding:8px 14px;border-radius:999px;'
+    b'text-decoration:none;border:1px solid rgba(244,197,66,.5);'
+    b'backdrop-filter:blur(4px)">\xe2\x86\x90 Portal</a>'
+)
+
+
+def _html_with_home_pill(path, media_type: str, headers: dict):
+    raw = path.read_bytes()
+    lower = raw.lower()
+    idx = lower.rfind(b"</body>")
+    if idx != -1:
+        raw = raw[:idx] + _HOME_PILL + raw[idx:]
+    else:
+        raw = raw + _HOME_PILL
+    return HTMLResponse(content=raw, media_type=media_type, headers=headers)
+
+
 def _report_html_media_type(owner_id: str, filename: str, guessed_media_type: str | None) -> str | None:
     post = db.get_post(owner_id)
     if post is None or post.get("type") != "report":
@@ -787,10 +810,10 @@ def get_media(request: Request, req_id: str, filename: str):
     )
     if report_html_type is not None:
         headers["Content-Security-Policy"] = "sandbox allow-same-origin"
-        return FileResponse(path, media_type=report_html_type, headers=headers)
+        return _html_with_home_pill(path, report_html_type, headers)
     if _view_html_media_type(req_id, filename):
         headers["Content-Security-Policy"] = VIEW_HTML_CSP
-        return FileResponse(path, media_type="text/html", headers=headers)
+        return _html_with_home_pill(path, "text/html", headers)
     if browser_safe_media:
         return FileResponse(path, media_type=media_type, headers=headers)
     return FileResponse(

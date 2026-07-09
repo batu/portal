@@ -173,7 +173,10 @@ def test_stream_page_renders_report_and_decision_posts_newest_first(client, toke
     media = client.get(media_url)
     assert media.status_code == 200
     assert media.headers["x-content-type-options"] == "nosniff"
-    assert media.content == b"<html><body>Report pass</body></html>"
+    # Producer HTML is served with the injected home pill (nav back to index),
+    # so the round-trip is original-content-plus-pill, not byte-identical.
+    assert media.content.startswith(b"<html><body>Report pass")
+    assert b'href="/"' in media.content and media.content.endswith(b"</body></html>")
     assert "attachment" not in media.headers.get("content-disposition", "")
 
     decide = client.post(f"/api/requests/{req_id}/verdict", headers=auth_headers(token), json={"selected": [1]})
