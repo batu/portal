@@ -1,9 +1,10 @@
 {% extends "base.html" %}
-{% block title %}{{ r.title }} — Gallery{% endblock %}
+{% block title %}{{ r.title }} — Portal{% endblock %}
 {% block content %}
 {% set selectable_variants = r.kind in ["pick-one", "before-after", "pick-many", "rank"] %}
 {% set can_decide = r.status == "open" and not stream_read_only %}
 <section class="request-detail" data-req-id="{{ r.id }}" data-kind="{{ r.kind }}" data-status="{{ r.status }}"{% if before_media %} data-before-default-view="{{ before_media.default_view }}" data-can-decide="{{ 'true' if can_decide else 'false' }}"{% endif %}>
+  <a class="back-link" href="{{ back.href }}">&larr; {{ back.label }}</a>
   <h1>{{ r.title }}</h1>
   <div class="request-meta">
     {% if r.project %}<span class="tag">{{ r.project }}</span>{% endif %}
@@ -18,7 +19,7 @@
   {% if r.status == "decided" and r.verdict %}
   <div class="verdict-banner">
     <strong>Decided</strong> {{ r.decided_at|ago }} —
-    {% if r.verdict.selected %}selected: {{ r.verdict.selected|join(', ') }}{% else %}no selection{% endif %}
+    {% if r.kind == "view" %}view verdict recorded{% elif r.verdict.selected %}selected: {{ r.verdict.selected|join(', ') }}{% else %}no selection{% endif %}
     {% if r.verdict.comment %}<div class="verdict-comment">&ldquo;{{ r.verdict.comment }}&rdquo;</div>{% endif %}
   </div>
   {% endif %}
@@ -75,6 +76,18 @@
   </div>
   {% endif %}
 
+  {% if r.kind == "view" %}
+  {% if view_entry_url %}
+  <iframe
+    class="view-frame"
+    src="{{ view_entry_url }}?token={{ request.query_params.get('token', '') }}"
+    sandbox="allow-scripts allow-same-origin allow-forms"
+    style="width: 100%; min-height: 82vh; border: 0; border-radius: 8px; background: #000;"
+  ></iframe>
+  {% else %}
+  <div class="archive-note">This view request has no HTML entry file.</div>
+  {% endif %}
+  {% else %}
   <div class="variant-grid"{% if before_media %} data-candidate-grid{% endif %}>
     {% for v in r.variants %}
     <div class="variant" data-idx="{{ v.idx }}"{% if before_media and selectable_variants and can_decide %} tabindex="0" role="button" aria-pressed="false"{% endif %}>
@@ -95,8 +108,9 @@
     </div>
     {% endfor %}
   </div>
+  {% endif %}
 
-  {% if can_decide %}
+  {% if can_decide and r.kind != "view" %}
   <div class="decision-panel">
     {% if r.kind == "approve" %}
     <div class="approve-buttons">

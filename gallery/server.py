@@ -1,10 +1,12 @@
 """Gallery FastAPI app: JSON API + server-rendered web UI + media serving."""
 
+import asyncio
 import json
 import logging
 import math
 import mimetypes
 import re
+import secrets
 import shutil
 import sqlite3
 import threading
@@ -14,7 +16,7 @@ from urllib.parse import quote
 
 import markdown as md_lib
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
@@ -24,6 +26,10 @@ from . import config, db, notify
 log = logging.getLogger("gallery.server")
 
 VIDEO_EXTS = {".mp4", ".mov", ".webm", ".m4v", ".avi"}
+HTML_EXTS = {".html", ".htm"}
+# Interactive view HTML runs producer JS against the authed origin. Accepted for
+# the single-user tailnet deployment; revisit before any public exposure.
+VIEW_HTML_CSP = "sandbox allow-scripts allow-same-origin allow-forms"
 STREAM_KINDS = {"session", "pinned"}
 POST_TYPES = {"report", "decision"}
 POST_UPLOAD_SOFT_CAP_BYTES = 200 * 1024 * 1024
@@ -95,6 +101,44 @@ def _maybe_set_cookie(response, request: Request) -> None:
         response.set_cookie(COOKIE_NAME, qs_token, httponly=True, samesite="lax", max_age=3600 * 24 * 365)
 
 
+def _safe_next_path(value: str | None) -> str:
+    if isinstance(value, str) and value.startswith("/") and not value.startswith("//"):
+        return value
+    return "/"
+
+
+def _login_redirect(request: Request) -> RedirectResponse:
+    return RedirectResponse(url=f"/login?next={quote(request.url.path, safe='/')}", status_code=303)
+
+
+@app.get("/login", response_class=HTMLResponse)
+def web_login(request: Request, next: str | None = None):
+    if web_token_ok(request):
+        return RedirectResponse(url=_safe_next_path(next), status_code=303)
+    return templates.TemplateResponse(request, "login.html", {"error": None, "next_path": _safe_next_path(next)})
+
+
+@app.post("/login")
+async def web_login_submit(request: Request, password: str = Form(""), next: str = Form("/")):
+    # Humans may use the short config `passphrase`; the machine token also works.
+    # The cookie always carries the token, so web_token_ok stays single-source.
+    passphrase = config.load_config().get("passphrase") or ""
+    ok = secrets.compare_digest(password, _server_token()) or (
+        bool(passphrase) and secrets.compare_digest(password, passphrase)
+    )
+    if ok:
+        response = RedirectResponse(url=_safe_next_path(next), status_code=303)
+        response.set_cookie(COOKIE_NAME, _server_token(), httponly=True, samesite="lax", max_age=3600 * 24 * 365)
+        return response
+    await asyncio.sleep(0.3)  # blunt brute-force damper; the passphrase is short
+    return templates.TemplateResponse(
+        request,
+        "login.html",
+        {"error": "Wrong passphrase.", "next_path": _safe_next_path(next)},
+        status_code=401,
+    )
+
+
 # --- health (unauthenticated) ---
 
 
@@ -108,6 +152,8 @@ def health():
 
 def _media_type_for(filename: str) -> str:
     ext = Path(filename).suffix.lower()
+    if ext in HTML_EXTS:
+        return "html"
     return "video" if ext in VIDEO_EXTS else "image"
 
 
@@ -149,6 +195,31 @@ def _report_html_media_type(owner_id: str, filename: str, guessed_media_type: st
             return guessed_media_type
         return None
     return None
+
+
+def _view_entry_media_path(request_row: dict) -> str | None:
+    """First HTML variant of a view-kind request; None for other kinds."""
+    if request_row.get("kind") != "view":
+        return None
+    for variant in request_row.get("variants", []):
+        media_path = variant.get("media_path")
+        if (
+            isinstance(media_path, str)
+            and _safe_media_filename(media_path)
+            and Path(media_path).suffix.lower() in HTML_EXTS
+        ):
+            return media_path
+    return None
+
+
+def _view_html_media_type(owner_id: str, filename: str) -> bool:
+    """True when filename is an HTML variant of a view-kind request (serve scripted)."""
+    if Path(filename).suffix.lower() not in HTML_EXTS:
+        return False
+    request_row = db.get_request(owner_id)
+    if request_row is None or request_row.get("kind") != "view":
+        return False
+    return any(variant.get("media_path") == filename for variant in request_row.get("variants", []))
 
 
 def _before_media_path(filename: str | None) -> str:
@@ -351,6 +422,8 @@ async def create_request(
         raise HTTPException(status_code=400, detail=f"invalid kind: {kind}. Must be one of {db.KINDS}")
     if not files:
         raise HTTPException(status_code=400, detail="at least one file is required")
+    if kind == "view" and not any(Path(f.filename or "").suffix.lower() in HTML_EXTS for f in files):
+        raise HTTPException(status_code=400, detail="view requests require an HTML entry file")
 
     manifest_map = {}
     if manifest:
@@ -645,17 +718,27 @@ def _apply_verdict(req_id: str, body: dict) -> dict:
     selected = body.get("selected", [])
     ratings = body.get("ratings")
     comment = body.get("comment")
+    payload = None
 
     if not isinstance(selected, list) or not all(isinstance(i, int) for i in selected):
         raise HTTPException(status_code=400, detail="selected must be a list of integers")
 
-    valid_indices = db.variant_indices(req_id)
-    bad = [i for i in selected if i not in valid_indices]
-    if bad:
-        raise HTTPException(status_code=400, detail=f"selected indices not found on this request: {bad}")
+    if r.get("kind") == "view":
+        # View verdicts are opaque producer-defined JSON; Portal stores, never interprets.
+        if "payload" not in body:
+            raise HTTPException(status_code=400, detail="view verdicts require a payload field")
+        payload = body["payload"]
+        _validate_json_response_safe(payload)
+        if len(json.dumps(payload).encode("utf-8")) > MAX_BODY_JSON_BYTES:
+            raise HTTPException(status_code=400, detail="payload JSON is too large")
+    else:
+        valid_indices = db.variant_indices(req_id)
+        bad = [i for i in selected if i not in valid_indices]
+        if bad:
+            raise HTTPException(status_code=400, detail=f"selected indices not found on this request: {bad}")
 
     try:
-        return db.record_verdict(req_id, selected, ratings, comment)
+        return db.record_verdict(req_id, selected, ratings, comment, payload=payload)
     except ValueError as exc:
         detail = str(exc)
         status = 409 if "closed" in detail else 400
@@ -705,6 +788,9 @@ def get_media(request: Request, req_id: str, filename: str):
     if report_html_type is not None:
         headers["Content-Security-Policy"] = "sandbox allow-same-origin"
         return FileResponse(path, media_type=report_html_type, headers=headers)
+    if _view_html_media_type(req_id, filename):
+        headers["Content-Security-Policy"] = VIEW_HTML_CSP
+        return FileResponse(path, media_type="text/html", headers=headers)
     if browser_safe_media:
         return FileResponse(path, media_type=media_type, headers=headers)
     return FileResponse(
@@ -989,7 +1075,7 @@ def _list_stream_summaries() -> list[dict]:
 @app.get("/", response_class=HTMLResponse)
 def web_index(request: Request, q: str | None = None):
     if not web_token_ok(request):
-        raise HTTPException(status_code=401, detail="missing or invalid token")
+        return _login_redirect(request)
     open_requests = db.list_requests(status="open")
     decided = db.list_requests(status="decided", q=q)
     streams = _list_stream_summaries()
@@ -1005,7 +1091,7 @@ def web_index(request: Request, q: str | None = None):
 @app.get("/s/{slug}", response_class=HTMLResponse)
 def web_stream_detail(request: Request, slug: str):
     if not web_token_ok(request):
-        raise HTTPException(status_code=401, detail="missing or invalid token")
+        return _login_redirect(request)
     _validate_slug(slug)
     stream = db.get_stream_with_posts(slug)
     if stream is None:
@@ -1050,7 +1136,7 @@ async def web_stream_answer(request: Request, slug: str):
 @app.get("/r/{req_id}", response_class=HTMLResponse)
 def web_request_detail(request: Request, req_id: str):
     if not web_token_ok(request):
-        raise HTTPException(status_code=401, detail="missing or invalid token")
+        return _login_redirect(request)
     r = db.get_request(req_id)
     if r is None:
         raise HTTPException(status_code=404, detail="request not found")
@@ -1058,6 +1144,14 @@ def web_request_detail(request: Request, req_id: str):
     context_html = md_lib.markdown(r["context_md"]) if r.get("context_md") else ""
     stream_read_only = _request_stream_closed(r)
     before_media = _before_media_context(r)
+    view_entry = _view_entry_media_path(r)
+    back = {"href": "/", "label": "Home"}
+    if r.get("stream_id"):
+        conn = db.connect()
+        with db._lock:
+            row = conn.execute("SELECT slug, title FROM streams WHERE id = ?", (r["stream_id"],)).fetchone()
+        if row is not None:
+            back = {"href": f"/s/{quote(row['slug'], safe='')}", "label": row["title"] or row["slug"]}
 
     response = templates.TemplateResponse(
         request,
@@ -1067,6 +1161,8 @@ def web_request_detail(request: Request, req_id: str):
             "context_html": context_html,
             "stream_read_only": stream_read_only,
             "before_media": before_media,
+            "view_entry_url": _media_url(r["id"], view_entry) if view_entry else None,
+            "back": back,
         },
     )
     _maybe_set_cookie(response, request)

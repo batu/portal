@@ -11,7 +11,7 @@ wait for verdicts.
 ## Install
 
 ```bash
-uv tool install --editable /Users/base/dev/appletolye/gallery
+uv tool install --editable /Users/base/dev/appletolye/portal
 gallery init
 ```
 

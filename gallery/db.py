@@ -15,7 +15,7 @@ from pathlib import Path
 
 from . import config
 
-KINDS = ("pick-one", "pick-many", "rank", "approve", "comment", "before-after")
+KINDS = ("pick-one", "pick-many", "rank", "approve", "comment", "before-after", "view")
 MESSAGE_DIRECTIONS = ("to_agent", "to_human")
 STREAM_SLUG_MAX_LENGTH = 128
 PROJECT_STREAM_PREFIX = "proj-"
@@ -167,6 +167,8 @@ def _validate_schema_version(conn: sqlite3.Connection, version: int) -> None:
         _validate_v1_schema(conn)
     if version >= 2:
         _validate_v2_schema(conn)
+    if version >= 3:
+        _validate_v3_schema(conn)
 
 
 def _migrate_v1(conn: sqlite3.Connection) -> None:
@@ -218,7 +220,17 @@ def _migrate_v2(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_stream_unconsumed ON messages(stream_id, consumed_at, created_at)")
 
 
-MIGRATIONS = [(1, _migrate_v1), (2, _migrate_v2)]
+def _migrate_v3(conn: sqlite3.Connection) -> None:
+    _add_column_if_missing(conn, "verdicts", "payload_json", "payload_json TEXT")
+
+
+def _validate_v3_schema(conn: sqlite3.Connection) -> None:
+    missing = {"payload_json"} - _column_names(conn, "verdicts")
+    if missing:
+        raise RuntimeError("schema v3 missing verdicts columns: payload_json")
+
+
+MIGRATIONS = [(1, _migrate_v1), (2, _migrate_v2), (3, _migrate_v3)]
 
 
 def _user_version(conn: sqlite3.Connection) -> int:
@@ -799,6 +811,7 @@ def _get_latest_verdict(conn: sqlite3.Connection, req_id: str) -> dict | None:
     d = dict(row)
     d["selected"] = json.loads(d.pop("selected_indices"))
     d["ratings"] = json.loads(d.pop("ratings_json")) if d.get("ratings_json") else None
+    d["payload"] = json.loads(d.pop("payload_json")) if d.get("payload_json") else None
     return d
 
 
@@ -809,7 +822,13 @@ def variant_indices(req_id: str) -> set[int]:
     return {r["idx"] for r in rows}
 
 
-def record_verdict(req_id: str, selected: list[int], ratings: dict | None, comment: str | None) -> dict:
+def record_verdict(
+    req_id: str,
+    selected: list[int],
+    ratings: dict | None,
+    comment: str | None,
+    payload: object | None = None,
+) -> dict:
     """Insert a new verdict revision and mark the request decided. Latest verdict wins."""
     conn = connect()
     with _lock:
@@ -817,9 +836,16 @@ def record_verdict(req_id: str, selected: list[int], ratings: dict | None, comme
         if request is not None and request["stream_id"] is not None:
             _require_open_stream(conn, request["stream_id"])
         conn.execute(
-            "INSERT INTO verdicts (request_id, selected_indices, ratings_json, comment, created_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (req_id, json.dumps(selected), json.dumps(ratings) if ratings is not None else None, comment, now_iso()),
+            "INSERT INTO verdicts (request_id, selected_indices, ratings_json, comment, payload_json, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                req_id,
+                json.dumps(selected),
+                json.dumps(ratings) if ratings is not None else None,
+                comment,
+                json.dumps(payload) if payload is not None else None,
+                now_iso(),
+            ),
         )
         conn.execute(
             "UPDATE requests SET status = 'decided', decided_at = ? WHERE id = ?",

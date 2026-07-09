@@ -124,12 +124,13 @@ def _variant():
     return {"media_path": "01_a.png", "media_type": "image", "caption": "A", "meta": {"score": 1}}
 
 
-def test_fresh_db_has_portal_schema_v2(data_dir):
+def test_fresh_db_has_portal_schema_v3(data_dir):
     conn = db.connect()
 
-    assert _user_version(conn) == 2
+    assert _user_version(conn) == 3
     assert {"requests", "variants", "verdicts", "streams", "posts", "messages"} <= _table_names(conn)
     assert {"stream_id", "before_media_path", "before_media_type"} <= _column_names(conn, "requests")
+    assert "payload_json" in _column_names(conn, "verdicts")
     assert {"id", "stream_id", "direction", "text", "created_at", "consumed_at"} <= _column_names(conn, "messages")
     assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
     assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
@@ -163,7 +164,7 @@ def test_legacy_db_upgrade_preserves_existing_rows(data_dir):
 
     conn = db.connect()
 
-    assert _user_version(conn) == 2
+    assert _user_version(conn) == 3
     assert {"streams", "posts", "messages"} <= _table_names(conn)
     assert {"stream_id", "before_media_path", "before_media_type"} <= _column_names(conn, "requests")
     assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
@@ -218,7 +219,7 @@ def test_user_version_one_db_upgrades_to_v2_and_preserves_portal_rows(data_dir):
 
     conn = db.connect()
 
-    assert _user_version(conn) == 2
+    assert _user_version(conn) == 3
     assert "messages" in _table_names(conn)
     assert _column_names(conn, "messages") == {"id", "stream_id", "direction", "text", "created_at", "consumed_at"}
     assert _rows(conn, "SELECT id, slug, kind, title, created_at, closed_at FROM streams ORDER BY id") == [
@@ -264,7 +265,7 @@ def test_reconnecting_migrated_db_is_noop(data_dir):
         table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
         for table in ("requests", "variants", "verdicts", "streams", "posts", "messages")
     }
-    assert _user_version(conn) == 2
+    assert _user_version(conn) == 3
     assert after == before
 
 
@@ -283,7 +284,7 @@ def test_partial_v1_db_completes_migration(data_dir):
 
     conn = db.connect()
 
-    assert _user_version(conn) == 2
+    assert _user_version(conn) == 3
     assert {"stream_id", "before_media_path", "before_media_type"} <= _column_names(conn, "requests")
     assert "posts" in _table_names(conn)
     assert "messages" in _table_names(conn)
@@ -344,7 +345,7 @@ def test_failed_migration_rolls_back_and_connect_can_retry(data_dir, monkeypatch
 
     monkeypatch.setattr(db, "MIGRATIONS", original_migrations)
     conn = db.connect()
-    assert _user_version(conn) == 2
+    assert _user_version(conn) == 3
     assert {"streams", "posts", "messages"} <= _table_names(conn)
 
 

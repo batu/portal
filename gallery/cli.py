@@ -419,7 +419,8 @@ def main():
     p.add_argument(
         "--kind",
         required=True,
-        choices=["pick-one", "pick-many", "rank", "approve", "comment", "before-after"],
+        choices=["pick-one", "pick-many", "rank", "approve", "comment", "before-after", "view"],
+        help="Decision kind; 'view' posts an interactive HTML view (first .html file is the entry) whose verdict is opaque JSON",
     )
     p.add_argument("--project", default=None)
     p.add_argument("--stream", default=None, type=_stream_slug, help="Also attach this decision request to a Portal stream")
