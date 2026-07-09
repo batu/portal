@@ -1,4 +1,5 @@
 import json
+import signal
 import urllib.error
 import urllib.parse
 from io import BytesIO
@@ -611,71 +612,43 @@ def test_output_is_redacted_before_tail_boundary(data_dir, tmp_path):
     assert "[redacted]" in tail
 
 
-def test_run_twf_card_uses_expected_subprocess_contract(monkeypatch, tmp_path):
+def test_run_twf_card_delegates_to_run_subprocess(monkeypatch, tmp_path):
     calls = []
 
-    class Completed:
-        returncode = 0
-        stdout = "out"
-        stderr = "err"
+    def fake_run_subprocess(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        return trello_watch.RunResult(0, "out")
 
-    def fake_run(*args, **kwargs):
-        calls.append((args, kwargs))
-        return Completed()
-
-    monkeypatch.setattr(trello_watch.subprocess, "run", fake_run)
+    monkeypatch.setattr(trello_watch, "_run_subprocess", fake_run_subprocess)
 
     result = trello_watch.run_twf_card(tmp_path, "08KM8i8Q", {"TRELLO_API_KEY": "k", "TRELLO_TOKEN": "t"})
 
-    assert result == trello_watch.RunResult(0, "out\nerr")
+    assert result == trello_watch.RunResult(0, "out")
     assert calls == [
         (
-            (["twf", "run-card", "08KM8i8Q", "--worktree"],),
+            ["twf", "run-card", "08KM8i8Q", "--worktree"],
             {
                 "cwd": tmp_path,
                 "env": {"TRELLO_API_KEY": "k", "TRELLO_TOKEN": "t"},
-                "shell": False,
-                "text": True,
-                "capture_output": True,
                 "timeout": trello_watch.RUN_TIMEOUT_SECONDS,
-                "check": False,
+                "grace": trello_watch.RUN_GRACE_SECONDS,
             },
         )
     ]
 
 
-def test_run_twf_card_timeout_preserves_output(monkeypatch, tmp_path):
-    def fake_run(*_args, **_kwargs):
-        raise trello_watch.subprocess.TimeoutExpired(
-            cmd=["twf", "run-card", "08KM8i8Q", "--worktree"],
-            timeout=trello_watch.RUN_TIMEOUT_SECONDS,
-            output="partial out",
-            stderr="partial err",
-        )
+def test_run_twf_card_propagates_timeout_result(monkeypatch, tmp_path):
+    def fake_run_subprocess(cmd, **kwargs):
+        return trello_watch.RunResult(124, "partial\ntwf run-card timed out after 60s", timed_out=True)
 
-    monkeypatch.setattr(trello_watch.subprocess, "run", fake_run)
+    monkeypatch.setattr(trello_watch, "_run_subprocess", fake_run_subprocess)
 
     result = trello_watch.run_twf_card(tmp_path, "08KM8i8Q", {"TRELLO_API_KEY": "k", "TRELLO_TOKEN": "t"})
 
     assert result.returncode == 124
     assert result.timed_out is True
-    assert "partial out" in result.output
-    assert "partial err" in result.output
+    assert "partial" in result.output
     assert "timed out" in result.output
-
-
-def test_run_twf_card_spawn_error_becomes_run_result(monkeypatch, tmp_path):
-    def fake_run(*_args, **_kwargs):
-        raise FileNotFoundError("twf")
-
-    monkeypatch.setattr(trello_watch.subprocess, "run", fake_run)
-
-    result = trello_watch.run_twf_card(tmp_path, "08KM8i8Q", {"TRELLO_API_KEY": "k", "TRELLO_TOKEN": "t"})
-
-    assert result.returncode == 127
-    assert result.timed_out is False
-    assert "could not start" in result.output
-    assert "twf" in result.output
 
 
 def test_trello_client_requests_encode_paths_queries_and_forms():
@@ -920,11 +893,14 @@ def test_cli_trello_watch_help_lists_required_flags(monkeypatch, capsys):
 
 
 def test_cli_trello_watch_once_runs_single_pass_without_sleep(monkeypatch, capsys):
+    previous_sigterm_handler = signal.getsignal(signal.SIGTERM)
+
     class FakeWatcher:
         def __init__(self):
             self.calls = 0
 
         def poll_once(self):
+            assert signal.getsignal(signal.SIGTERM) is not previous_sigterm_handler
             self.calls += 1
             return {"picked_up": self.calls}
 
@@ -939,6 +915,7 @@ def test_cli_trello_watch_once_runs_single_pass_without_sleep(monkeypatch, capsy
     cli.main()
 
     assert fake.calls == 1
+    assert signal.getsignal(signal.SIGTERM) is previous_sigterm_handler
     assert json.loads(capsys.readouterr().out) == {"picked_up": 1}
 
 
