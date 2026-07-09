@@ -101,15 +101,15 @@ def test_non_view_verdict_has_no_payload(client, token):
     assert resp.json()["payload"] is None
 
 
-def test_view_request_page_embeds_sandboxed_iframe(client, token):
+def test_view_request_page_redirects_to_entry_html(client, token):
     req_id = _create_view(client, token).json()["id"]
-    resp = client.get(f"/r/{req_id}", params={"token": token})
+    resp = client.get(f"/r/{req_id}", params={"token": token}, follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"] == f"/media/{req_id}/01_picker.html?token={token}"
+
+    resp = client.get(f"/r/{req_id}", params={"token": token}, follow_redirects=True)
     assert resp.status_code == 200
-    page = resp.text
-    assert '<iframe' in page
-    assert 'sandbox="allow-scripts allow-same-origin allow-forms"' in page
-    assert f"/media/{req_id}/01_picker.html" in page
-    assert "decide-btn" not in page  # the view owns deciding; no stock decision panel
+    assert resp.headers["content-security-policy"] == VIEW_CSP
 
 
 def test_view_verdict_payload_size_capped(client, token):

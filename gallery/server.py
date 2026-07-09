@@ -1145,6 +1145,14 @@ def web_request_detail(request: Request, req_id: str):
     stream_read_only = _request_stream_closed(r)
     before_media = _before_media_context(r)
     view_entry = _view_entry_media_path(r)
+    if view_entry is not None:
+        # A view owns the whole tab — no iframe box. Cookie auth carries over;
+        # forward an explicit ?token= so first-visit links still work.
+        qs_token = request.query_params.get("token")
+        suffix = f"?token={quote(qs_token, safe='')}" if qs_token else ""
+        response = RedirectResponse(url=f"{_media_url(r['id'], view_entry)}{suffix}", status_code=303)
+        _maybe_set_cookie(response, request)
+        return response
     back = {"href": "/", "label": "Home"}
     if r.get("stream_id"):
         conn = db.connect()
