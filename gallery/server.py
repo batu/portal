@@ -91,6 +91,7 @@ class _ContextSanitizer(HTMLParser):
         super().__init__(convert_charrefs=True)
         self._parts: list[str] = []
         self._open_tags: list[str] = []
+        self._open_tag_counts: dict[str, int] = {}
         self._skip_depth = 0
         self._finished = False
 
@@ -103,6 +104,7 @@ class _ContextSanitizer(HTMLParser):
         self._parts.append(self._render_open(tag, attrs))
         if tag not in _CONTEXT_VOID_TAGS:
             self._open_tags.append(tag)
+            self._open_tag_counts[tag] = self._open_tag_counts.get(tag, 0) + 1
 
     def handle_startendtag(self, tag: str, attrs: list) -> None:
         if tag in _CONTEXT_DROP_CONTENT_TAGS or self._skip_depth:
@@ -120,15 +122,14 @@ class _ContextSanitizer(HTMLParser):
             return
         if self._skip_depth or tag not in _CONTEXT_ALLOWED_TAGS:
             return
-        if tag in _CONTEXT_VOID_TAGS or tag not in self._open_tags:
+        if tag in _CONTEXT_VOID_TAGS or self._open_tag_counts.get(tag, 0) == 0:
             return
         # Close any elements nested inside the requested end tag first. This
         # turns malformed input such as ``<p><a>text</p>`` into a balanced
         # fragment rather than allowing the browser's active-formatting repair
         # rules to extend the attacker-controlled link past the context block.
         while self._open_tags:
-            open_tag = self._open_tags.pop()
-            self._parts.append(f"</{open_tag}>")
+            open_tag = self._close_last_open_tag()
             if open_tag == tag:
                 break
 
@@ -150,10 +151,20 @@ class _ContextSanitizer(HTMLParser):
             rendered.append(f' {name}="{html_lib.escape(value, quote=True)}"')
         return f"<{tag}{''.join(rendered)}>"
 
+    def _close_last_open_tag(self) -> str:
+        tag = self._open_tags.pop()
+        remaining = self._open_tag_counts[tag] - 1
+        if remaining:
+            self._open_tag_counts[tag] = remaining
+        else:
+            del self._open_tag_counts[tag]
+        self._parts.append(f"</{tag}>")
+        return tag
+
     def get_html(self) -> str:
         if not self._finished:
             while self._open_tags:
-                self._parts.append(f"</{self._open_tags.pop()}>")
+                self._close_last_open_tag()
             self._finished = True
         return "".join(self._parts)
 

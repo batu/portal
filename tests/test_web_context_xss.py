@@ -6,7 +6,7 @@ These exercise the real `/r/{req_id}` render path (Markdown -> sanitizer ->
 
 import pytest
 
-from gallery.server import _sanitize_context_html
+from gallery.server import _ContextSanitizer, _sanitize_context_html
 
 
 def auth_headers(token):
@@ -185,3 +185,29 @@ def test_balancing_keeps_attribute_and_url_filtering_intact():
     )
 
     assert out == '<a title="safe">link<img alt="safe"></a>'
+
+
+def test_many_unmatched_allowed_closing_tags_do_not_scan_open_stack():
+    class NoScanList(list):
+        def __contains__(self, item):
+            raise AssertionError("open-tag membership must not scan the stack")
+
+        def count(self, item):
+            raise AssertionError("open-tag counts must not scan the stack")
+
+        def index(self, item, *args):
+            raise AssertionError("open-tag lookup must not scan the stack")
+
+    parser = _ContextSanitizer()
+    open_tag_count = 512
+    unmatched_close_count = 4_096
+    parser.feed("<p>" * open_tag_count)
+    # Instrument the stack after it has been populated. Appending/popping stay
+    # available for normal stack-order balancing, but any linear lookup fails
+    # deterministically instead of relying on a wall-clock performance limit.
+    parser._open_tags = NoScanList(parser._open_tags)
+    parser.feed("</a>" * unmatched_close_count)
+    parser.close()
+
+    out = parser.get_html()
+    assert out == "<p>" * open_tag_count + "</p>" * open_tag_count
