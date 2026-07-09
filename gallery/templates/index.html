@@ -70,4 +70,25 @@
     </ul>
   </details>
 </section>
+
+<section>
+  <details>
+    <summary><h2 style="display:inline">Closed &amp; superseded ({{ retired|length }})</h2></summary>
+    <ul class="request-list retired">
+      {% for r in retired %}
+      <li>
+        <a class="request-card" href="/r/{{ r.id }}">
+          <div class="request-title">{{ r.title }}</div>
+          <div class="request-meta">
+            {% if r.project %}<span class="tag">{{ r.project }}</span>{% endif %}
+            <span class="tag kind">{{ r.kind }}</span>
+            <span class="tag status">{{ r.status }}</span>
+            <span class="age">{{ r.created_at|ago }}</span>
+          </div>
+        </a>
+      </li>
+      {% endfor %}
+    </ul>
+  </details>
+</section>
 {% endblock %}

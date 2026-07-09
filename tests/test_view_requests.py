@@ -83,7 +83,11 @@ def test_view_verdict_requires_payload(client, token):
 def test_view_verdict_payload_latest_wins(client, token):
     req_id = _create_view(client, token).json()["id"]
     client.post(f"/r/{req_id}/decide", json={"payload": {"frames": []}}, params={"token": token})
-    client.post(f"/r/{req_id}/decide", json={"payload": {"frames": [{"t": 1.0}]}}, params={"token": token})
+    client.post(
+        f"/r/{req_id}/decide",
+        json={"payload": {"frames": [{"t": 1.0}]}, "redecide": True},
+        params={"token": token},
+    )
     verdict = db.get_latest_verdict(req_id)
     assert verdict["payload"] == {"frames": [{"t": 1.0}]}
 

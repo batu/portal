@@ -127,9 +127,10 @@ def _variant():
 def test_fresh_db_has_portal_schema_v3(data_dir):
     conn = db.connect()
 
-    assert _user_version(conn) == 3
+    assert _user_version(conn) == 4
     assert {"requests", "variants", "verdicts", "streams", "posts", "messages"} <= _table_names(conn)
     assert {"stream_id", "before_media_path", "before_media_type"} <= _column_names(conn, "requests")
+    assert {"superseded_by", "close_reason"} <= _column_names(conn, "requests")
     assert "payload_json" in _column_names(conn, "verdicts")
     assert {"id", "stream_id", "direction", "text", "created_at", "consumed_at"} <= _column_names(conn, "messages")
     assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
@@ -164,7 +165,7 @@ def test_legacy_db_upgrade_preserves_existing_rows(data_dir):
 
     conn = db.connect()
 
-    assert _user_version(conn) == 3
+    assert _user_version(conn) == 4
     assert {"streams", "posts", "messages"} <= _table_names(conn)
     assert {"stream_id", "before_media_path", "before_media_type"} <= _column_names(conn, "requests")
     assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
@@ -184,10 +185,13 @@ def test_legacy_db_upgrade_preserves_existing_rows(data_dir):
         "FROM verdicts ORDER BY id",
     ) == legacy_rows["verdicts"]
 
+    assert {"superseded_by", "close_reason"} <= _column_names(conn, "requests")
     request = db.get_request("req_old")
     assert request["title"] == "Old request"
     assert request["project"] == "legacy/project"
     assert request["stream_id"] is None
+    assert request["superseded_by"] is None
+    assert request["close_reason"] is None
     assert request["before_media_path"] is None
     assert request["variants"][0]["meta"] == {"score": 1}
     assert request["variants"][1]["meta"] is None
@@ -219,7 +223,7 @@ def test_user_version_one_db_upgrades_to_v2_and_preserves_portal_rows(data_dir):
 
     conn = db.connect()
 
-    assert _user_version(conn) == 3
+    assert _user_version(conn) == 4
     assert "messages" in _table_names(conn)
     assert _column_names(conn, "messages") == {"id", "stream_id", "direction", "text", "created_at", "consumed_at"}
     assert _rows(conn, "SELECT id, slug, kind, title, created_at, closed_at FROM streams ORDER BY id") == [
@@ -265,7 +269,7 @@ def test_reconnecting_migrated_db_is_noop(data_dir):
         table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
         for table in ("requests", "variants", "verdicts", "streams", "posts", "messages")
     }
-    assert _user_version(conn) == 3
+    assert _user_version(conn) == 4
     assert after == before
 
 
@@ -284,7 +288,7 @@ def test_partial_v1_db_completes_migration(data_dir):
 
     conn = db.connect()
 
-    assert _user_version(conn) == 3
+    assert _user_version(conn) == 4
     assert {"stream_id", "before_media_path", "before_media_type"} <= _column_names(conn, "requests")
     assert "posts" in _table_names(conn)
     assert "messages" in _table_names(conn)
@@ -345,7 +349,7 @@ def test_failed_migration_rolls_back_and_connect_can_retry(data_dir, monkeypatch
 
     monkeypatch.setattr(db, "MIGRATIONS", original_migrations)
     conn = db.connect()
-    assert _user_version(conn) == 3
+    assert _user_version(conn) == 4
     assert {"streams", "posts", "messages"} <= _table_names(conn)
 
 
@@ -708,6 +712,58 @@ def test_create_request_rolls_back_dual_write_failure(data_dir, monkeypatch):
     assert db.get_stream(db._stream_slug_for_project("project/fail")) is None
     assert conn.execute("SELECT COUNT(*) FROM variants WHERE request_id = 'req_fail'").fetchone()[0] == 0
     assert conn.execute("SELECT COUNT(*) FROM posts").fetchone()[0] == 0
+
+
+def test_close_request_sets_status_and_reason_without_verdict(data_dir):
+    db.create_request("req_close", "Close me", None, "pick-one", None, [_variant()])
+
+    closed = db.close_request("req_close", "stale")
+
+    assert closed["status"] == "closed"
+    assert closed["close_reason"] == "stale"
+    assert closed["verdict"] is None
+    assert db.count_verdicts("req_close") == 0
+    assert db.get_request("req_close")["status"] == "closed"
+
+
+def test_supersede_request_sets_status_and_successor(data_dir):
+    db.create_request("req_old_sup", "Old", None, "pick-one", None, [_variant()])
+    db.create_request("req_new_sup", "New", None, "pick-one", None, [_variant()])
+
+    superseded = db.supersede_request("req_old_sup", "req_new_sup")
+
+    assert superseded["status"] == "superseded"
+    assert superseded["superseded_by"] == "req_new_sup"
+    assert db.get_request("req_old_sup")["superseded_by"] == "req_new_sup"
+
+
+def test_close_and_supersede_reject_invalid_transitions(data_dir):
+    db.create_request("req_lc", "Lifecycle", None, "pick-one", None, [_variant()])
+    db.create_request("req_succ", "Successor", None, "pick-one", None, [_variant()])
+
+    with pytest.raises(ValueError, match="request not found"):
+        db.close_request("req_missing", "gone")
+    with pytest.raises(ValueError, match="request not found"):
+        db.supersede_request("req_missing", "req_succ")
+    with pytest.raises(ValueError, match="successor not found"):
+        db.supersede_request("req_lc", "req_absent")
+    with pytest.raises(ValueError, match="cannot supersede itself"):
+        db.supersede_request("req_lc", "req_lc")
+
+    db.close_request("req_lc", "done")
+    with pytest.raises(ValueError, match="already closed"):
+        db.close_request("req_lc", "again")
+    with pytest.raises(ValueError, match="already closed"):
+        db.supersede_request("req_lc", "req_succ")
+
+
+def test_count_verdicts_tracks_revisions(data_dir):
+    db.create_request("req_cv", "Count", None, "pick-one", None, [_variant()])
+    assert db.count_verdicts("req_cv") == 0
+    db.record_verdict("req_cv", [1], None, "first")
+    assert db.count_verdicts("req_cv") == 1
+    db.record_verdict("req_cv", [1], None, "second")
+    assert db.count_verdicts("req_cv") == 2
 
 
 def test_public_reads_do_not_observe_uncommitted_rows_before_rollback(data_dir, monkeypatch):

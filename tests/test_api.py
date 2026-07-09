@@ -78,11 +78,11 @@ def test_create_list_get_decide_flow(client, token):
     assert detail2.json()["status"] == "decided"
     assert detail2.json()["verdict"]["selected"] == [2]
 
-    # re-posting revises the verdict, request stays decided
+    # re-posting revises the verdict, request stays decided (redecide flag required)
     revise = client.post(
         f"/api/requests/{req_id}/verdict",
         headers=auth_headers(token),
-        json={"selected": [1, 3]},
+        json={"selected": [1, 3], "redecide": True},
     )
     assert revise.status_code == 200
     detail3 = client.get(f"/api/requests/{req_id}", headers=auth_headers(token))
@@ -314,6 +314,157 @@ def test_web_index_requires_token(client, token):
     resp = client.get(f"/?token={token}", follow_redirects=False)
     assert resp.status_code == 200
     assert "gallery_token" in resp.cookies
+
+
+def _create_request(client, token, kind="pick-one", n=2, title="t"):
+    resp = client.post(
+        "/api/requests",
+        headers=auth_headers(token),
+        data={"title": title, "kind": kind},
+        files=_upload_files(n),
+    )
+    assert resp.status_code == 200
+    return resp.json()["id"]
+
+
+def test_close_request_sets_status_and_reason(client, token):
+    req_id = _create_request(client, token)
+    resp = client.post(
+        f"/api/requests/{req_id}/close",
+        headers=auth_headers(token),
+        json={"reason": "stale queue"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "closed"
+    assert resp.json()["close_reason"] == "stale queue"
+
+    detail = client.get(f"/api/requests/{req_id}", headers=auth_headers(token))
+    assert detail.json()["status"] == "closed"
+    assert detail.json()["verdict"] is None
+
+
+def test_close_requires_auth_and_reason(client, token):
+    req_id = _create_request(client, token)
+    assert client.post(f"/api/requests/{req_id}/close", json={"reason": "x"}).status_code == 401
+    missing = client.post(f"/api/requests/{req_id}/close", headers=auth_headers(token), json={})
+    assert missing.status_code == 400
+
+
+def test_close_unknown_request_is_404(client, token):
+    resp = client.post(
+        "/api/requests/req_ffffff/close",
+        headers=auth_headers(token),
+        json={"reason": "gone"},
+    )
+    assert resp.status_code == 404
+
+
+def test_second_close_is_409(client, token):
+    req_id = _create_request(client, token)
+    client.post(f"/api/requests/{req_id}/close", headers=auth_headers(token), json={"reason": "one"})
+    again = client.post(f"/api/requests/{req_id}/close", headers=auth_headers(token), json={"reason": "two"})
+    assert again.status_code == 409
+
+
+def test_supersede_chain_sets_successor_and_banner(client, token):
+    old_id = _create_request(client, token, title="Old picker")
+    new_id = _create_request(client, token, title="Live picker")
+    resp = client.post(
+        f"/api/requests/{old_id}/supersede",
+        headers=auth_headers(token),
+        json={"successor": new_id},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "superseded"
+    assert resp.json()["superseded_by"] == new_id
+
+    page = client.get(f"/r/{old_id}?token={token}")
+    assert page.status_code == 200
+    assert "Superseded" in page.text
+    assert f'href="/r/{new_id}"' in page.text
+    assert 'id="decide-btn"' not in page.text
+
+
+def test_supersede_self_is_400_and_unknown_successor_404(client, token):
+    req_id = _create_request(client, token)
+    self_resp = client.post(
+        f"/api/requests/{req_id}/supersede",
+        headers=auth_headers(token),
+        json={"successor": req_id},
+    )
+    assert self_resp.status_code == 400
+    unknown = client.post(
+        f"/api/requests/{req_id}/supersede",
+        headers=auth_headers(token),
+        json={"successor": "req_absent"},
+    )
+    assert unknown.status_code == 404
+
+
+def test_decide_on_superseded_returns_409_with_successor(client, token):
+    old_id = _create_request(client, token)
+    new_id = _create_request(client, token)
+    client.post(f"/api/requests/{old_id}/supersede", headers=auth_headers(token), json={"successor": new_id})
+
+    api = client.post(f"/api/requests/{old_id}/verdict", headers=auth_headers(token), json={"selected": [1]})
+    assert api.status_code == 409
+    assert api.json()["detail"]["successor"] == new_id
+
+    web = client.post(f"/r/{old_id}/decide?token={token}", json={"selected": [1]})
+    assert web.status_code == 409
+    assert web.json()["detail"]["successor"] == new_id
+
+
+def test_decide_on_closed_returns_409_with_reason(client, token):
+    req_id = _create_request(client, token)
+    client.post(f"/api/requests/{req_id}/close", headers=auth_headers(token), json={"reason": "obsolete"})
+
+    resp = client.post(f"/api/requests/{req_id}/verdict", headers=auth_headers(token), json={"selected": [1]})
+    assert resp.status_code == 409
+    assert resp.json()["detail"]["reason"] == "obsolete"
+
+
+def test_redecide_lock_requires_explicit_flag(client, token):
+    req_id = _create_request(client, token)
+    first = client.post(f"/api/requests/{req_id}/verdict", headers=auth_headers(token), json={"selected": [1]})
+    assert first.status_code == 200
+
+    blocked = client.post(f"/api/requests/{req_id}/verdict", headers=auth_headers(token), json={"selected": [2]})
+    assert blocked.status_code == 409
+    assert blocked.json()["detail"]["verdict_count"] == 1
+
+    allowed = client.post(
+        f"/api/requests/{req_id}/verdict",
+        headers=auth_headers(token),
+        json={"selected": [2], "redecide": True},
+    )
+    assert allowed.status_code == 200
+    detail = client.get(f"/api/requests/{req_id}", headers=auth_headers(token))
+    assert detail.json()["verdict"]["selected"] == [2]
+
+
+def test_index_open_list_excludes_closed_and_superseded(client, token):
+    open_id = _create_request(client, token, title="Still open")
+    decided_id = _create_request(client, token, title="Decided one")
+    closed_id = _create_request(client, token, title="Closed one")
+    old_id = _create_request(client, token, title="Superseded one")
+    new_id = _create_request(client, token, title="Successor")
+
+    client.post(f"/api/requests/{decided_id}/verdict", headers=auth_headers(token), json={"selected": [1]})
+    client.post(f"/api/requests/{closed_id}/close", headers=auth_headers(token), json={"reason": "stale"})
+    client.post(f"/api/requests/{old_id}/supersede", headers=auth_headers(token), json={"successor": new_id})
+
+    assert db.open_count() == 2  # open_id + new_id
+
+    page = client.get(f"/?token={token}")
+    assert page.status_code == 200
+    open_section = page.text.split("Streams")[0]
+    assert "Still open" in open_section
+    assert "Closed one" not in open_section
+    assert "Superseded one" not in open_section
+    # retired requests are still surfaced somewhere on the index
+    assert "Closed one" in page.text
+    assert "Superseded one" in page.text
 
 
 def test_web_decide_flow(client, token):

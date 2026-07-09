@@ -88,6 +88,16 @@ def post_multipart(base_url: str, token: str, path: str, fields: dict, files: li
     return _request("POST", base_url + path, headers, body)
 
 
+def close_request(base_url: str, token: str, req_id: str, reason: str) -> dict:
+    req_id = urllib.parse.quote(req_id, safe="")
+    return post_json(base_url, token, f"/api/requests/{req_id}/close", {"reason": reason})
+
+
+def supersede_request(base_url: str, token: str, req_id: str, successor: str) -> dict:
+    req_id = urllib.parse.quote(req_id, safe="")
+    return post_json(base_url, token, f"/api/requests/{req_id}/supersede", {"successor": successor})
+
+
 def create_stream(base_url: str, token: str, slug: str, kind: str, title: str) -> dict:
     return post_json(base_url, token, "/api/streams", {"slug": slug, "kind": kind, "title": title})
 

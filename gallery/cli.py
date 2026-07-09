@@ -202,6 +202,24 @@ def cmd_stream(args):
     print(json.dumps(result))
 
 
+def cmd_close(args):
+    base_url, token = config.client_config()
+    try:
+        result = client.close_request(base_url, token, args.id, args.reason)
+    except client.GalleryClientError as exc:
+        _exit_client_error(exc)
+    print(json.dumps(result))
+
+
+def cmd_supersede(args):
+    base_url, token = config.client_config()
+    try:
+        result = client.supersede_request(base_url, token, args.id, args.successor)
+    except client.GalleryClientError as exc:
+        _exit_client_error(exc)
+    print(json.dumps(result))
+
+
 def cmd_report(args):
     base_url, token = config.client_config()
     files = _resolve_files([args.file_html, *args.assets])
@@ -440,6 +458,14 @@ def main():
     sp = stream_sub.add_parser("close", help="Close a Portal stream")
     sp.add_argument("slug", type=_stream_slug)
 
+    p = sub.add_parser("close", help="Close a request with a reason (no fabricated verdict)")
+    p.add_argument("id")
+    p.add_argument("--reason", required=True, help="Why the request is being closed")
+
+    p = sub.add_parser("supersede", help="Mark a request superseded by a live successor request")
+    p.add_argument("id")
+    p.add_argument("--successor", required=True, help="Request id of the live successor")
+
     p = sub.add_parser("report", help="Post an HTML report to a Portal stream")
     p.add_argument("--stream", required=True, type=_stream_slug)
     p.add_argument("--title", required=True)
@@ -508,6 +534,8 @@ def main():
         "init": cmd_init,
         "post": cmd_post,
         "stream": cmd_stream,
+        "close": cmd_close,
+        "supersede": cmd_supersede,
         "report": cmd_report,
         "wait": cmd_wait,
         "ask": cmd_ask,

@@ -32,6 +32,17 @@
   </div>
   {% endif %}
 
+  {% if r.status == "superseded" %}
+  <div class="verdict-banner lifecycle-banner">
+    <strong>Superseded</strong> — live version:
+    {% if r.superseded_by %}<a href="/r/{{ r.superseded_by }}">{{ r.superseded_by }}</a>{% else %}(unknown){% endif %}
+  </div>
+  {% elif r.status == "closed" %}
+  <div class="verdict-banner lifecycle-banner">
+    <strong>Closed</strong>{% if r.close_reason %}: {{ r.close_reason }}{% endif %}
+  </div>
+  {% endif %}
+
   {% if stream_read_only %}
   <div class="archive-note">Archived stream. This request is read-only.</div>
   {% endif %}

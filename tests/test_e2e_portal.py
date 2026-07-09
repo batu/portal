@@ -195,7 +195,7 @@ def test_portal_phase1_report_decision_verdict_and_archive_flow(client, token):
 
     rejected_revision = client.post(
         f"/r/{req_id}/decide",
-        json={"selected": [2], "comment": "late change"},
+        json={"selected": [2], "comment": "late change", "redecide": True},
     )
     assert rejected_revision.status_code == 409
     assert "stream is closed" in rejected_revision.json()["detail"]

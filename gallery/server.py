@@ -738,6 +738,24 @@ def _apply_verdict(req_id: str, body: dict) -> dict:
     if r is None:
         raise HTTPException(status_code=404, detail="request not found")
 
+    if r["status"] == "superseded":
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "superseded", "successor": r.get("superseded_by")},
+        )
+    if r["status"] == "closed":
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "closed", "reason": r.get("close_reason")},
+        )
+
+    verdict_count = db.count_verdicts(req_id)
+    if verdict_count > 0 and body.get("redecide") is not True:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "verdict_exists", "verdict_count": verdict_count},
+        )
+
     selected = body.get("selected", [])
     ratings = body.get("ratings")
     comment = body.get("comment")
@@ -773,6 +791,37 @@ async def post_verdict(request: Request, req_id: str):
     require_api_token(request)
     body = await request.json()
     return _apply_verdict(req_id, body)
+
+
+def _lifecycle_mutation_status(exc: ValueError) -> int:
+    detail = str(exc)
+    if "not found" in detail:
+        return 404
+    if "already" in detail:
+        return 409
+    return 400
+
+
+@app.post("/api/requests/{req_id}/close")
+async def close_request(request: Request, req_id: str):
+    require_api_token(request)
+    body = await _json_object_body(request)
+    reason = _bounded_text(body.get("reason"), "reason", MAX_MESSAGE_TEXT_LENGTH)
+    try:
+        return db.close_request(req_id, reason)
+    except ValueError as exc:
+        raise HTTPException(status_code=_lifecycle_mutation_status(exc), detail=str(exc)) from exc
+
+
+@app.post("/api/requests/{req_id}/supersede")
+async def supersede_request(request: Request, req_id: str):
+    require_api_token(request)
+    body = await _json_object_body(request)
+    successor = _bounded_text(body.get("successor"), "successor", 128)
+    try:
+        return db.supersede_request(req_id, successor)
+    except ValueError as exc:
+        raise HTTPException(status_code=_lifecycle_mutation_status(exc), detail=str(exc)) from exc
 
 
 # --- media serving ---
@@ -1101,11 +1150,18 @@ def web_index(request: Request, q: str | None = None):
         return _login_redirect(request)
     open_requests = db.list_requests(status="open")
     decided = db.list_requests(status="decided", q=q)
+    retired = db.list_requests(status="closed") + db.list_requests(status="superseded")
     streams = _list_stream_summaries()
     response = templates.TemplateResponse(
         request,
         "index.html",
-        {"open_requests": open_requests, "decided": decided, "q": q or "", "streams": streams},
+        {
+            "open_requests": open_requests,
+            "decided": decided,
+            "retired": retired,
+            "q": q or "",
+            "streams": streams,
+        },
     )
     _maybe_set_cookie(response, request)
     return response

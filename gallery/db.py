@@ -29,7 +29,9 @@ CREATE TABLE IF NOT EXISTS requests (
     status TEXT NOT NULL DEFAULT 'open',
     context_md TEXT,
     created_at TEXT NOT NULL,
-    decided_at TEXT
+    decided_at TEXT,
+    superseded_by TEXT REFERENCES requests(id),
+    close_reason TEXT
 );
 
 CREATE TABLE IF NOT EXISTS variants (
@@ -169,6 +171,8 @@ def _validate_schema_version(conn: sqlite3.Connection, version: int) -> None:
         _validate_v2_schema(conn)
     if version >= 3:
         _validate_v3_schema(conn)
+    if version >= 4:
+        _validate_v4_schema(conn)
 
 
 def _migrate_v1(conn: sqlite3.Connection) -> None:
@@ -230,7 +234,19 @@ def _validate_v3_schema(conn: sqlite3.Connection) -> None:
         raise RuntimeError("schema v3 missing verdicts columns: payload_json")
 
 
-MIGRATIONS = [(1, _migrate_v1), (2, _migrate_v2), (3, _migrate_v3)]
+def _migrate_v4(conn: sqlite3.Connection) -> None:
+    _add_column_if_missing(conn, "requests", "superseded_by", "superseded_by TEXT REFERENCES requests(id)")
+    _add_column_if_missing(conn, "requests", "close_reason", "close_reason TEXT")
+
+
+def _validate_v4_schema(conn: sqlite3.Connection) -> None:
+    missing = {"superseded_by", "close_reason"} - _column_names(conn, "requests")
+    if missing:
+        missing_list = ", ".join(sorted(missing))
+        raise RuntimeError(f"schema v4 missing requests columns: {missing_list}")
+
+
+MIGRATIONS = [(1, _migrate_v1), (2, _migrate_v2), (3, _migrate_v3), (4, _migrate_v4)]
 
 
 def _user_version(conn: sqlite3.Connection) -> int:
@@ -859,3 +875,63 @@ def open_count() -> int:
     conn = connect()
     with _lock:
         return conn.execute("SELECT COUNT(*) FROM requests WHERE status = 'open'").fetchone()[0]
+
+
+TERMINAL_STATUSES = ("closed", "superseded")
+
+
+def count_verdicts(req_id: str) -> int:
+    conn = connect()
+    with _lock:
+        return conn.execute("SELECT COUNT(*) FROM verdicts WHERE request_id = ?", (req_id,)).fetchone()[0]
+
+
+def close_request(req_id: str, reason: str) -> dict:
+    """Retire a request with a reason and no fabricated verdict. Terminal states are immutable."""
+    conn = connect()
+    with _lock:
+        try:
+            row = conn.execute("SELECT status FROM requests WHERE id = ?", (req_id,)).fetchone()
+            if row is None:
+                raise ValueError(f"request not found: {req_id}")
+            if row["status"] in TERMINAL_STATUSES:
+                raise ValueError(f"request already {row['status']}: {req_id}")
+            conn.execute(
+                "UPDATE requests SET status = 'closed', close_reason = ? WHERE id = ?",
+                (reason, req_id),
+            )
+            conn.commit()
+            request = _get_request(conn, req_id)
+            assert request is not None
+            return request
+        except Exception:
+            conn.rollback()
+            raise
+
+
+def supersede_request(req_id: str, successor_id: str) -> dict:
+    """Mark a request superseded by a live successor. Terminal states are immutable."""
+    conn = connect()
+    with _lock:
+        try:
+            row = conn.execute("SELECT status FROM requests WHERE id = ?", (req_id,)).fetchone()
+            if row is None:
+                raise ValueError(f"request not found: {req_id}")
+            if req_id == successor_id:
+                raise ValueError(f"request cannot supersede itself: {req_id}")
+            if row["status"] in TERMINAL_STATUSES:
+                raise ValueError(f"request already {row['status']}: {req_id}")
+            successor = conn.execute("SELECT id FROM requests WHERE id = ?", (successor_id,)).fetchone()
+            if successor is None:
+                raise ValueError(f"successor not found: {successor_id}")
+            conn.execute(
+                "UPDATE requests SET status = 'superseded', superseded_by = ? WHERE id = ?",
+                (successor_id, req_id),
+            )
+            conn.commit()
+            request = _get_request(conn, req_id)
+            assert request is not None
+            return request
+        except Exception:
+            conn.rollback()
+            raise

@@ -639,6 +639,69 @@ def test_stream_close_calls_client(monkeypatch, capsys):
     assert json.loads(capsys.readouterr().out) == {"slug": "alpha", "closed_at": "now"}
 
 
+def test_close_calls_client_and_prints_result(monkeypatch, capsys):
+    calls = []
+
+    monkeypatch.setattr(cli.config, "client_config", lambda: ("http://gallery", "tok"))
+    monkeypatch.setattr(
+        cli.client,
+        "close_request",
+        lambda base_url, token, req_id, reason: calls.append((base_url, token, req_id, reason))
+        or {"id": req_id, "status": "closed", "close_reason": reason},
+    )
+    monkeypatch.setattr("sys.argv", ["portal", "close", "req_abc", "--reason", "stale"])
+
+    cli.main()
+
+    assert calls == [("http://gallery", "tok", "req_abc", "stale")]
+    assert json.loads(capsys.readouterr().out) == {"id": "req_abc", "status": "closed", "close_reason": "stale"}
+
+
+def test_close_requires_reason(monkeypatch):
+    monkeypatch.setattr("sys.argv", ["portal", "close", "req_abc"])
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    assert exc.value.code == 2
+
+
+def test_supersede_calls_client_and_prints_result(monkeypatch, capsys):
+    calls = []
+
+    monkeypatch.setattr(cli.config, "client_config", lambda: ("http://gallery", "tok"))
+    monkeypatch.setattr(
+        cli.client,
+        "supersede_request",
+        lambda base_url, token, req_id, successor: calls.append((base_url, token, req_id, successor))
+        or {"id": req_id, "status": "superseded", "superseded_by": successor},
+    )
+    monkeypatch.setattr("sys.argv", ["portal", "supersede", "req_old", "--successor", "req_new"])
+
+    cli.main()
+
+    assert calls == [("http://gallery", "tok", "req_old", "req_new")]
+    assert json.loads(capsys.readouterr().out) == {
+        "id": "req_old",
+        "status": "superseded",
+        "superseded_by": "req_new",
+    }
+
+
+def test_supersede_client_error_exits_1(monkeypatch, capsys):
+    monkeypatch.setattr(cli.config, "client_config", lambda: ("http://gallery", "tok"))
+
+    def boom(*_args, **_kwargs):
+        raise cli.client.GalleryClientError(409, "request already closed: req_old")
+
+    monkeypatch.setattr(cli.client, "supersede_request", boom)
+    monkeypatch.setattr("sys.argv", ["portal", "supersede", "req_old", "--successor", "req_new"])
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+
+    assert exc.value.code == 1
+    assert "error: HTTP 409: request already closed: req_old" in capsys.readouterr().err
+
+
 def test_report_posts_report_with_html_and_assets(monkeypatch, tmp_path, capsys):
     html = tmp_path / "report.html"
     asset = tmp_path / "asset.png"
