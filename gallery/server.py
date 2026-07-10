@@ -1,6 +1,7 @@
 """Gallery FastAPI app: JSON API + server-rendered web UI + media serving."""
 
 import asyncio
+import html as html_lib
 import json
 import logging
 import math
@@ -11,6 +12,7 @@ import shutil
 import sqlite3
 import threading
 from datetime import datetime, timezone
+from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import quote
 
@@ -40,6 +42,139 @@ MAX_MESSAGE_TEXT_LENGTH = 20_000
 MAX_BODY_JSON_BYTES = 1_000_000
 STREAM_SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?$")
 SAFE_SEGMENT_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+
+# Request context is stored, agent-controlled Markdown that renders into an
+# HTML `|safe` sink. Markdown preserves raw HTML, so its output is run through
+# a strict allowlist sanitizer before it reaches the template. Only these
+# formatting tags survive; everything else (script/style/svg/iframe/unknown
+# tags), every non-allowlisted attribute (event handlers, style, class…), and
+# any href/src whose scheme is not http(s)/mailto is dropped.
+_CONTEXT_ALLOWED_TAGS = {
+    "p", "br", "hr", "h1", "h2", "h3", "h4", "h5", "h6",
+    "strong", "em", "b", "i", "u", "s", "del", "ins", "sup", "sub",
+    "code", "pre", "blockquote", "ul", "ol", "li", "dl", "dt", "dd",
+    "a", "img",
+}
+_CONTEXT_ALLOWED_ATTRS = {
+    "a": {"href", "title"},
+    "img": {"src", "alt", "title"},
+}
+# Void (self-closing) tags that must not emit a closing tag.
+_CONTEXT_VOID_TAGS = {"br", "hr", "img"}
+# Elements whose text content is discarded, not just their surrounding tags.
+_CONTEXT_DROP_CONTENT_TAGS = {"script", "style"}
+_CONTEXT_URL_ATTRS = {"href", "src"}
+_CONTEXT_SAFE_URL_SCHEMES = {"http", "https", "mailto"}
+_CONTEXT_SCHEME_RE = re.compile(r"^([a-z][a-z0-9+.-]*):")
+
+
+def _context_url_is_safe(value: str) -> bool:
+    """Reject javascript:/data:/vbscript: (and any non-allowlisted) URL schemes.
+
+    Browsers strip whitespace and control characters while resolving a URL's
+    scheme, so those are removed before the check to defeat obfuscation such as
+    ``java\tscript:`` or ``java&#0;script:``.
+    """
+    cleaned = re.sub(r"[\x00-\x20]+", "", value).lower()
+    if not cleaned or cleaned.startswith(("#", "/", "?")):
+        return True
+    match = _CONTEXT_SCHEME_RE.match(cleaned)
+    if match is None:
+        return True  # no scheme -> relative path, safe
+    return match.group(1) in _CONTEXT_SAFE_URL_SCHEMES
+
+
+class _ContextSanitizer(HTMLParser):
+    """Allowlist HTML sanitizer for rendered request context."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._parts: list[str] = []
+        self._open_tags: list[str] = []
+        self._open_tag_counts: dict[str, int] = {}
+        self._skip_depth = 0
+        self._finished = False
+
+    def handle_starttag(self, tag: str, attrs: list) -> None:
+        if tag in _CONTEXT_DROP_CONTENT_TAGS:
+            self._skip_depth += 1
+            return
+        if self._skip_depth or tag not in _CONTEXT_ALLOWED_TAGS:
+            return
+        self._parts.append(self._render_open(tag, attrs))
+        if tag not in _CONTEXT_VOID_TAGS:
+            self._open_tags.append(tag)
+            self._open_tag_counts[tag] = self._open_tag_counts.get(tag, 0) + 1
+
+    def handle_startendtag(self, tag: str, attrs: list) -> None:
+        if tag in _CONTEXT_DROP_CONTENT_TAGS or self._skip_depth:
+            return
+        if tag not in _CONTEXT_ALLOWED_TAGS:
+            return
+        self._parts.append(self._render_open(tag, attrs))
+        if tag not in _CONTEXT_VOID_TAGS:
+            self._parts.append(f"</{tag}>")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in _CONTEXT_DROP_CONTENT_TAGS:
+            if self._skip_depth:
+                self._skip_depth -= 1
+            return
+        if self._skip_depth or tag not in _CONTEXT_ALLOWED_TAGS:
+            return
+        if tag in _CONTEXT_VOID_TAGS or self._open_tag_counts.get(tag, 0) == 0:
+            return
+        # Close any elements nested inside the requested end tag first. This
+        # turns malformed input such as ``<p><a>text</p>`` into a balanced
+        # fragment rather than allowing the browser's active-formatting repair
+        # rules to extend the attacker-controlled link past the context block.
+        while self._open_tags:
+            open_tag = self._close_last_open_tag()
+            if open_tag == tag:
+                break
+
+    def handle_data(self, data: str) -> None:
+        if self._skip_depth:
+            return
+        self._parts.append(html_lib.escape(data, quote=False))
+
+    def _render_open(self, tag: str, attrs: list) -> str:
+        allowed = _CONTEXT_ALLOWED_ATTRS.get(tag, frozenset())
+        rendered = []
+        for name, value in attrs:
+            name = name.lower()
+            if name not in allowed:
+                continue  # drops on*, style, class, id, …
+            value = value or ""
+            if name in _CONTEXT_URL_ATTRS and not _context_url_is_safe(value):
+                continue
+            rendered.append(f' {name}="{html_lib.escape(value, quote=True)}"')
+        return f"<{tag}{''.join(rendered)}>"
+
+    def _close_last_open_tag(self) -> str:
+        tag = self._open_tags.pop()
+        remaining = self._open_tag_counts[tag] - 1
+        if remaining:
+            self._open_tag_counts[tag] = remaining
+        else:
+            del self._open_tag_counts[tag]
+        self._parts.append(f"</{tag}>")
+        return tag
+
+    def get_html(self) -> str:
+        if not self._finished:
+            while self._open_tags:
+                self._close_last_open_tag()
+            self._finished = True
+        return "".join(self._parts)
+
+
+def _sanitize_context_html(html_text: str) -> str:
+    parser = _ContextSanitizer()
+    parser.feed(html_text)
+    parser.close()
+    return parser.get_html()
+
 
 app = FastAPI(title="Gallery")
 
@@ -1220,7 +1355,9 @@ def web_request_detail(request: Request, req_id: str):
     if r is None:
         raise HTTPException(status_code=404, detail="request not found")
 
-    context_html = md_lib.markdown(r["context_md"]) if r.get("context_md") else ""
+    context_html = (
+        _sanitize_context_html(md_lib.markdown(r["context_md"])) if r.get("context_md") else ""
+    )
     stream_read_only = _request_stream_closed(r)
     before_media = _before_media_context(r)
     view_entry = _view_entry_media_path(r)
@@ -1253,6 +1390,14 @@ def web_request_detail(request: Request, req_id: str):
             "view_entry_url": _media_url(r["id"], view_entry) if view_entry else None,
             "back": back,
         },
+    )
+    # Defense in depth: even if a sanitizer gap let markup through, this CSP
+    # blocks inline/injected script and non-self resources. The Portal page
+    # only loads same-origin /static assets and /media, so 'self' suffices.
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'none'; script-src 'self'; style-src 'self'; "
+        "img-src 'self'; media-src 'self'; connect-src 'self'; "
+        "base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
     )
     _maybe_set_cookie(response, request)
     return response

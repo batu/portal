@@ -323,19 +323,20 @@ def cmd_pull(args):
 
 def cmd_trello_watch(args):
     try:
-        watcher = trello_watch.build_watcher(
-            Path(args.repo),
-            trigger_list=args.trigger_list,
-            max_stage=args.max_stage,
-        )
-        while True:
-            summary = watcher.poll_once()
-            print(json.dumps(summary), flush=True)
-            if args.once:
-                if _trello_watch_retryable_summary(summary):
-                    sys.exit(75)
-                return
-            time.sleep(args.interval)
+        with trello_watch.catchable_sigterm():
+            watcher = trello_watch.build_watcher(
+                Path(args.repo),
+                trigger_list=args.trigger_list,
+                max_stage=args.max_stage,
+            )
+            while True:
+                summary = watcher.poll_once()
+                print(json.dumps(summary), flush=True)
+                if args.once:
+                    if _trello_watch_retryable_summary(summary):
+                        sys.exit(75)
+                    return
+                time.sleep(args.interval)
     except (trello_watch.WatchError, client.GalleryClientError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         sys.exit(1)

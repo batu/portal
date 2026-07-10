@@ -7,15 +7,18 @@ import html
 import json
 import os
 import re
+import signal
 import subprocess
+import tempfile
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Iterator
 
 from . import client, config
 
@@ -24,6 +27,8 @@ DEFAULT_MAX_STAGE = "aesthetics_reviewed"
 BLOCKED_STAGE = "blocked_on_batu"
 STATE_VERSION = 1
 RUN_TIMEOUT_SECONDS = 6 * 60 * 60
+RUN_GRACE_SECONDS = 10
+RUN_LOG_TAIL_BYTES = 64_000
 OUTPUT_TAIL_CHARS = 8000
 AUTHOR = "portal trello-watch"
 
@@ -680,26 +685,147 @@ def redaction_secrets(source: dict[str, str] | None = None, *, portal_token: str
     return list(dict.fromkeys(values))
 
 
-def run_twf_card(repo: Path, short_link: str, env: dict[str, str]) -> RunResult:
+@contextmanager
+def catchable_sigterm() -> Iterator[None]:
+    """Turn SIGTERM into a catchable exception and restore the old handler."""
+    previous_handler = signal.getsignal(signal.SIGTERM)
+
+    def raise_termination(signum: int, _frame: Any) -> None:
+        raise SystemExit(128 + signum)
+
+    signal.signal(signal.SIGTERM, raise_termination)
     try:
-        completed = subprocess.run(
-            ["twf", "run-card", short_link, "--worktree"],
-            cwd=repo,
-            env=env,
-            shell=False,
-            text=True,
-            capture_output=True,
-            timeout=RUN_TIMEOUT_SECONDS,
-            check=False,
-        )
-        return RunResult(completed.returncode, f"{completed.stdout}\n{completed.stderr}")
-    except subprocess.TimeoutExpired as exc:
-        stdout = exc.stdout or ""
-        stderr = exc.stderr or ""
-        output = f"{stdout}\n{stderr}\ntwf run-card timed out after {RUN_TIMEOUT_SECONDS}s"
-        return RunResult(124, output, timed_out=True)
+        yield
+    finally:
+        signal.signal(signal.SIGTERM, previous_handler)
+
+
+def _read_log_tail(path: Path, limit: int) -> str:
+    """Return at most the last ``limit`` bytes of ``path`` as text.
+
+    Seeks to ``end - limit`` so RAM is bounded even when the log file is large;
+    the file itself is never read whole into memory.
+    """
+    try:
+        with open(path, "rb") as fh:
+            size = fh.seek(0, os.SEEK_END)
+            fh.seek(max(0, size - limit))
+            data = fh.read()
+    except OSError:
+        return ""
+    return data.decode("utf-8", errors="replace")
+
+
+def _process_group_exists(pgid: int) -> bool:
+    """Return whether ``pgid`` still contains at least one process."""
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # We own the session created below, but conservatively treat an
+        # unexpected permissions failure as evidence that the group exists.
+        return True
+    return True
+
+
+def _terminate_group(proc: subprocess.Popen, pgid: int, grace: float) -> None:
+    """Terminate the whole process group: SIGTERM, wait ``grace``, then SIGKILL.
+
+    The grace period applies to the whole group, not only the direct child: a
+    descendant may ignore SIGTERM even after its parent exits. Every signal
+    swallows ``ProcessLookupError`` so an already-dead group is a no-op.
+    Returns only once the direct child has been reaped.
+    """
+    try:
+        os.killpg(pgid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    deadline = time.monotonic() + max(0, grace)
+    while True:
+        # poll() also reaps the direct child if it exited after SIGTERM.
+        proc.poll()
+        if not _process_group_exists(pgid):
+            break
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            break
+        time.sleep(min(0.05, remaining))
+    proc.wait()
+
+
+def _run_subprocess(
+    cmd: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str],
+    timeout: float,
+    grace: float,
+) -> RunResult:
+    """Launch ``cmd`` in an owned session, stream merged output to a bounded
+    on-disk log, and reap the whole process group on timeout or cancellation.
+
+    Preserves the RunResult contract: completion -> (returncode, tail, False);
+    timeout -> (124, tail + note, True); launch failure -> (127, error).
+    """
+    log_dir = config.data_dir() / "trello-watch" / "run-logs"
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+        fd, log_name = tempfile.mkstemp(dir=str(log_dir), prefix="run-", suffix=".log")
     except OSError as exc:
         return RunResult(127, f"twf run-card could not start: {exc}")
+    log_path = Path(log_name)
+    proc: subprocess.Popen | None = None
+    pgid: int | None = None
+    try:
+        with os.fdopen(fd, "wb") as log_fh:
+            try:
+                proc = subprocess.Popen(
+                    cmd,
+                    cwd=cwd,
+                    env=env,
+                    shell=False,
+                    stdout=log_fh,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                )
+            except OSError as exc:
+                return RunResult(127, f"twf run-card could not start: {exc}")
+            try:
+                pgid = os.getpgid(proc.pid)
+            except ProcessLookupError:
+                pgid = proc.pid
+            try:
+                proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                _terminate_group(proc, pgid, grace)
+                tail = _read_log_tail(log_path, RUN_LOG_TAIL_BYTES)
+                note = f"twf run-card timed out after {timeout}s"
+                return RunResult(124, f"{tail}\n{note}", timed_out=True)
+        tail = _read_log_tail(log_path, RUN_LOG_TAIL_BYTES)
+        return RunResult(proc.returncode, tail, timed_out=False)
+    except BaseException:
+        if proc is not None:
+            # A reaped direct child does not prove its process group is empty:
+            # descendants may still be running. Every exceptional unwind owns
+            # cleanup, while the normal wait/return path leaves a deliberately
+            # daemonized descendant alone.
+            _terminate_group(proc, pgid or proc.pid, grace)
+        raise
+
+
+def run_twf_card(repo: Path, short_link: str, env: dict[str, str]) -> RunResult:
+    return _run_subprocess(
+        ["twf", "run-card", short_link, "--worktree"],
+        cwd=repo,
+        env=env,
+        timeout=RUN_TIMEOUT_SECONDS,
+        grace=RUN_GRACE_SECONDS,
+    )
 
 
 def newest_handoff_comment(actions: list[dict[str, Any]], *, since: str | None = None) -> str | None:
