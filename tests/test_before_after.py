@@ -177,3 +177,22 @@ def test_static_js_keeps_before_after_pick_one_and_space_blink_hooks(client):
     assert 'event.target.closest && event.target.closest("a")' in script.text
     assert "event.target !== el" in script.text
     assert 'section.dataset.canDecide === "false"' in script.text
+
+
+def test_static_js_renders_decide_409_dict_detail(client):
+    # P5b made the decide 409 detail a dict; the decide handler must normalize it to a
+    # readable string (not "[object Object]") while passing plain-string details through.
+    script = client.get("/static/app.js")
+
+    assert script.status_code == 200
+    # the throw routes through the normalizer, not raw interpolation of err.detail
+    assert "decideErrorMessage(err.detail)" in script.text
+    # string details pass through verbatim
+    assert 'typeof detail === "string"' in script.text
+    # each known dict shape and the human field it renders
+    assert '"verdict_exists"' in script.text
+    assert "detail.verdict_count" in script.text
+    assert '"superseded"' in script.text
+    assert "detail.successor" in script.text
+    assert '"closed"' in script.text
+    assert "detail.reason" in script.text

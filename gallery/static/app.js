@@ -183,6 +183,28 @@
     });
   }
 
+  function decideErrorMessage(detail) {
+    // P5b made the decide 409 detail a dict; render its human fields readably.
+    // Plain-string details (every other 4xx on this path) pass through verbatim.
+    if (typeof detail === "string") return detail || "failed to submit decision";
+    if (detail && typeof detail === "object") {
+      if (detail.error === "verdict_exists") {
+        var n = detail.verdict_count;
+        return "This request already has a decision (" + n +
+          (n === 1 ? " verdict" : " verdicts") + "). Reload to see it.";
+      }
+      if (detail.error === "superseded") {
+        return "This request was superseded" +
+          (detail.successor ? " by " + detail.successor : "") + ". Reload to continue.";
+      }
+      if (detail.error === "closed") {
+        return "This request is closed" +
+          (detail.reason ? ": " + detail.reason : "") + ".";
+      }
+    }
+    return "failed to submit decision";
+  }
+
   function submit(selected) {
     var payload = {
       selected: selected,
@@ -197,7 +219,7 @@
       .then(function (resp) {
         if (!resp.ok) {
           return resp.json().then(function (err) {
-            throw new Error(err.detail || "failed to submit decision");
+            throw new Error(decideErrorMessage(err.detail));
           });
         }
         return resp.json();
