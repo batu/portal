@@ -320,11 +320,16 @@ _BODY_OPEN_RE = re.compile(rb"<body[^>]*>", re.IGNORECASE)
 
 # Deterministic status → inline chip style. Not user-controlled (status is drawn
 # from the lifecycle vocabulary), so it is injected as-is by the template.
+# One pill spec — consistent translucent fill (~.16 alpha) + bright legible text,
+# varying only hue per status. OPEN uses informational blue rather than the amber
+# brand accent (#f4c542, also the Portal link + selection outline) so an "open"
+# state never reads as a warning or competes with the brand/selection cue.
+_STATUS_CHIP_DEFAULT_STYLE = "background:rgba(160,165,180,.14);color:#b6b9c2"
 _STATUS_CHIP_STYLES = {
-    "open": "background:#3a2f12;color:#f4c542",
-    "decided": "background:#123321;color:#5fd39b",
-    "closed": "background:#2a2c31;color:#a7aab2",
-    "superseded": "background:#2a2c31;color:#a7aab2",
+    "open": "background:rgba(96,150,230,.16);color:#8fb8f0",
+    "decided": "background:rgba(74,200,140,.16);color:#7ce0a3",
+    "closed": _STATUS_CHIP_DEFAULT_STYLE,
+    "superseded": _STATUS_CHIP_DEFAULT_STYLE,
 }
 
 
@@ -338,7 +343,7 @@ def _context_header_bytes(*, stream: dict | None, step, ask, status) -> bytes:
         step=step or None,
         ask=ask or None,
         status=status or None,
-        status_style=_STATUS_CHIP_STYLES.get(status or "", "background:#2a2c31;color:#a7aab2"),
+        status_style=_STATUS_CHIP_STYLES.get(status or "", _STATUS_CHIP_DEFAULT_STYLE),
     )
     return html.encode("utf-8")
 
