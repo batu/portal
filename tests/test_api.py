@@ -724,3 +724,30 @@ def test_three_digit_leading_number_is_prefixed_normally(client, token):
         client, token, [("files", ("123_x.png", tiny_png_bytes(), "image/png"))]
     )
     assert variants[0]["media_path"] == "01_123_x.png"
+
+
+def test_colliding_stored_names_do_not_overwrite(client, token):
+    # keep-as-is drops the positional uniqueness guarantee: a plain first file is
+    # stored as `01_x.png`, and a later baked `01_x.png` would map to the same
+    # name. The first must keep its baked name; the second must be disambiguated
+    # (not silently overwrite it), and both files must keep their own bytes.
+    resp = client.post(
+        "/api/requests",
+        headers=auth_headers(token),
+        data={"title": "collide", "kind": "pick-one"},
+        files=[
+            ("files", ("x.png", b"AAAA", "image/png")),
+            ("files", ("01_x.png", b"BBBB", "image/png")),
+        ],
+    )
+    assert resp.status_code == 200
+    req_id = resp.json()["id"]
+
+    variants = client.get(f"/api/requests/{req_id}", headers=auth_headers(token)).json()["variants"]
+    names = [v["media_path"] for v in variants]
+    assert names[0] == "01_x.png"  # first occurrence keeps its baked name
+    assert len(set(names)) == 2  # second stored distinctly, no silent overwrite
+
+    # Each stored file resolves to its own uploaded bytes.
+    assert client.get(f"/media/{req_id}/{names[0]}", params={"token": token}).content == b"AAAA"
+    assert client.get(f"/media/{req_id}/{names[1]}", params={"token": token}).content == b"BBBB"

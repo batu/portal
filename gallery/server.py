@@ -300,18 +300,34 @@ def _safe_upload_name(filename: str | None, fallback: str) -> str:
     return (name or fallback)[:120]
 
 
-def _prefixed_media_name(index: int, filename: str | None, fallback: str) -> str:
+def _prefixed_media_name(
+    index: int, filename: str | None, fallback: str, used: set[str] | None = None
+) -> str:
     """Stored variant filename for the 1-based `index`th upload.
 
     Filenames that already carry a two-digit `NN_` ordinal — e.g. producer HTML
     with baked media paths like `--video-src=02_v.mp4` — are stored verbatim so
     those baked references resolve; re-prefixing (`01_02_v.mp4`) would 404 them.
     All other names get the 1-based ordinal exactly once.
+
+    Keeping a name verbatim drops the uniqueness the positional prefix used to
+    guarantee, so `used` (names already stored in this request) disambiguates a
+    collision: the first occurrence keeps its baked name; a later clashing upload
+    gets a numeric suffix instead of silently overwriting it on disk.
     """
     safe = _safe_upload_name(filename, fallback)
     if re.match(r"\d{2}_", safe):
-        return safe
-    return f"{index:02d}_{safe}"
+        name = safe
+    else:
+        name = f"{index:02d}_{safe}"
+    if used is not None:
+        stem, suffix = Path(name).stem, Path(name).suffix
+        counter = 2
+        while name in used:
+            name = f"{stem}_{counter}{suffix}"
+            counter += 1
+        used.add(name)
+    return name
 
 
 def _safe_media_filename(filename: str) -> bool:
@@ -456,7 +472,12 @@ async def _write_upload(upload: UploadFile, dest_path: Path) -> int:
 
 
 def _enforce_upload_size(request: Request, limit: int) -> None:
-    """Reject an over-limit upload via its Content-Length before any file is read.
+    """Reject an over-limit upload via its Content-Length, returning HTTP 413.
+
+    Runs before the upload is persisted (media-dir write + DB row), so a rejected
+    request leaves nothing behind. It does not bound ingest memory — the multipart
+    body is already parsed by the time the handler runs — this is a persistence
+    guardrail, not a streaming limit (streaming enforcement deferred).
 
     The guardrail's threat model is an accidental oversized upload through a
     trusted client (the portal CLI / Caddy), all of which send Content-Length;
@@ -566,10 +587,11 @@ async def _save_post_files(post_id: str, uploads: list[UploadFile]) -> tuple[lis
     dest_dir.mkdir(parents=True, exist_ok=False)
     stored = []
     total_bytes = 0
+    used_names: set[str] = set()
     try:
         for i, upload in enumerate(uploads, start=1):
             original_name = upload.filename or f"file_{i}"
-            safe_name = _prefixed_media_name(i, original_name, f"file_{i}")
+            safe_name = _prefixed_media_name(i, original_name, f"file_{i}", used_names)
             dest_path = dest_dir / safe_name
             size = await _write_upload(upload, dest_path)
             total_bytes += size
@@ -704,6 +726,7 @@ async def create_request(
         before_media_path = None
         before_media_type = None
         variants = []
+        used_names: set[str] = set()
         try:
             if before is not None and before.filename:
                 before_media_path = _before_media_path(before.filename)
@@ -712,7 +735,7 @@ async def create_request(
 
             for i, upload in enumerate(request_uploads, start=1):
                 orig_name = upload.filename or f"variant_{i}"
-                safe_name = _prefixed_media_name(i, orig_name, f"variant_{i}")
+                safe_name = _prefixed_media_name(i, orig_name, f"variant_{i}", used_names)
                 dest_path = dest_dir / safe_name
                 data = await upload.read()
                 dest_path.write_bytes(data)
