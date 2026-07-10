@@ -40,6 +40,8 @@ MAX_TITLE_LENGTH = 300
 MAX_AUTHOR_LENGTH = 200
 MAX_MESSAGE_TEXT_LENGTH = 20_000
 MAX_BODY_JSON_BYTES = 1_000_000
+MAX_JOURNEY_STEPS = 100
+MAX_STEP_MEDIA = 30
 STREAM_SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?$")
 SAFE_SEGMENT_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 
@@ -1017,6 +1019,93 @@ async def supersede_request(request: Request, req_id: str):
         raise HTTPException(status_code=_lifecycle_mutation_status(exc), detail=str(exc)) from exc
 
 
+# --- journeys ---
+
+
+def _validate_safe_segment(value: object, name: str) -> str:
+    """A DB owner/request id used as a path segment: bounded + SAFE_SEGMENT_RE, no dot-dirs."""
+    segment = _bounded_text(value, name, 128)
+    if not SAFE_SEGMENT_RE.fullmatch(segment) or segment in {".", ".."}:
+        raise HTTPException(status_code=400, detail=f"invalid {name}")
+    return segment
+
+
+def _validate_journey_media_ref(ref: object) -> dict:
+    if not isinstance(ref, dict):
+        raise HTTPException(status_code=400, detail="each media ref must be an object")
+    owner_id = _validate_safe_segment(ref.get("owner_id"), "media owner_id")
+    filename = _bounded_text(ref.get("filename"), "media filename", 260)
+    if not _safe_media_filename(filename):
+        raise HTTPException(status_code=400, detail="invalid media filename")
+    cleaned = {"owner_id": owner_id, "filename": filename}
+    caption = _bounded_optional_text(ref.get("caption"), "media caption", MAX_TITLE_LENGTH)
+    if caption is not None:
+        cleaned["caption"] = caption
+    return cleaned
+
+
+def _validate_journey_step(step: object) -> dict:
+    if not isinstance(step, dict):
+        raise HTTPException(status_code=400, detail="each step must be an object")
+    cleaned = {"title": _bounded_text(step.get("title"), "step title", MAX_TITLE_LENGTH)}
+    summary = _bounded_optional_text(step.get("summary"), "step summary", MAX_MESSAGE_TEXT_LENGTH)
+    if summary is not None:
+        cleaned["summary"] = summary
+    media = step.get("media")
+    if media is not None:
+        if not isinstance(media, list):
+            raise HTTPException(status_code=400, detail="step media must be a list")
+        if len(media) > MAX_STEP_MEDIA:
+            raise HTTPException(status_code=400, detail=f"a step may reference at most {MAX_STEP_MEDIA} media")
+        cleaned["media"] = [_validate_journey_media_ref(ref) for ref in media]
+    request_id = step.get("request_id")
+    if request_id is not None:
+        cleaned["request_id"] = _validate_safe_segment(request_id, "step request_id")
+    return cleaned
+
+
+def _validate_journey_doc(payload: dict) -> dict:
+    """Deterministic structural validation of a journey doc. Returns a normalized
+    {"steps": [...]} dict carrying only validated fields (unknown keys dropped)."""
+    steps = payload.get("steps")
+    if not isinstance(steps, list):
+        raise HTTPException(status_code=400, detail="journey steps must be a list")
+    if len(steps) > MAX_JOURNEY_STEPS:
+        raise HTTPException(status_code=400, detail=f"a journey may have at most {MAX_JOURNEY_STEPS} steps")
+    doc = {"steps": [_validate_journey_step(step) for step in steps]}
+    if len(json.dumps(doc).encode("utf-8")) > MAX_BODY_JSON_BYTES:
+        raise HTTPException(status_code=400, detail="journey doc is too large")
+    _validate_json_response_safe(doc)
+    return doc
+
+
+@app.put("/api/journeys/{slug}")
+async def put_journey(request: Request, slug: str):
+    """Post or re-post (update-in-place) a journey doc at a stable slug."""
+    require_api_token(request)
+    _validate_slug(slug)
+    body = await _json_object_body(request)
+    title = _bounded_text(body.get("title"), "title", MAX_TITLE_LENGTH)
+    doc = _validate_journey_doc(body)
+    return db.upsert_journey(slug, title, doc)
+
+
+@app.get("/api/journeys")
+def list_journeys(request: Request):
+    require_api_token(request)
+    return db.list_journeys()
+
+
+@app.get("/api/journeys/{slug}")
+def get_journey(request: Request, slug: str):
+    require_api_token(request)
+    _validate_slug(slug)
+    journey = db.get_journey(slug)
+    if journey is None:
+        raise HTTPException(status_code=404, detail="journey not found")
+    return journey
+
+
 # --- media serving ---
 
 
@@ -1376,6 +1465,7 @@ def web_index(request: Request, q: str | None = None):
     decided = db.list_requests(status="decided", q=q)
     retired = db.list_requests(status="closed") + db.list_requests(status="superseded")
     streams = _list_stream_summaries()
+    journeys = db.list_journeys()
     response = templates.TemplateResponse(
         request,
         "index.html",
@@ -1385,6 +1475,7 @@ def web_index(request: Request, q: str | None = None):
             "retired": retired,
             "q": q or "",
             "streams": streams,
+            "journeys": journeys,
         },
     )
     _maybe_set_cookie(response, request)
@@ -1497,3 +1588,98 @@ async def web_decide(request: Request, req_id: str):
         raise HTTPException(status_code=401, detail="missing or invalid token")
     body = await request.json()
     return _apply_verdict(req_id, body)
+
+
+# --- journey web page ---
+
+
+def _journey_status_map(request_ids: list[str]) -> dict[str, dict]:
+    """One batched read of every referenced request's live status/title (KTD6)."""
+    ids = []
+    seen = set()
+    for request_id in request_ids:
+        if isinstance(request_id, str) and request_id and request_id not in seen:
+            seen.add(request_id)
+            ids.append(request_id)
+    if not ids:
+        return {}
+    placeholders = ", ".join("?" for _ in ids)
+    conn = db.connect()
+    with db._lock:
+        rows = conn.execute(
+            f"SELECT id, title, status FROM requests WHERE id IN ({placeholders})",
+            ids,
+        ).fetchall()
+    return {row["id"]: dict(row) for row in rows}
+
+
+def _journey_media_context(ref: dict) -> dict | None:
+    owner_id = ref.get("owner_id")
+    filename = ref.get("filename")
+    if not isinstance(owner_id, str) or not isinstance(filename, str):
+        return None
+    if not SAFE_SEGMENT_RE.fullmatch(owner_id) or owner_id in {".", ".."} or not _safe_media_filename(filename):
+        return None
+    media_type = _media_type_for(filename)
+    caption = ref.get("caption") if isinstance(ref.get("caption"), str) else None
+    return {
+        "url": _media_url(owner_id, filename),
+        "media_type": media_type,
+        "embed": media_type in {"video", "image"},
+        "caption": caption,
+        "label": caption or filename,
+    }
+
+
+def _journey_request_context(request_id: str, status_map: dict[str, dict]) -> dict:
+    row = status_map.get(request_id)
+    status = row.get("status") if row else None
+    return {
+        "request_id": request_id,
+        "href": f"/r/{quote(request_id, safe='')}",
+        "exists": row is not None,
+        "status": status,
+        "title": (row.get("title") if row else None) or request_id,
+    }
+
+
+def _journey_step_context(step: dict, status_map: dict[str, dict]) -> dict:
+    media = []
+    for ref in step.get("media") or []:
+        if isinstance(ref, dict):
+            resolved = _journey_media_context(ref)
+            if resolved is not None:
+                media.append(resolved)
+    request_id = step.get("request_id")
+    request_ctx = None
+    if isinstance(request_id, str) and request_id:
+        request_ctx = _journey_request_context(request_id, status_map)
+    return {
+        "title": step.get("title") or "Untitled step",
+        "summary": step.get("summary") if isinstance(step.get("summary"), str) else None,
+        "media": media,
+        "request": request_ctx,
+    }
+
+
+@app.get("/g/{slug}", response_class=HTMLResponse)
+def web_journey_detail(request: Request, slug: str):
+    if not web_token_ok(request):
+        return _login_redirect(request)
+    _validate_slug(slug)
+    journey = db.get_journey(slug)
+    if journey is None:
+        raise HTTPException(status_code=404, detail="journey not found")
+    doc = journey.get("doc") if isinstance(journey.get("doc"), dict) else {}
+    raw_steps = doc.get("steps")
+    raw_steps = [step for step in raw_steps if isinstance(step, dict)] if isinstance(raw_steps, list) else []
+    status_map = _journey_status_map([step.get("request_id") for step in raw_steps])
+    steps = [_journey_step_context(step, status_map) for step in raw_steps]
+    response = templates.TemplateResponse(
+        request,
+        "journey.html",
+        {"journey": journey, "steps": steps},
+    )
+    response.headers["Referrer-Policy"] = "no-referrer"
+    _maybe_set_cookie(response, request)
+    return response

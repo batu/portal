@@ -574,6 +574,135 @@ def test_post_stream_skips_duplicate_legacy_stream_attach(monkeypatch, tmp_path,
     }
 
 
+def test_client_upsert_journey_puts_merged_title_and_doc(monkeypatch):
+    captured = {}
+
+    def fake_request(method, url, headers, data=None):
+        captured["method"] = method
+        captured["url"] = url
+        captured["headers"] = headers
+        captured["data"] = json.loads(data.decode("utf-8"))
+        return {}
+
+    monkeypatch.setattr(cli.client, "_request", fake_request)
+
+    cli.client.upsert_journey("http://gallery", "tok", "wool-crush", "Wool Crush", {"steps": [{"title": "x"}]})
+
+    assert captured["method"] == "PUT"
+    assert captured["url"] == "http://gallery/api/journeys/wool-crush"
+    assert captured["headers"]["Authorization"] == "Bearer tok"
+    assert captured["headers"]["Content-Type"] == "application/json"
+    assert captured["data"] == {"title": "Wool Crush", "steps": [{"title": "x"}]}
+
+
+def test_journey_post_loads_doc_and_calls_client(monkeypatch, tmp_path, capsys):
+    doc = tmp_path / "journey.json"
+    doc.write_text(json.dumps({"steps": [{"title": "Watch"}, {"title": "Pick"}]}))
+    calls = []
+
+    monkeypatch.setattr(cli.config, "client_config", lambda: ("http://gallery", "tok"))
+
+    def fake_upsert(base_url, token, slug, title, doc_obj):
+        calls.append((base_url, token, slug, title, doc_obj))
+        return {"slug": slug, "title": title, "doc": doc_obj}
+
+    monkeypatch.setattr(cli.client, "upsert_journey", fake_upsert)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["portal", "journey", "post", "--slug", "wool-crush", "--title", "Wool Crush", "--doc", str(doc)],
+    )
+
+    cli.main()
+
+    assert calls == [
+        ("http://gallery", "tok", "wool-crush", "Wool Crush", {"steps": [{"title": "Watch"}, {"title": "Pick"}]})
+    ]
+    assert json.loads(capsys.readouterr().out)["slug"] == "wool-crush"
+
+
+def test_journey_post_rejects_invalid_slug(monkeypatch, tmp_path):
+    doc = tmp_path / "journey.json"
+    doc.write_text(json.dumps({"steps": []}))
+    monkeypatch.setattr(
+        cli.client, "upsert_journey", lambda *a, **k: pytest.fail("invalid slug must be rejected by argparse")
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        ["portal", "journey", "post", "--slug", "Bad Slug", "--title", "T", "--doc", str(doc)],
+    )
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    assert exc.value.code == 2
+
+
+def test_journey_post_invalid_doc_json_exits_1(monkeypatch, tmp_path, capsys):
+    doc = tmp_path / "journey.json"
+    doc.write_text("{not json")
+    monkeypatch.setattr(cli.config, "client_config", lambda: ("http://gallery", "tok"))
+    monkeypatch.setattr(
+        cli.client, "upsert_journey", lambda *a, **k: pytest.fail("malformed doc must not be posted")
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        ["portal", "journey", "post", "--slug", "wool-crush", "--title", "T", "--doc", str(doc)],
+    )
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    assert exc.value.code == 1
+    assert "invalid journey doc JSON" in capsys.readouterr().err
+
+
+def test_journey_post_doc_without_steps_exits_1(monkeypatch, tmp_path, capsys):
+    doc = tmp_path / "journey.json"
+    doc.write_text(json.dumps({"title": "no steps"}))
+    monkeypatch.setattr(cli.config, "client_config", lambda: ("http://gallery", "tok"))
+    monkeypatch.setattr(
+        cli.client, "upsert_journey", lambda *a, **k: pytest.fail("doc without steps must not be posted")
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        ["portal", "journey", "post", "--slug", "wool-crush", "--title", "T", "--doc", str(doc)],
+    )
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    assert exc.value.code == 1
+    assert "must be a JSON object with a 'steps' list" in capsys.readouterr().err
+
+
+def test_journey_list_and_get_call_client(monkeypatch, capsys):
+    monkeypatch.setattr(cli.config, "client_config", lambda: ("http://gallery", "tok"))
+    monkeypatch.setattr(cli.client, "list_journeys", lambda base_url, token: [{"slug": "wool-crush"}])
+    monkeypatch.setattr("sys.argv", ["portal", "journey", "list"])
+    cli.main()
+    assert json.loads(capsys.readouterr().out) == [{"slug": "wool-crush"}]
+
+    monkeypatch.setattr(
+        cli.client, "get_journey", lambda base_url, token, slug: {"slug": slug, "title": "Wool Crush"}
+    )
+    monkeypatch.setattr("sys.argv", ["portal", "journey", "get", "--slug", "wool-crush"])
+    cli.main()
+    assert json.loads(capsys.readouterr().out) == {"slug": "wool-crush", "title": "Wool Crush"}
+
+
+def test_journey_post_client_error_exits_1(monkeypatch, tmp_path, capsys):
+    doc = tmp_path / "journey.json"
+    doc.write_text(json.dumps({"steps": []}))
+    monkeypatch.setattr(cli.config, "client_config", lambda: ("http://gallery", "tok"))
+
+    def boom(*_args, **_kwargs):
+        raise cli.client.GalleryClientError(400, "invalid journey doc")
+
+    monkeypatch.setattr(cli.client, "upsert_journey", boom)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["portal", "journey", "post", "--slug", "wool-crush", "--title", "T", "--doc", str(doc)],
+    )
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    assert exc.value.code == 1
+    assert "error: HTTP 400: invalid journey doc" in capsys.readouterr().err
+
+
 def test_list_parses_flags(monkeypatch):
     parser_args = []
     monkeypatch.setattr(cli, "cmd_list", lambda args: parser_args.append(args))

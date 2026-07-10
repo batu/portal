@@ -127,8 +127,9 @@ def _variant():
 def test_fresh_db_has_portal_schema_v3(data_dir):
     conn = db.connect()
 
-    assert _user_version(conn) == 5
-    assert {"requests", "variants", "verdicts", "streams", "posts", "messages"} <= _table_names(conn)
+    assert _user_version(conn) == 6
+    assert {"requests", "variants", "verdicts", "streams", "posts", "messages", "journeys"} <= _table_names(conn)
+    assert {"slug", "title", "doc_json", "created_at", "updated_at"} == _column_names(conn, "journeys")
     assert {"stream_id", "before_media_path", "before_media_type"} <= _column_names(conn, "requests")
     assert {"superseded_by", "close_reason"} <= _column_names(conn, "requests")
     assert {"step", "purpose", "ask"} <= _column_names(conn, "requests")
@@ -186,8 +187,8 @@ def test_legacy_db_upgrade_preserves_existing_rows(data_dir):
 
     conn = db.connect()
 
-    assert _user_version(conn) == 5
-    assert {"streams", "posts", "messages"} <= _table_names(conn)
+    assert _user_version(conn) == 6
+    assert {"streams", "posts", "messages", "journeys"} <= _table_names(conn)
     assert {"stream_id", "before_media_path", "before_media_type"} <= _column_names(conn, "requests")
     assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
     assert _rows(
@@ -244,6 +245,29 @@ def test_legacy_db_upgrade_preserves_existing_rows(data_dir):
     assert conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0] == 0
 
 
+def test_legacy_db_upgrades_to_v6_with_usable_journeys_table(data_dir):
+    path = config.db_path()
+    _create_legacy_db(path)
+    legacy_rows = _legacy_snapshot(path)
+
+    conn = db.connect()
+
+    assert _user_version(conn) == 6
+    assert "journeys" in _table_names(conn)
+    assert _column_names(conn, "journeys") == {"slug", "title", "doc_json", "created_at", "updated_at"}
+    # Prior rows survive the v6 migration untouched.
+    assert _rows(
+        conn,
+        "SELECT id, title, project, kind, status, context_md, created_at, decided_at "
+        "FROM requests ORDER BY id",
+    ) == legacy_rows["requests"]
+    # The new table is immediately usable end-to-end.
+    stored = db.upsert_journey("wool-crush", "Wool Crush", {"steps": [{"title": "Watch"}]})
+    assert stored["slug"] == "wool-crush"
+    assert stored["doc"] == {"steps": [{"title": "Watch"}]}
+    assert db.get_journey("wool-crush")["title"] == "Wool Crush"
+
+
 def test_user_version_one_db_upgrades_to_v2_and_preserves_portal_rows(data_dir):
     path = config.db_path()
     _create_legacy_db(path)
@@ -265,7 +289,7 @@ def test_user_version_one_db_upgrades_to_v2_and_preserves_portal_rows(data_dir):
 
     conn = db.connect()
 
-    assert _user_version(conn) == 5
+    assert _user_version(conn) == 6
     assert "messages" in _table_names(conn)
     assert _column_names(conn, "messages") == {"id", "stream_id", "direction", "text", "created_at", "consumed_at"}
     assert _rows(conn, "SELECT id, slug, kind, title, created_at, closed_at FROM streams ORDER BY id") == [
@@ -311,7 +335,7 @@ def test_reconnecting_migrated_db_is_noop(data_dir):
         table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
         for table in ("requests", "variants", "verdicts", "streams", "posts", "messages")
     }
-    assert _user_version(conn) == 5
+    assert _user_version(conn) == 6
     assert after == before
 
 
@@ -330,7 +354,7 @@ def test_partial_v1_db_completes_migration(data_dir):
 
     conn = db.connect()
 
-    assert _user_version(conn) == 5
+    assert _user_version(conn) == 6
     assert {"stream_id", "before_media_path", "before_media_type"} <= _column_names(conn, "requests")
     assert "posts" in _table_names(conn)
     assert "messages" in _table_names(conn)
@@ -391,7 +415,7 @@ def test_failed_migration_rolls_back_and_connect_can_retry(data_dir, monkeypatch
 
     monkeypatch.setattr(db, "MIGRATIONS", original_migrations)
     conn = db.connect()
-    assert _user_version(conn) == 5
+    assert _user_version(conn) == 6
     assert {"streams", "posts", "messages"} <= _table_names(conn)
 
 

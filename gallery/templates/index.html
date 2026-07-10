@@ -47,6 +47,27 @@
 </section>
 
 <section>
+  <h2>Journeys ({{ journeys|length }})</h2>
+  {% if not journeys %}
+    <p class="empty">No journeys yet.</p>
+  {% endif %}
+  <ul class="request-list journey-list">
+    {% for j in journeys %}
+    <li>
+      <a class="request-card journey-card" href="/g/{{ j.slug }}">
+        <div class="request-title">{{ j.title }}</div>
+        <div class="request-meta">
+          <span class="tag">/g/{{ j.slug }}</span>
+          <span class="tag">{{ j.step_count }} step{{ 's' if j.step_count != 1 else '' }}</span>
+          <span class="age">updated {{ j.updated_at|ago }}</span>
+        </div>
+      </a>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+
+<section>
   <details {% if q %}open{% endif %}>
     <summary><h2 style="display:inline">Decided ({{ decided|length }})</h2></summary>
     <form method="get" class="search-form">

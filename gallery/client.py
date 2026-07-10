@@ -51,6 +51,12 @@ def post_json(base_url: str, token: str, path: str, obj: dict) -> dict:
     return _request("POST", base_url + path, headers, json.dumps(obj).encode("utf-8"))
 
 
+def put_json(base_url: str, token: str, path: str, obj: dict) -> dict:
+    headers = _auth_headers(token)
+    headers["Content-Type"] = "application/json"
+    return cast(dict, _request("PUT", base_url + path, headers, json.dumps(obj).encode("utf-8")))
+
+
 def post_multipart(base_url: str, token: str, path: str, fields: dict, files: list) -> dict:
     """fields: simple string form fields. files: Path entries, or (field_name, Path) entries."""
     boundary = uuid.uuid4().hex
@@ -170,3 +176,17 @@ def list_stream_messages(
 def consume_message(base_url: str, token: str, message_id: str) -> dict:
     message_id = urllib.parse.quote(message_id, safe="")
     return post_json(base_url, token, f"/api/messages/{message_id}/consume", {})
+
+
+def upsert_journey(base_url: str, token: str, slug: str, title: str, doc: dict) -> dict:
+    slug = urllib.parse.quote(slug, safe="")
+    return put_json(base_url, token, f"/api/journeys/{slug}", {"title": title, **doc})
+
+
+def get_journey(base_url: str, token: str, slug: str) -> dict:
+    slug = urllib.parse.quote(slug, safe="")
+    return cast(dict, get_json(base_url, token, f"/api/journeys/{slug}"))
+
+
+def list_journeys(base_url: str, token: str) -> list[dict]:
+    return cast(list[dict], get_json(base_url, token, "/api/journeys"))

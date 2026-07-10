@@ -663,6 +663,184 @@ h2 { font-size: 1.05rem; }
   text-decoration: underline;
 }
 
+/* --- Journey: a deliberate vertical story spine (desktop-first) --- */
+/* The journey escapes main's 720px cap and re-centers on the viewport so the
+   spine + framed media have room to breathe on a desktop. */
+.journey {
+  width: min(940px, calc(100vw - 32px));
+  margin-left: 50%;
+  transform: translateX(-50%);
+}
+
+.journey-header {
+  margin: 4px 0 30px;
+}
+
+.journey-header h1 {
+  font-size: 1.9rem;
+  margin: 6px 0 6px;
+}
+
+.journey-lede {
+  margin: 0;
+  color: var(--muted);
+  font-size: 1rem;
+}
+
+.journey-spine {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.journey-step {
+  position: relative;
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr);
+  column-gap: 22px;
+  padding-bottom: 34px;
+}
+
+/* The connecting rail threads through the numbered nodes. */
+.journey-step::before {
+  content: "";
+  position: absolute;
+  left: 27px;
+  top: 10px;
+  bottom: -6px;
+  width: 2px;
+  background: var(--border);
+}
+
+.journey-step:last-child::before {
+  display: none;
+}
+
+.journey-node {
+  position: relative;
+  z-index: 1;
+  width: 44px;
+  height: 44px;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: 1.05rem;
+  color: var(--accent-fg);
+  background: var(--accent);
+  border: 4px solid var(--bg);
+  box-shadow: 0 0 0 1px var(--border);
+}
+
+.journey-step-body {
+  min-width: 0;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 16px 20px 20px;
+}
+
+.journey-step-title {
+  margin: 2px 0 8px;
+  font-size: 1.15rem;
+  color: var(--fg);
+}
+
+.journey-summary {
+  margin: 0 0 14px;
+  color: var(--fg);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.journey-media {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin: 6px 0 4px;
+}
+
+.journey-media-item {
+  margin: 0;
+}
+
+.journey-video,
+.journey-image {
+  display: block;
+  width: 100%;
+  max-width: 660px;
+  height: auto;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: #07090e;
+}
+
+.journey-media-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #151820;
+  font-weight: 600;
+}
+
+.journey-media-link:hover {
+  border-color: var(--accent);
+}
+
+.journey-caption {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.journey-request {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #151820;
+  color: var(--fg);
+}
+
+.journey-request:hover {
+  border-color: var(--accent);
+}
+
+.journey-request-label {
+  min-width: 0;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Chip hues mirror the P5c status vocabulary (_STATUS_CHIP_STYLES). */
+.journey-chip {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  padding: 3px 11px;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  background: rgba(160, 165, 180, 0.14);
+  color: #b6b9c2;
+}
+
+.journey-chip.open { background: rgba(96, 150, 230, 0.16); color: #8fb8f0; }
+.journey-chip.decided { background: rgba(74, 200, 140, 0.16); color: #7ce0a3; }
+.journey-chip.closed,
+.journey-chip.superseded,
+.journey-chip.unknown { background: rgba(160, 165, 180, 0.14); color: #b6b9c2; }
+
 /* Interactive view posts escape main's 720px cap: the view owns its layout. */
 .view-frame-bleed {
   width: calc(100vw - 48px);
@@ -675,4 +853,17 @@ h2 { font-size: 1.05rem; }
   border: 0;
   border-radius: 8px;
   background: #000;
+}
+
+/* Journey light-mode overrides. Placed after the base .journey-* rules so equal
+   specificity resolves in the override's favour when the media query matches. */
+@media (prefers-color-scheme: light) {
+  .journey-video, .journey-image { background: #eef0f3; }
+  .journey-media-link, .journey-request { background: #f7f8fa; }
+  .journey-chip { background: #eef0f3; color: #55606f; }
+  .journey-chip.open { background: #e4eefc; color: #2f5aa0; }
+  .journey-chip.decided { background: #eafaf0; color: #1f7a3a; }
+  .journey-chip.closed,
+  .journey-chip.superseded,
+  .journey-chip.unknown { background: #eef0f3; color: #55606f; }
 }

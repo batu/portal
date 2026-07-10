@@ -51,6 +51,14 @@ CREATE TABLE IF NOT EXISTS verdicts (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS journeys (
+    slug TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    doc_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_requests_status ON requests(status);
 CREATE INDEX IF NOT EXISTS idx_requests_project ON requests(project);
 CREATE INDEX IF NOT EXISTS idx_verdicts_request ON verdicts(request_id);
@@ -185,6 +193,8 @@ def _validate_schema_version(conn: sqlite3.Connection, version: int) -> None:
         _validate_v4_schema(conn)
     if version >= 5:
         _validate_v5_schema(conn)
+    if version >= 6:
+        _validate_v6_schema(conn)
 
 
 def _migrate_v1(conn: sqlite3.Connection) -> None:
@@ -271,7 +281,37 @@ def _validate_v5_schema(conn: sqlite3.Connection) -> None:
         raise RuntimeError(f"schema v5 missing requests columns: {missing_list}")
 
 
-MIGRATIONS = [(1, _migrate_v1), (2, _migrate_v2), (3, _migrate_v3), (4, _migrate_v4), (5, _migrate_v5)]
+def _migrate_v6(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS journeys (
+            slug TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            doc_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+
+
+def _validate_v6_schema(conn: sqlite3.Connection) -> None:
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'journeys'").fetchone() is None:
+        raise RuntimeError("schema v6 missing journeys table")
+    missing = {"slug", "title", "doc_json", "created_at", "updated_at"} - _column_names(conn, "journeys")
+    if missing:
+        missing_list = ", ".join(sorted(missing))
+        raise RuntimeError(f"schema v6 missing journeys columns: {missing_list}")
+
+
+MIGRATIONS = [
+    (1, _migrate_v1),
+    (2, _migrate_v2),
+    (3, _migrate_v3),
+    (4, _migrate_v4),
+    (5, _migrate_v5),
+    (6, _migrate_v6),
+]
 
 
 def _user_version(conn: sqlite3.Connection) -> int:
@@ -976,3 +1016,66 @@ def supersede_request(req_id: str, successor_id: str) -> dict:
         except Exception:
             conn.rollback()
             raise
+
+
+def _journey_from_row(row: sqlite3.Row | None) -> dict | None:
+    if row is None:
+        return None
+    journey = dict(row)
+    journey["doc"] = json.loads(journey.pop("doc_json"))
+    return journey
+
+
+def _get_journey(conn: sqlite3.Connection, slug: str) -> dict | None:
+    return _journey_from_row(conn.execute("SELECT * FROM journeys WHERE slug = ?", (slug,)).fetchone())
+
+
+def upsert_journey(slug: str, title: str, doc: dict, *, created_at: str | None = None, updated_at: str | None = None) -> dict:
+    """Update-in-place: one row per slug. Re-posting a slug replaces title+doc and
+    bumps updated_at while preserving the original created_at."""
+    conn = connect()
+    now = updated_at or now_iso()
+    created = created_at or now
+    with _lock:
+        try:
+            conn.execute(
+                "INSERT INTO journeys (slug, title, doc_json, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(slug) DO UPDATE SET "
+                "title = excluded.title, doc_json = excluded.doc_json, updated_at = excluded.updated_at",
+                (slug, title, json.dumps(doc), created, now),
+            )
+            conn.commit()
+            journey = _get_journey(conn, slug)
+            assert journey is not None
+            return journey
+        except Exception:
+            conn.rollback()
+            raise
+
+
+def get_journey(slug: str) -> dict | None:
+    conn = connect()
+    with _lock:
+        return _get_journey(conn, slug)
+
+
+def list_journeys() -> list[dict]:
+    conn = connect()
+    with _lock:
+        rows = conn.execute(
+            "SELECT slug, title, doc_json, updated_at FROM journeys ORDER BY updated_at DESC, slug"
+        ).fetchall()
+    out = []
+    for row in rows:
+        doc = json.loads(row["doc_json"])
+        steps = doc.get("steps") if isinstance(doc, dict) else None
+        out.append(
+            {
+                "slug": row["slug"],
+                "title": row["title"],
+                "step_count": len(steps) if isinstance(steps, list) else 0,
+                "updated_at": row["updated_at"],
+            }
+        )
+    return out

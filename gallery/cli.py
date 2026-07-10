@@ -205,6 +205,36 @@ def cmd_stream(args):
     print(json.dumps(result))
 
 
+def _load_journey_doc(path: str) -> dict:
+    text = _resolve_file(path).read_text()
+    try:
+        doc = json.loads(text)
+    except json.JSONDecodeError as exc:
+        print(f"error: invalid journey doc JSON: {exc}", file=sys.stderr)
+        sys.exit(1)
+    if not isinstance(doc, dict) or not isinstance(doc.get("steps"), list):
+        print("error: journey doc must be a JSON object with a 'steps' list", file=sys.stderr)
+        sys.exit(1)
+    return {"steps": doc["steps"]}
+
+
+def cmd_journey(args):
+    base_url, token = config.client_config()
+    try:
+        if args.journey_command == "post":
+            doc = _load_journey_doc(args.doc)
+            result = client.upsert_journey(base_url, token, args.slug, args.title, doc)
+        elif args.journey_command == "get":
+            result = client.get_journey(base_url, token, args.slug)
+        elif args.journey_command == "list":
+            result = client.list_journeys(base_url, token)
+        else:
+            raise AssertionError(f"unhandled journey command: {args.journey_command}")
+    except client.GalleryClientError as exc:
+        _exit_client_error(exc)
+    print(json.dumps(result))
+
+
 def cmd_close(args):
     base_url, token = config.client_config()
     try:
@@ -476,6 +506,19 @@ def main():
     sp = stream_sub.add_parser("close", help="Close a Portal stream")
     sp.add_argument("slug", type=_stream_slug)
 
+    p = sub.add_parser("journey", help="Post/read native game journeys (the /g/<slug> story pages)")
+    journey_sub = p.add_subparsers(dest="journey_command", required=True)
+
+    jp = journey_sub.add_parser("post", help="Post or re-post (update-in-place) a journey doc at a stable slug")
+    jp.add_argument("--slug", required=True, type=_stream_slug, help="Stable slug; the page lives at /g/<slug>")
+    jp.add_argument("--title", required=True)
+    jp.add_argument("--doc", required=True, help='Path to a JSON file: {"steps": [ {title, summary?, media?, request_id?} ]}')
+
+    jp = journey_sub.add_parser("get", help="Fetch a journey by slug")
+    jp.add_argument("--slug", required=True, type=_stream_slug)
+
+    journey_sub.add_parser("list", help="List journeys")
+
     p = sub.add_parser("close", help="Close a request with a reason (no fabricated verdict)")
     p.add_argument("id")
     p.add_argument("--reason", required=True, help="Why the request is being closed")
@@ -555,6 +598,7 @@ def main():
         "init": cmd_init,
         "post": cmd_post,
         "stream": cmd_stream,
+        "journey": cmd_journey,
         "close": cmd_close,
         "supersede": cmd_supersede,
         "report": cmd_report,
