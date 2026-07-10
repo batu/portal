@@ -260,6 +260,28 @@ def test_journey_page_dangling_request_renders_without_500(client, token):
     assert '<span class="journey-chip unknown">unknown</span>' in page.text
 
 
+def test_journey_link_media_caption_renders_once_embed_caption_kept(client, token):
+    _add_media_post(
+        "wool-crush", "p_mixed", "Artifacts",
+        [("report.html", "text/html", b"<html></html>"), ("still.png", "image/png", tiny_png_bytes())],
+    )
+    _put_journey(
+        client, token, "wool-crush", "Wool Crush",
+        [{"title": "Read the artifacts", "media": [
+            {"owner_id": "p_mixed", "filename": "report.html", "caption": "Style report"},
+            {"owner_id": "p_mixed", "filename": "still.png", "caption": "Chosen still"},
+        ]}],
+    )
+
+    page = client.get(f"/g/wool-crush?token={token}")
+    assert page.status_code == 200
+    # Link media: the caption IS the visible link label — no duplicate figcaption.
+    assert page.text.count("Style report") == 1
+    assert '<figcaption class="journey-caption">Style report</figcaption>' not in page.text
+    # Embedded media keeps its figcaption (its label only lands in alt text).
+    assert '<figcaption class="journey-caption">Chosen still</figcaption>' in page.text
+
+
 def test_journey_page_escapes_producer_text(client, token):
     _put_journey(client, token, "wool-crush", "Wool Crush", [{"title": "<script>alert(1)</script>"}])
 
@@ -334,9 +356,11 @@ def test_wool_crush_fixture_renders_all_five_steps_end_to_end(client, token):
     assert f'href="/r/{ids["frame_picker"]}"' in page.text
     assert f'href="/r/{ids["token_promo"]}"' in page.text
     assert page.text.count('class="journey-chip open"') == 2
-    # Both report links present (HTML linked, not embedded).
+    # Both report links present (HTML linked, not embedded), captions once each.
     assert 'href="/media/p_style/style.html?token=' in page.text
     assert 'href="/media/p_assets/assets.html?token=' in page.text
+    assert page.text.count("Style report p_f6d5b8") == 1
+    assert page.text.count("Asset sheet p_d7b881") == 1
 
     # The referenced video actually serves.
     media = client.get(f"/media/p_video/proxy.mp4?token={token}")

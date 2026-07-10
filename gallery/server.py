@@ -1621,12 +1621,15 @@ def _journey_media_context(ref: dict) -> dict | None:
     if not SAFE_SEGMENT_RE.fullmatch(owner_id) or owner_id in {".", ".."} or not _safe_media_filename(filename):
         return None
     media_type = _media_type_for(filename)
+    embed = media_type in {"video", "image"}
     caption = ref.get("caption") if isinstance(ref.get("caption"), str) else None
     return {
         "url": _media_url(owner_id, filename),
         "media_type": media_type,
-        "embed": media_type in {"video", "image"},
-        "caption": caption,
+        "embed": embed,
+        # For link-type media the caption already IS the visible link label,
+        # so passing it through again would render the same text twice.
+        "caption": caption if embed else None,
         "label": caption or filename,
     }
 
