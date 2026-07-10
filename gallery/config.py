@@ -16,6 +16,10 @@ from pathlib import Path
 DEFAULT_HOST = "0.0.0.0"
 DEFAULT_PORT = 8787
 DEFAULT_URL = "http://bases-mac-mini:8787"
+# Hard ceiling for POST /api/requests uploads. A guardrail (not a shrink):
+# comfortably above today's real 32 MB proxy videos. Configurable via the
+# "max_upload_bytes" config key; over-limit requests are rejected with HTTP 413.
+DEFAULT_MAX_UPLOAD_BYTES = 64 * 1024 * 1024
 
 
 def data_dir() -> Path:
@@ -82,6 +86,7 @@ def init_config(force: bool = False) -> dict:
         "host": DEFAULT_HOST,
         "port": DEFAULT_PORT,
         "url": DEFAULT_URL,
+        "max_upload_bytes": DEFAULT_MAX_UPLOAD_BYTES,
         "telegram_bot_token": None,
         "telegram_chat_id": None,
     }

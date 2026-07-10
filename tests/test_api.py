@@ -1,3 +1,8 @@
+from types import SimpleNamespace
+
+import pytest
+from starlette.datastructures import Headers
+
 from gallery import config, db, server
 
 
@@ -590,3 +595,132 @@ def test_request_metadata_too_long_rejected(client, token):
         )
         assert resp.status_code == 400
         assert f"{field} is too long" in resp.json()["detail"]
+
+
+# --- Upload size cap (P5e) -------------------------------------------------
+
+
+def test_upload_over_limit_rejected_with_413(client, token):
+    cfg = config.load_config()
+    cfg["max_upload_bytes"] = 100
+    config.save_config(cfg)
+
+    resp = client.post(
+        "/api/requests",
+        headers=auth_headers(token),
+        data={"title": "too big", "kind": "pick-one"},
+        files=_upload_files(1),
+    )
+    assert resp.status_code == 413
+    detail = resp.json()["detail"]
+    assert "100" in detail and "bytes" in detail  # message names the limit
+
+    # No row and no media dir left behind by the rejected upload.
+    assert client.get("/api/requests", headers=auth_headers(token)).json() == []
+    assert not any(config.media_dir().iterdir())
+
+
+def test_default_config_small_upload_unaffected(client, token):
+    # Default 64 MB config: a small upload is byte-for-byte unaffected.
+    resp = client.post(
+        "/api/requests",
+        headers=auth_headers(token),
+        data={"title": "fine", "kind": "pick-one"},
+        files=_upload_files(3),
+    )
+    assert resp.status_code == 200
+    assert resp.json()["variant_count"] == 3
+
+
+def test_upload_limit_boundary_is_strict(client, token):
+    # Capture the exact multipart Content-Length httpx sends (deterministic for
+    # identical files: httpx uses a fixed-length boundary).
+    files_data = {"title": "boundary", "kind": "pick-one"}
+    probe = client.post(
+        "/api/requests",
+        headers=auth_headers(token),
+        data=files_data,
+        files=_upload_files(1),
+    )
+    assert probe.status_code == 200
+    body_size = int(probe.request.headers["content-length"])
+
+    # Limit exactly equal to the body → accepted (check is strictly greater-than).
+    cfg = config.load_config()
+    cfg["max_upload_bytes"] = body_size
+    config.save_config(cfg)
+    at_limit = client.post(
+        "/api/requests", headers=auth_headers(token), data=files_data, files=_upload_files(1)
+    )
+    assert at_limit.status_code == 200
+
+    # One byte under → rejected.
+    cfg["max_upload_bytes"] = body_size - 1
+    config.save_config(cfg)
+    over = client.post(
+        "/api/requests", headers=auth_headers(token), data=files_data, files=_upload_files(1)
+    )
+    assert over.status_code == 413
+
+
+def test_enforce_upload_size_ignores_missing_or_malformed_length():
+    # A missing or unpar-seable Content-Length falls through to normal handling
+    # (documents the trusted-client Content-Length pre-check, not streaming).
+    server._enforce_upload_size(SimpleNamespace(headers=Headers({})), 100)
+    server._enforce_upload_size(
+        SimpleNamespace(headers=Headers({"content-length": "not-a-number"})), 100
+    )
+    with pytest.raises(server.HTTPException) as exc:
+        server._enforce_upload_size(
+            SimpleNamespace(headers=Headers({"content-length": "101"})), 100
+        )
+    assert exc.value.status_code == 413
+
+
+# --- Filename double-prefix guard (P5e) ------------------------------------
+
+
+def _stored_paths(client, token, files):
+    resp = client.post(
+        "/api/requests",
+        headers=auth_headers(token),
+        data={"title": "prefix", "kind": "pick-one"},
+        files=files,
+    )
+    assert resp.status_code == 200
+    detail = client.get(f"/api/requests/{resp.json()['id']}", headers=auth_headers(token)).json()
+    return detail["variants"]
+
+
+def test_plain_filename_prefixed_once(client, token):
+    variants = _stored_paths(client, token, [("files", ("v.png", tiny_png_bytes(), "image/png"))])
+    assert variants[0]["media_path"] == "01_v.png"
+
+
+def test_pre_prefixed_filename_not_doubled(client, token):
+    variants = _stored_paths(client, token, [("files", ("01_x.png", tiny_png_bytes(), "image/png"))])
+    assert variants[0]["media_path"] == "01_x.png"
+
+
+def test_pre_prefixed_name_decoupled_from_upload_position(client, token):
+    # A baked ordinal that differs from the upload position is preserved: the
+    # filename keeps `05_`, while the positional idx is 2.
+    variants = _stored_paths(
+        client,
+        token,
+        [
+            ("files", ("a.png", tiny_png_bytes(), "image/png")),
+            ("files", ("05_v.png", tiny_png_bytes(), "image/png")),
+        ],
+    )
+    assert variants[0]["media_path"] == "01_a.png"
+    assert variants[1]["media_path"] == "05_v.png"
+    assert variants[1]["idx"] == 2
+
+
+def test_three_digit_leading_number_is_prefixed_normally(client, token):
+    # Only an exact two-digit `^\d{2}_` marker counts as an ordinal; `123_` does not.
+    variants = _stored_paths(
+        client, token, [("files", ("123_x.png", tiny_png_bytes(), "image/png"))]
+    )
+    assert variants[0]["media_path"] == "01_123_x.png"

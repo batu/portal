@@ -300,6 +300,20 @@ def _safe_upload_name(filename: str | None, fallback: str) -> str:
     return (name or fallback)[:120]
 
 
+def _prefixed_media_name(index: int, filename: str | None, fallback: str) -> str:
+    """Stored variant filename for the 1-based `index`th upload.
+
+    Filenames that already carry a two-digit `NN_` ordinal — e.g. producer HTML
+    with baked media paths like `--video-src=02_v.mp4` — are stored verbatim so
+    those baked references resolve; re-prefixing (`01_02_v.mp4`) would 404 them.
+    All other names get the 1-based ordinal exactly once.
+    """
+    safe = _safe_upload_name(filename, fallback)
+    if re.match(r"\d{2}_", safe):
+        return safe
+    return f"{index:02d}_{safe}"
+
+
 def _safe_media_filename(filename: str) -> bool:
     if not filename or filename in {".", ".."}:
         return False
@@ -441,6 +455,27 @@ async def _write_upload(upload: UploadFile, dest_path: Path) -> int:
     return total
 
 
+def _enforce_upload_size(request: Request, limit: int) -> None:
+    """Reject an over-limit upload via its Content-Length before any file is read.
+
+    The guardrail's threat model is an accidental oversized upload through a
+    trusted client (the portal CLI / Caddy), all of which send Content-Length;
+    a missing or malformed header falls through to normal handling.
+    """
+    raw = request.headers.get("content-length")
+    if raw is None:
+        return
+    try:
+        size = int(raw)
+    except ValueError:
+        return
+    if size > limit:
+        raise HTTPException(
+            status_code=413,
+            detail=f"upload exceeds max size of {limit} bytes ({limit // (1024 * 1024)} MB)",
+        )
+
+
 def _validate_slug(slug: str) -> str:
     if not STREAM_SLUG_RE.fullmatch(slug):
         raise HTTPException(status_code=400, detail="invalid stream slug")
@@ -534,7 +569,7 @@ async def _save_post_files(post_id: str, uploads: list[UploadFile]) -> tuple[lis
     try:
         for i, upload in enumerate(uploads, start=1):
             original_name = upload.filename or f"file_{i}"
-            safe_name = f"{i:02d}_{_safe_upload_name(original_name, f'file_{i}')}"
+            safe_name = _prefixed_media_name(i, original_name, f"file_{i}")
             dest_path = dest_dir / safe_name
             size = await _write_upload(upload, dest_path)
             total_bytes += size
@@ -631,6 +666,7 @@ async def create_request(
     files: list[UploadFile] = File(...),
 ):
     server_cfg = require_api_token(request)
+    _enforce_upload_size(request, server_cfg.get("max_upload_bytes", config.DEFAULT_MAX_UPLOAD_BYTES))
     step = _bounded_optional_text(step, "step", MAX_TITLE_LENGTH)
     purpose = _bounded_optional_text(purpose, "purpose", MAX_TITLE_LENGTH)
     ask = _bounded_optional_text(ask, "ask", MAX_TITLE_LENGTH)
@@ -676,7 +712,7 @@ async def create_request(
 
             for i, upload in enumerate(request_uploads, start=1):
                 orig_name = upload.filename or f"variant_{i}"
-                safe_name = f"{i:02d}_{_safe_upload_name(orig_name, f'variant_{i}')}"
+                safe_name = _prefixed_media_name(i, orig_name, f"variant_{i}")
                 dest_path = dest_dir / safe_name
                 data = await upload.read()
                 dest_path.write_bytes(data)

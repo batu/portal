@@ -259,6 +259,30 @@ def test_header_injection_without_body_tag_keeps_doctype_first(client, token):
     assert served.endswith(b"<p>bare report</p>")
 
 
+def test_baked_media_path_round_trip(client, token):
+    # A producer view whose HTML bakes `--video-src=02_v.mp4`: the video must be
+    # stored under exactly that name (no double-prefix to `01_02_v.mp4`) so the
+    # baked reference resolves. Both files already carry a `NN_` ordinal.
+    resp = client.post(
+        "/api/requests",
+        data={"title": "baked picker", "kind": "view"},
+        files=[
+            ("files", ("01_x.html", b"<!doctype html><video src=02_v.mp4></video>", "text/html")),
+            ("files", ("02_v.mp4", b"\x00\x00\x00\x18ftypmp42", "video/mp4")),
+        ],
+        headers=auth_headers(token),
+    )
+    assert resp.status_code == 200
+    req_id = resp.json()["id"]
+
+    variants = client.get(f"/api/requests/{req_id}", headers=auth_headers(token)).json()["variants"]
+    assert [v["media_path"] for v in variants] == ["01_x.html", "02_v.mp4"]
+
+    # The baked reference resolves: the stored video is servable at its exact name.
+    served = client.get(f"/media/{req_id}/02_v.mp4", params={"token": token})
+    assert served.status_code == 200
+
+
 def test_report_header_metadata_is_bounded_and_coerced(client, token):
     # Report body_json is arbitrary JSON: non-string metadata must be dropped
     # (never rendered as a Python repr) and oversized strings truncated.
