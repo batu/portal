@@ -777,7 +777,7 @@ def create_request(
     with _lock:
         try:
             slug = stream if (stream and stream.strip()) else _stream_slug_for_project(project)
-            stream = _ensure_stream(conn, slug)
+            stream_row = _ensure_stream(conn, slug)
             conn.execute(
                 "INSERT INTO requests "
                 "(id, title, project, kind, status, context_md, created_at, stream_id, before_media_path, before_media_type, step, purpose, ask) "
@@ -789,7 +789,7 @@ def create_request(
                     kind,
                     context_md,
                     created_at,
-                    stream["id"],
+                    stream_row["id"],
                     before_media_path,
                     before_media_type,
                     step,
@@ -812,7 +812,7 @@ def create_request(
                 )
             _create_post(
                 conn,
-                stream["id"],
+                stream_row["id"],
                 "decision",
                 title,
                 "gallery",

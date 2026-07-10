@@ -118,6 +118,13 @@ existing `POST /api/requests` / `gallery post` path:
   overlong normalized project slugs keep the leading stem plus `-` and the
   first 8 hex characters of `sha256(project-slug)`.
 - If `project` is `None`: it lands in the lazily-created stream `inbox`.
+- If a non-empty `stream` form field is supplied to `POST /api/requests`
+  (CLI: `portal post --stream <slug>`): that slug takes precedence over the
+  `project`-derived resolution above and becomes the request's authoritative
+  `stream_id`. The slug is validated against the route slug contract (`400`
+  on mismatch; empty/whitespace values mean "absent") and the stream is
+  lazily created (kind `session`, title = slug) if missing. Closing that
+  stream makes the request read-only (decide returns `409`).
 - `create_request` writes the `requests`/`variants` rows **and** a `posts`
   row (type `decision`, `body_json` pointing at the request id) in the same
   transaction, so legacy requests appear in stream pages. Without the dual
@@ -164,7 +171,7 @@ protocol; binary is named `portal`, with `gallery` kept as an alias — see §13
 portal stream new <slug> [--kind session|pinned] [--title ...]
 portal stream close <slug>
 portal report  --stream <slug> --title ... <file.html> [assets...]
-portal post    --stream <slug> ...            # existing decision flow + --before <img>
+portal post    --stream <slug> ...            # decision flow + --before <img>; --stream sets the owning stream (created if missing)
 portal wait    <request-id>                   # existing, unchanged
 portal ask     --stream <slug> "question" [--timeout 1800]   # phase 2
 portal pull    --stream <slug> [--timeout 0]                 # phase 2

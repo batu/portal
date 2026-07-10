@@ -157,6 +157,7 @@ def test_explicit_stream_sets_authoritative_stream_id_and_single_decision_post(c
     alpha = db.get_stream("alpha")
     assert alpha is not None
     assert db.get_request(req_id)["stream_id"] == alpha["id"]
+    assert db.get_request(req_id)["project"] == "fabrika/x"
 
     stream = client.get("/api/streams/alpha", headers=auth_headers(token))
     assert stream.status_code == 200
@@ -182,6 +183,46 @@ def test_absent_stream_keeps_legacy_project_ownership(client, token):
     assert proj_stream is not None
     assert db.get_request(req_id)["stream_id"] == proj_stream["id"]
     assert db.get_stream("alpha") is None
+
+
+def test_blank_stream_field_falls_back_to_legacy_project_ownership(client, token):
+    # A direct API caller sending an empty or whitespace-only stream field must
+    # get the same legacy ownership as an absent field (the CLI cannot send
+    # these; argparse rejects them before any HTTP call).
+    for blank in ("", "   "):
+        create = client.post(
+            "/api/requests",
+            headers=auth_headers(token),
+            data={"title": "Blank stream", "project": "navigation/project", "kind": "pick-one", "stream": blank},
+            files=_request_uploads(1),
+        )
+        assert create.status_code == 200
+        req_id = create.json()["id"]
+
+        proj_stream = db.get_stream(db._stream_slug_for_project("navigation/project"))
+        assert proj_stream is not None
+        assert db.get_request(req_id)["stream_id"] == proj_stream["id"]
+
+
+def test_explicit_stream_matching_legacy_slug_yields_single_decision_post(client, token):
+    create = client.post(
+        "/api/requests",
+        headers=auth_headers(token),
+        data={"title": "Explicit legacy", "project": "fabrika/x", "kind": "pick-one", "stream": "proj-fabrika-x"},
+        files=_request_uploads(1),
+    )
+    assert create.status_code == 200
+    req_id = create.json()["id"]
+
+    proj_stream = db.get_stream("proj-fabrika-x")
+    assert proj_stream is not None
+    assert db.get_request(req_id)["stream_id"] == proj_stream["id"]
+
+    stream = client.get("/api/streams/proj-fabrika-x", headers=auth_headers(token))
+    assert stream.status_code == 200
+    posts = stream.json()["posts"]
+    assert [p["type"] for p in posts] == ["decision"]
+    assert posts[0]["body"] == {"request_id": req_id}
 
 
 def test_post_to_closed_explicit_stream_rejected_with_409_no_row_no_media(client, token):
