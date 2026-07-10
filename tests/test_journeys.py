@@ -192,6 +192,33 @@ def test_put_drops_unknown_keys_and_normalizes(client, token):
     assert step == {"title": "Step", "summary": "hi", "media": [{"owner_id": "p_1", "filename": "a.png"}]}
 
 
+def test_put_rejects_over_limit_docs(client, token):
+    too_many_steps = [{"title": f"s{i}"} for i in range(101)]
+    resp = _put_journey(client, token, "wool-crush", "T", too_many_steps)
+    assert resp.status_code == 400
+    assert "at most 100 steps" in resp.json()["detail"]
+
+    too_much_media = [
+        {"title": "s", "media": [{"owner_id": f"p_{i}", "filename": "a.png"} for i in range(31)]}
+    ]
+    resp = _put_journey(client, token, "wool-crush", "T", too_much_media)
+    assert resp.status_code == 400
+    assert "at most 30 media" in resp.json()["detail"]
+
+
+def test_put_validation_errors_name_the_offending_step_and_media(client, token):
+    resp = _put_journey(client, token, "wool-crush", "T", [{"title": "ok"}, {"summary": "no title"}])
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "steps[1].title is required"
+
+    resp = _put_journey(
+        client, token, "wool-crush", "T",
+        [{"title": "ok", "media": [{"owner_id": "p_1", "filename": "a.png"}, {"owner_id": "a/b", "filename": "x.png"}]}],
+    )
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "invalid steps[0].media[1].owner_id"
+
+
 # --- /g/<slug> web page ---
 
 
@@ -282,6 +309,37 @@ def test_journey_link_media_caption_renders_once_embed_caption_kept(client, toke
     assert '<figcaption class="journey-caption">Chosen still</figcaption>' in page.text
 
 
+def test_journey_page_survives_stored_doc_with_non_list_media(client, token):
+    # Stored docs can bypass API validation (direct db writers); render must not 500.
+    db.upsert_journey("wool-crush", "Wool Crush", {"steps": [{"title": "Corrupt media", "media": 42}]})
+
+    page = client.get(f"/g/wool-crush?token={token}")
+    assert page.status_code == 200
+    assert "Corrupt media" in page.text
+
+
+def test_journey_page_links_non_browser_safe_media_instead_of_embedding(client, token):
+    _add_media_post(
+        "wool-crush", "p_docs", "Docs",
+        [("notes.pdf", "application/pdf", b"%PDF-1.4"), ("logo.svg", "image/svg+xml", b"<svg xmlns='http://www.w3.org/2000/svg'/>")],
+    )
+    _put_journey(
+        client, token, "wool-crush", "Wool Crush",
+        [{"title": "Read the docs", "media": [
+            {"owner_id": "p_docs", "filename": "notes.pdf"},
+            {"owner_id": "p_docs", "filename": "logo.svg"},
+        ]}],
+    )
+
+    page = client.get(f"/g/wool-crush?token={token}")
+    assert page.status_code == 200
+    # get_media serves pdf/svg as attachment, so embedding them would render
+    # broken tags — both must fall back to labeled links.
+    assert page.text.count('class="journey-media-link"') == 2
+    assert 'class="journey-image"' not in page.text
+    assert "<video" not in page.text
+
+
 def test_journey_page_escapes_producer_text(client, token):
     _put_journey(client, token, "wool-crush", "Wool Crush", [{"title": "<script>alert(1)</script>"}])
 
@@ -366,6 +424,11 @@ def test_wool_crush_fixture_renders_all_five_steps_end_to_end(client, token):
     media = client.get(f"/media/p_video/proxy.mp4?token={token}")
     assert media.status_code == 200
 
+    # The linked HTML report still serves through the hardened sandboxed path.
+    style = client.get(f"/media/p_style/style.html?token={token}")
+    assert style.status_code == 200
+    assert "sandbox" in style.headers.get("content-security-policy", "")
+
 
 # --- seed demo tooling (data, not Portal logic) ---
 
@@ -399,3 +462,11 @@ def test_seed_script_local_mode_builds_self_contained_demo(data_dir):
     assert seeded["slug"] == "wool-crush-demo"
     assert len(seeded["doc"]["steps"]) == 2
     assert db.get_journey("wool-crush-demo") is not None
+
+
+def test_seed_script_local_mode_is_idempotent_on_rerun(data_dir):
+    module = _load_seed_module()
+    module._seed_local("wool-crush-demo")
+    seeded_again = module._seed_local("wool-crush-demo")  # fixed p_demoimg id must not crash
+    assert seeded_again["slug"] == "wool-crush-demo"
+    assert len(seeded_again["doc"]["steps"]) == 2

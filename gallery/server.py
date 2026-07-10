@@ -1030,37 +1030,43 @@ def _validate_safe_segment(value: object, name: str) -> str:
     return segment
 
 
-def _validate_journey_media_ref(ref: object) -> dict:
+def _validate_journey_media_ref(ref: object, step_index: int, media_index: int) -> dict:
+    # Error details carry the steps[i].media[j] path so a producer fixing a
+    # large agent-authored doc can locate the offending element without bisecting.
+    where = f"steps[{step_index}].media[{media_index}]"
     if not isinstance(ref, dict):
-        raise HTTPException(status_code=400, detail="each media ref must be an object")
-    owner_id = _validate_safe_segment(ref.get("owner_id"), "media owner_id")
-    filename = _bounded_text(ref.get("filename"), "media filename", 260)
+        raise HTTPException(status_code=400, detail=f"{where} must be an object")
+    owner_id = _validate_safe_segment(ref.get("owner_id"), f"{where}.owner_id")
+    filename = _bounded_text(ref.get("filename"), f"{where}.filename", 260)
     if not _safe_media_filename(filename):
-        raise HTTPException(status_code=400, detail="invalid media filename")
+        raise HTTPException(status_code=400, detail=f"invalid {where}.filename")
     cleaned = {"owner_id": owner_id, "filename": filename}
-    caption = _bounded_optional_text(ref.get("caption"), "media caption", MAX_TITLE_LENGTH)
+    caption = _bounded_optional_text(ref.get("caption"), f"{where}.caption", MAX_TITLE_LENGTH)
     if caption is not None:
         cleaned["caption"] = caption
     return cleaned
 
 
-def _validate_journey_step(step: object) -> dict:
+def _validate_journey_step(step: object, step_index: int) -> dict:
+    where = f"steps[{step_index}]"
     if not isinstance(step, dict):
-        raise HTTPException(status_code=400, detail="each step must be an object")
-    cleaned = {"title": _bounded_text(step.get("title"), "step title", MAX_TITLE_LENGTH)}
-    summary = _bounded_optional_text(step.get("summary"), "step summary", MAX_MESSAGE_TEXT_LENGTH)
+        raise HTTPException(status_code=400, detail=f"{where} must be an object")
+    cleaned = {"title": _bounded_text(step.get("title"), f"{where}.title", MAX_TITLE_LENGTH)}
+    summary = _bounded_optional_text(step.get("summary"), f"{where}.summary", MAX_MESSAGE_TEXT_LENGTH)
     if summary is not None:
         cleaned["summary"] = summary
     media = step.get("media")
     if media is not None:
         if not isinstance(media, list):
-            raise HTTPException(status_code=400, detail="step media must be a list")
+            raise HTTPException(status_code=400, detail=f"{where}.media must be a list")
         if len(media) > MAX_STEP_MEDIA:
-            raise HTTPException(status_code=400, detail=f"a step may reference at most {MAX_STEP_MEDIA} media")
-        cleaned["media"] = [_validate_journey_media_ref(ref) for ref in media]
+            raise HTTPException(status_code=400, detail=f"{where} may reference at most {MAX_STEP_MEDIA} media")
+        cleaned["media"] = [
+            _validate_journey_media_ref(ref, step_index, media_index) for media_index, ref in enumerate(media)
+        ]
     request_id = step.get("request_id")
     if request_id is not None:
-        cleaned["request_id"] = _validate_safe_segment(request_id, "step request_id")
+        cleaned["request_id"] = _validate_safe_segment(request_id, f"{where}.request_id")
     return cleaned
 
 
@@ -1072,7 +1078,7 @@ def _validate_journey_doc(payload: dict) -> dict:
         raise HTTPException(status_code=400, detail="journey steps must be a list")
     if len(steps) > MAX_JOURNEY_STEPS:
         raise HTTPException(status_code=400, detail=f"a journey may have at most {MAX_JOURNEY_STEPS} steps")
-    doc = {"steps": [_validate_journey_step(step) for step in steps]}
+    doc = {"steps": [_validate_journey_step(step, step_index) for step_index, step in enumerate(steps)]}
     if len(json.dumps(doc).encode("utf-8")) > MAX_BODY_JSON_BYTES:
         raise HTTPException(status_code=400, detail="journey doc is too large")
     _validate_json_response_safe(doc)
@@ -1235,27 +1241,31 @@ def _decision_request_id(post: dict) -> str | None:
     return request_id
 
 
-def _request_summaries_for_posts(posts: list[dict]) -> dict[str, dict]:
-    request_ids = []
+def _request_status_map(candidate_ids: list[object]) -> dict[str, dict]:
+    """One batched read of the live status/title of every referenced request.
+    Non-string/empty/duplicate candidates are skipped; unknown ids are simply absent."""
+    ids = []
     seen = set()
-    for post in posts:
-        if post.get("type") != "decision":
-            continue
-        request_id = _decision_request_id(post)
-        if request_id and request_id not in seen:
+    for request_id in candidate_ids:
+        if isinstance(request_id, str) and request_id and request_id not in seen:
             seen.add(request_id)
-            request_ids.append(request_id)
-    if not request_ids:
+            ids.append(request_id)
+    if not ids:
         return {}
-
-    placeholders = ", ".join("?" for _ in request_ids)
+    placeholders = ", ".join("?" for _ in ids)
     conn = db.connect()
     with db._lock:
         rows = conn.execute(
             f"SELECT id, title, status FROM requests WHERE id IN ({placeholders})",
-            request_ids,
+            ids,
         ).fetchall()
     return {row["id"]: dict(row) for row in rows}
+
+
+def _request_summaries_for_posts(posts: list[dict]) -> dict[str, dict]:
+    return _request_status_map(
+        [_decision_request_id(post) for post in posts if post.get("type") == "decision"]
+    )
 
 
 def _decision_post_context(post: dict, request_summaries: dict[str, dict]) -> dict | None:
@@ -1593,26 +1603,6 @@ async def web_decide(request: Request, req_id: str):
 # --- journey web page ---
 
 
-def _journey_status_map(request_ids: list[str]) -> dict[str, dict]:
-    """One batched read of every referenced request's live status/title (KTD6)."""
-    ids = []
-    seen = set()
-    for request_id in request_ids:
-        if isinstance(request_id, str) and request_id and request_id not in seen:
-            seen.add(request_id)
-            ids.append(request_id)
-    if not ids:
-        return {}
-    placeholders = ", ".join("?" for _ in ids)
-    conn = db.connect()
-    with db._lock:
-        rows = conn.execute(
-            f"SELECT id, title, status FROM requests WHERE id IN ({placeholders})",
-            ids,
-        ).fetchall()
-    return {row["id"]: dict(row) for row in rows}
-
-
 def _journey_media_context(ref: dict) -> dict | None:
     owner_id = ref.get("owner_id")
     filename = ref.get("filename")
@@ -1620,7 +1610,16 @@ def _journey_media_context(ref: dict) -> dict | None:
         return None
     if not SAFE_SEGMENT_RE.fullmatch(owner_id) or owner_id in {".", ".."} or not _safe_media_filename(filename):
         return None
-    media_type = _media_type_for(filename)
+    # Embed only what get_media serves inline (browser-safe). Everything else —
+    # html, svg, pdf, unknown — is served as attachment/sandboxed, so embedding
+    # it would render a broken tag; the template links it instead.
+    mime = mimetypes.guess_type(filename)[0] or ""
+    if mime.startswith("video/"):
+        media_type = "video"
+    elif mime.startswith("image/") and mime != "image/svg+xml":
+        media_type = "image"
+    else:
+        media_type = "link"
     embed = media_type in {"video", "image"}
     caption = ref.get("caption") if isinstance(ref.get("caption"), str) else None
     return {
@@ -1648,7 +1647,8 @@ def _journey_request_context(request_id: str, status_map: dict[str, dict]) -> di
 
 def _journey_step_context(step: dict, status_map: dict[str, dict]) -> dict:
     media = []
-    for ref in step.get("media") or []:
+    raw_media = step.get("media")
+    for ref in raw_media if isinstance(raw_media, list) else []:
         if isinstance(ref, dict):
             resolved = _journey_media_context(ref)
             if resolved is not None:
@@ -1676,7 +1676,7 @@ def web_journey_detail(request: Request, slug: str):
     doc = journey.get("doc") if isinstance(journey.get("doc"), dict) else {}
     raw_steps = doc.get("steps")
     raw_steps = [step for step in raw_steps if isinstance(step, dict)] if isinstance(raw_steps, list) else []
-    status_map = _journey_status_map([step.get("request_id") for step in raw_steps])
+    status_map = _request_status_map([step.get("request_id") for step in raw_steps])
     steps = [_journey_step_context(step, status_map) for step in raw_steps]
     response = templates.TemplateResponse(
         request,

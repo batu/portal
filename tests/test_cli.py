@@ -574,6 +574,37 @@ def test_post_stream_skips_duplicate_legacy_stream_attach(monkeypatch, tmp_path,
     }
 
 
+def test_client_upsert_journey_explicit_title_wins_over_doc_title(monkeypatch):
+    captured = {}
+
+    def fake_request(method, url, headers, data=None):
+        captured["data"] = json.loads(data.decode("utf-8"))
+        return {}
+
+    monkeypatch.setattr(cli.client, "_request", fake_request)
+
+    cli.client.upsert_journey("http://gallery", "tok", "wool-crush", "Wool Crush", {"title": "sneaky", "steps": []})
+
+    assert captured["data"] == {"title": "Wool Crush", "steps": []}
+
+
+def test_client_get_and_list_journeys_send_bearer_gets(monkeypatch):
+    captured = []
+
+    def fake_request(method, url, headers, data=None):
+        captured.append((method, url, headers.get("Authorization"), data))
+        return {"slug": "wool-crush"} if "/api/journeys/" in url else [{"slug": "wool-crush"}]
+
+    monkeypatch.setattr(cli.client, "_request", fake_request)
+
+    assert cli.client.get_journey("http://gallery", "tok", "wool-crush") == {"slug": "wool-crush"}
+    assert cli.client.list_journeys("http://gallery", "tok") == [{"slug": "wool-crush"}]
+    assert captured == [
+        ("GET", "http://gallery/api/journeys/wool-crush", "Bearer tok", None),
+        ("GET", "http://gallery/api/journeys", "Bearer tok", None),
+    ]
+
+
 def test_client_upsert_journey_puts_merged_title_and_doc(monkeypatch):
     captured = {}
 

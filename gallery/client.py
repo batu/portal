@@ -180,7 +180,8 @@ def consume_message(base_url: str, token: str, message_id: str) -> dict:
 
 def upsert_journey(base_url: str, token: str, slug: str, title: str, doc: dict) -> dict:
     slug = urllib.parse.quote(slug, safe="")
-    return put_json(base_url, token, f"/api/journeys/{slug}", {"title": title, **doc})
+    # The explicit title argument wins over any "title" key riding in the doc.
+    return put_json(base_url, token, f"/api/journeys/{slug}", {**doc, "title": title})
 
 
 def get_journey(base_url: str, token: str, slug: str) -> dict:

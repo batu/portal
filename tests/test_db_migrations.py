@@ -245,6 +245,24 @@ def test_legacy_db_upgrade_preserves_existing_rows(data_dir):
     assert conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0] == 0
 
 
+def test_migration_rejects_malformed_existing_journeys_table(data_dir):
+    path = config.db_path()
+    _create_legacy_db(path)
+    conn = _raw_conn(path)
+    conn.execute("CREATE TABLE journeys (slug TEXT PRIMARY KEY, title TEXT NOT NULL)")
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(RuntimeError, match="schema v6 missing journeys columns"):
+        db.connect()
+
+    assert db._conn is None
+    raw = _raw_conn(path)
+    # v1-v5 each committed before v6's validation failed and rolled back.
+    assert _user_version(raw) == 5
+    raw.close()
+
+
 def test_legacy_db_upgrades_to_v6_with_usable_journeys_table(data_dir):
     path = config.db_path()
     _create_legacy_db(path)

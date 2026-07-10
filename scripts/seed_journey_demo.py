@@ -112,11 +112,12 @@ def _seed_local(slug: str) -> dict:
     (media_dir / "reference.png").write_bytes(png)
     if db.get_stream(slug) is None:
         db.create_stream(slug, "session", "Wool Crush (demo)")
-    db.create_post_for_stream(
-        slug, "report", "Reference frame", "codex",
-        {"files": [{"media_path": "reference.png", "media_type": "image/png", "size": len(png), "original_name": "reference.png"}]},
-        post_id=image_post_id,
-    )
+    if db.get_post(image_post_id) is None:  # fixed post id: keep re-runs idempotent
+        db.create_post_for_stream(
+            slug, "report", "Reference frame", "codex",
+            {"files": [{"media_path": "reference.png", "media_type": "image/png", "size": len(png), "original_name": "reference.png"}]},
+            post_id=image_post_id,
+        )
     req_id = db.new_request_id()
     db.create_request(req_id, "Pick the frames", None, "pick-one", None,
                       [{"media_path": "reference.png", "media_type": "image", "caption": "frame", "meta": None}])
