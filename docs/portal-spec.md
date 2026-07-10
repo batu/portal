@@ -331,11 +331,18 @@ front of the same service — no schema change anticipated.
 - 2026-07-08 integration review: fixed message `since` cursor precision so
   fast `portal ask` replies in the same wall-clock second are not skipped by
   truncating timestamps to seconds.
-- 2026-07-08 integration review: proposed follow-up card for stream-owned
-  decisions; `portal post --stream <non-legacy>` currently mirrors a request
-  into the stream but the authoritative `requests.stream_id` still points at
-  `inbox`/`proj-*`, so closing the explicit stream does not make that request
-  read-only.
+- 2026-07-08 integration review / RESOLVED 2026-07-10 (card DP0kxrKz): explicit
+  `portal post --stream <slug>` now sets the authoritative `requests.stream_id`
+  to that stream (created if missing), and the single "decision" mirror post is
+  created by `create_request` in the owning stream — so ownership and the feed
+  agree by construction. Closing that stream now makes the request read-only
+  (`POST /api/requests/{id}/verdict` → 409; `/r/{id}` shows the archived
+  read-only banner and the back-link points at the owning stream). When
+  `--stream` is absent the legacy project-derived `stream_id`
+  (`inbox`/`proj-*`) is unchanged. The CLI no longer makes a second
+  `create_stream_post` call (which would double-post). No schema migration:
+  rows created before this fix keep their legacy `stream_id` — an accepted
+  historical inconsistency, intentionally not rewritten.
 - 2026-07-08 integration review: proposed follow-up card for ask/answer
   correlation; answers and human steering notes currently share the
   unconsumed `to_agent` queue, so a linked reply model or message kind is

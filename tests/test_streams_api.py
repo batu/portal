@@ -144,6 +144,104 @@ def test_legacy_requests_are_visible_in_project_and_inbox_streams(client, token)
     assert inbox_posts[0]["body"] == {"request_id": inbox_create.json()["id"]}
 
 
+def test_explicit_stream_sets_authoritative_stream_id_and_single_decision_post(client, token):
+    create = client.post(
+        "/api/requests",
+        headers=auth_headers(token),
+        data={"title": "Owned by alpha", "project": "fabrika/x", "kind": "pick-one", "stream": "alpha"},
+        files=_request_uploads(1),
+    )
+    assert create.status_code == 200
+    req_id = create.json()["id"]
+
+    alpha = db.get_stream("alpha")
+    assert alpha is not None
+    assert db.get_request(req_id)["stream_id"] == alpha["id"]
+
+    stream = client.get("/api/streams/alpha", headers=auth_headers(token))
+    assert stream.status_code == 200
+    posts = stream.json()["posts"]
+    assert [p["type"] for p in posts] == ["decision"]
+    assert posts[0]["body"] == {"request_id": req_id}
+
+    # ownership moved to alpha: the project-derived stream was never created.
+    assert client.get("/api/streams/proj-fabrika-x", headers=auth_headers(token)).status_code == 404
+
+
+def test_absent_stream_keeps_legacy_project_ownership(client, token):
+    create = client.post(
+        "/api/requests",
+        headers=auth_headers(token),
+        data={"title": "Legacy owned", "project": "navigation/project", "kind": "pick-one"},
+        files=_request_uploads(1),
+    )
+    assert create.status_code == 200
+    req_id = create.json()["id"]
+
+    proj_stream = db.get_stream(db._stream_slug_for_project("navigation/project"))
+    assert proj_stream is not None
+    assert db.get_request(req_id)["stream_id"] == proj_stream["id"]
+    assert db.get_stream("alpha") is None
+
+
+def test_post_to_closed_explicit_stream_rejected_with_409_no_row_no_media(client, token):
+    assert client.post(
+        "/api/streams",
+        headers=auth_headers(token),
+        json={"slug": "alpha", "kind": "session", "title": "Alpha"},
+    ).status_code == 200
+    assert client.post("/api/streams/alpha/close", headers=auth_headers(token)).status_code == 200
+
+    rejected = client.post(
+        "/api/requests",
+        headers=auth_headers(token),
+        data={"title": "Too late", "kind": "pick-one", "stream": "alpha"},
+        files=_request_uploads(1),
+    )
+    assert rejected.status_code == 409
+
+    assert db.list_requests() == []
+    media_root = config.media_dir()
+    assert not media_root.exists() or list(media_root.iterdir()) == []
+
+
+def test_invalid_explicit_stream_slug_rejected_400_no_row(client, token):
+    rejected = client.post(
+        "/api/requests",
+        headers=auth_headers(token),
+        data={"title": "Bad slug", "kind": "pick-one", "stream": "Bad Slug"},
+        files=_request_uploads(1),
+    )
+    assert rejected.status_code == 400
+    assert db.list_requests() == []
+
+
+def test_closing_explicit_stream_makes_request_decide_409(client, token):
+    assert client.post(
+        "/api/streams",
+        headers=auth_headers(token),
+        json={"slug": "alpha", "kind": "session", "title": "Alpha"},
+    ).status_code == 200
+
+    create = client.post(
+        "/api/requests",
+        headers=auth_headers(token),
+        data={"title": "Owned by alpha", "kind": "pick-one", "stream": "alpha"},
+        files=_request_uploads(1),
+    )
+    assert create.status_code == 200
+    req_id = create.json()["id"]
+
+    assert client.post("/api/streams/alpha/close", headers=auth_headers(token)).status_code == 200
+
+    verdict = client.post(
+        f"/api/requests/{req_id}/verdict",
+        headers=auth_headers(token),
+        json={"selected": [1], "comment": "nope"},
+    )
+    assert verdict.status_code == 409
+
+
 def test_legacy_project_stream_slug_is_bounded_and_routable(client, token):
     project = "ab/" * 80
 

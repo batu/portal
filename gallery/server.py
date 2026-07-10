@@ -626,6 +626,7 @@ async def create_request(
     step: str | None = Form(None),
     purpose: str | None = Form(None),
     ask: str | None = Form(None),
+    stream: str | None = Form(None),
     before: UploadFile | None = File(None),
     files: list[UploadFile] = File(...),
 ):
@@ -633,6 +634,10 @@ async def create_request(
     step = _bounded_optional_text(step, "step", MAX_TITLE_LENGTH)
     purpose = _bounded_optional_text(purpose, "purpose", MAX_TITLE_LENGTH)
     ask = _bounded_optional_text(ask, "ask", MAX_TITLE_LENGTH)
+    if stream is not None and stream.strip():
+        stream = _validate_slug(stream)
+    else:
+        stream = None
 
     if kind not in db.KINDS:
         raise HTTPException(status_code=400, detail=f"invalid kind: {kind}. Must be one of {db.KINDS}")
@@ -697,6 +702,7 @@ async def create_request(
                 step=step,
                 purpose=purpose,
                 ask=ask,
+                stream=stream,
             )
             break
         except ValueError as exc:

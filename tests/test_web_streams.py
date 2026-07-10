@@ -13,10 +13,12 @@ def tiny_png_bytes() -> bytes:
     )
 
 
-def _create_request(client, token, title="Decision source", project=None):
+def _create_request(client, token, title="Decision source", project=None, stream=None):
     data = {"title": title, "kind": "pick-one"}
     if project is not None:
         data["project"] = project
+    if stream is not None:
+        data["stream"] = stream
     create = client.post(
         "/api/requests",
         headers=auth_headers(token),
@@ -123,6 +125,27 @@ def test_request_page_renders_index_stream_breadcrumb_and_brand_link(client, tok
     assert breadcrumb.index(index_crumb) < breadcrumb.index(stream_crumb) < breadcrumb.index(request_crumb)
     assert "token=" not in breadcrumb
     assert f'<a class="back-link" href="/s/{stream_slug}">' not in page.text
+
+
+def test_request_page_read_only_when_owning_stream_closed(client, token):
+    db.create_stream("alpha", "session", "Alpha stream")
+    req_id = _create_request(client, token, title="Owned by alpha", stream="alpha")
+
+    # open stream: decide affordance present, no archive banner
+    open_page = client.get(f"/r/{req_id}?token={token}")
+    assert open_page.status_code == 200
+    assert "Archived stream. This request is read-only." not in open_page.text
+    assert 'id="decide-btn"' in open_page.text
+
+    db.close_stream("alpha")
+
+    closed_page = client.get(f"/r/{req_id}?token={token}")
+    assert closed_page.status_code == 200
+    assert "Archived stream. This request is read-only." in closed_page.text
+    assert 'id="decide-btn"' not in closed_page.text
+    assert 'class="decision-panel"' not in closed_page.text
+    # breadcrumb / back-link points at the owning stream
+    assert '<a href="/s/alpha">Alpha stream</a>' in closed_page.text
 
 
 def test_request_page_without_stream_uses_index_request_breadcrumb(client, token):

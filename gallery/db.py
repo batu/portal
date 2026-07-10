@@ -765,13 +765,19 @@ def create_request(
     step: str | None = None,
     purpose: str | None = None,
     ask: str | None = None,
+    stream: str | None = None,
 ) -> str:
-    """variants: list of {media_path, media_type, caption, meta} in display order (1-based idx)."""
+    """variants: list of {media_path, media_type, caption, meta} in display order (1-based idx).
+
+    When ``stream`` is given, that slug is the request's authoritative stream
+    (created if missing); otherwise the stream is derived from ``project``.
+    """
     conn = connect()
     created_at = now_iso()
     with _lock:
         try:
-            stream = _ensure_stream(conn, _stream_slug_for_project(project))
+            slug = stream if (stream and stream.strip()) else _stream_slug_for_project(project)
+            stream = _ensure_stream(conn, slug)
             conn.execute(
                 "INSERT INTO requests "
                 "(id, title, project, kind, status, context_md, created_at, stream_id, before_media_path, before_media_type, step, purpose, ask) "

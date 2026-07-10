@@ -152,6 +152,7 @@ def test_old_style_gallery_post_keeps_request_payload_and_no_stream_attach(monke
                 "step": None,
                 "purpose": None,
                 "ask": None,
+                "stream": None,
             },
             "files": [upload],
         }
@@ -214,11 +215,10 @@ def test_post_missing_before_file_exits_1(monkeypatch, tmp_path):
     assert exc.value.code == 1
 
 
-def test_post_stream_creates_decision_post_with_request_id(monkeypatch, tmp_path, capsys):
+def test_post_stream_forwards_stream_field_without_second_post(monkeypatch, tmp_path, capsys):
     upload = tmp_path / "variant.png"
     upload.write_bytes(b"png")
     request_posts = []
-    stream_posts = []
 
     monkeypatch.setattr(cli.config, "client_config", lambda: ("http://gallery", "tok"))
     _stub_open_stream(monkeypatch)
@@ -236,23 +236,11 @@ def test_post_stream_creates_decision_post_with_request_id(monkeypatch, tmp_path
         return {"id": "req_123", "variant_count": 1}
 
     monkeypatch.setattr(cli.client, "post_multipart", fake_post_multipart)
-
-    def fake_create_stream_post(base_url, token, slug, type, title, author, body=None, files=None):
-        stream_posts.append(
-            {
-                "base_url": base_url,
-                "token": token,
-                "slug": slug,
-                "type": type,
-                "title": title,
-                "author": author,
-                "body": body,
-                "files": files,
-            }
-        )
-        return {"post": {"id": "p_123"}}
-
-    monkeypatch.setattr(cli.client, "create_stream_post", fake_create_stream_post)
+    monkeypatch.setattr(
+        cli.client,
+        "create_stream_post",
+        lambda *args, **kwargs: pytest.fail("owning stream is set server-side; no second stream post"),
+    )
     monkeypatch.setattr(
         "sys.argv",
         ["portal", "post", "--stream", "alpha", "--title", "t", "--kind", "pick-one", str(upload)],
@@ -274,27 +262,12 @@ def test_post_stream_creates_decision_post_with_request_id(monkeypatch, tmp_path
                 "step": None,
                 "purpose": None,
                 "ask": None,
+                "stream": "alpha",
             },
             "files": [upload],
         }
     ]
-    assert stream_posts == [
-        {
-            "base_url": "http://gallery",
-            "token": "tok",
-            "slug": "alpha",
-            "type": "decision",
-            "title": "t",
-            "author": "portal",
-            "body": {"request_id": "req_123"},
-            "files": [],
-        }
-    ]
-    assert json.loads(capsys.readouterr().out) == {
-        "id": "req_123",
-        "variant_count": 1,
-        "stream_post": {"post": {"id": "p_123"}},
-    }
+    assert json.loads(capsys.readouterr().out) == {"id": "req_123", "variant_count": 1}
 
 
 def test_post_stream_with_before_keeps_before_out_of_candidates(monkeypatch, tmp_path):
@@ -312,7 +285,11 @@ def test_post_stream_with_before_keeps_before_out_of_candidates(monkeypatch, tmp
         return {"id": "req_123"}
 
     monkeypatch.setattr(cli.client, "post_multipart", fake_post_multipart)
-    monkeypatch.setattr(cli.client, "create_stream_post", lambda *args, **kwargs: {"post": {"id": "p_123"}})
+    monkeypatch.setattr(
+        cli.client,
+        "create_stream_post",
+        lambda *args, **kwargs: pytest.fail("owning stream is set server-side; no second stream post"),
+    )
     monkeypatch.setattr(
         "sys.argv",
         [
@@ -333,46 +310,6 @@ def test_post_stream_with_before_keeps_before_out_of_candidates(monkeypatch, tmp
     cli.main()
 
     assert captured["files"] == [("before", before), after]
-
-
-def test_post_stream_attach_failure_mentions_created_request(monkeypatch, tmp_path, capsys):
-    upload = tmp_path / "variant.png"
-    upload.write_bytes(b"png")
-
-    monkeypatch.setattr(cli.config, "client_config", lambda: ("http://gallery", "tok"))
-    _stub_open_stream(monkeypatch)
-    monkeypatch.setattr(
-        cli.client,
-        "post_multipart",
-        lambda _base_url, _token, _path, _fields, _files: {"id": "req_123", "variant_count": 1},
-    )
-
-    def fail_stream_post(*_args, **_kwargs):
-        raise cli.client.GalleryClientError(404, "stream missing")
-
-    monkeypatch.setattr(cli.client, "create_stream_post", fail_stream_post)
-    monkeypatch.setattr(
-        "sys.argv",
-        ["portal", "post", "--stream", "alpha", "--title", "t", "--kind", "pick-one", str(upload)],
-    )
-
-    with pytest.raises(SystemExit) as exc:
-        cli.main()
-
-    assert exc.value.code == 1
-    captured = capsys.readouterr()
-    assert json.loads(captured.out) == {
-        "id": "req_123",
-        "variant_count": 1,
-        "stream_post": {
-            "stream": "alpha",
-            "type": "decision",
-            "body": {"request_id": "req_123"},
-            "status": "attach-failed",
-            "error": "HTTP 404: stream missing",
-        },
-    }
-    assert "error: HTTP 404: stream missing (request created: req_123)" in captured.err
 
 
 @pytest.mark.parametrize("stream", ["", "Alpha", "bad slug", "alpha-"])
@@ -424,7 +361,6 @@ def test_post_missing_stream_preflight_allows_auto_create(monkeypatch, tmp_path)
     upload.write_bytes(b"png")
     events = []
     request_posts = []
-    stream_posts = []
 
     monkeypatch.setattr(cli.config, "client_config", lambda: ("http://gallery", "tok"))
 
@@ -443,9 +379,7 @@ def test_post_missing_stream_preflight_allows_auto_create(monkeypatch, tmp_path)
     monkeypatch.setattr(
         cli.client,
         "create_stream_post",
-        lambda *args, **kwargs: events.append("create_stream_post")
-        or stream_posts.append((args, kwargs))
-        or {"post": {"id": "p_123"}},
+        lambda *args, **kwargs: pytest.fail("owning stream is set server-side; no second stream post"),
     )
     monkeypatch.setattr(
         "sys.argv",
@@ -455,32 +389,8 @@ def test_post_missing_stream_preflight_allows_auto_create(monkeypatch, tmp_path)
     cli.main()
 
     assert len(request_posts) == 1
-    assert len(stream_posts) == 1
-    assert events == ["get_stream", "post_multipart", "create_stream_post"]
-
-
-def test_post_stream_missing_request_id_exits_1(monkeypatch, tmp_path, capsys):
-    upload = tmp_path / "variant.png"
-    upload.write_bytes(b"png")
-
-    monkeypatch.setattr(cli.config, "client_config", lambda: ("http://gallery", "tok"))
-    _stub_open_stream(monkeypatch)
-    monkeypatch.setattr(cli.client, "post_multipart", lambda *_args, **_kwargs: {"variant_count": 1})
-    monkeypatch.setattr(
-        cli.client,
-        "create_stream_post",
-        lambda *args, **kwargs: pytest.fail("request id is required before stream attachment"),
-    )
-    monkeypatch.setattr(
-        "sys.argv",
-        ["portal", "post", "--stream", "alpha", "--title", "t", "--kind", "pick-one", str(upload)],
-    )
-
-    with pytest.raises(SystemExit) as exc:
-        cli.main()
-
-    assert exc.value.code == 1
-    assert "error: request response missing id" in capsys.readouterr().err
+    assert request_posts[0][3]["stream"] == "alpha"
+    assert events == ["get_stream", "post_multipart"]
 
 
 def test_post_before_cannot_also_be_candidate_via_glob(monkeypatch, tmp_path, capsys):
@@ -516,62 +426,6 @@ def test_post_before_cannot_also_be_candidate_via_glob(monkeypatch, tmp_path, ca
 
     assert exc.value.code == 1
     assert "error: before image must not also be a candidate file" in capsys.readouterr().err
-
-
-@pytest.mark.parametrize(
-    ("argv_prefix", "stream"),
-    [
-        ([], "inbox"),
-        (["--project", "fabrika/find_the_dog"], "proj-fabrika-find-the-dog"),
-    ],
-)
-def test_post_stream_skips_duplicate_legacy_stream_attach(monkeypatch, tmp_path, capsys, argv_prefix, stream):
-    upload = tmp_path / "variant.png"
-    upload.write_bytes(b"png")
-    request_posts = []
-
-    monkeypatch.setattr(cli.config, "client_config", lambda: ("http://gallery", "tok"))
-    _stub_open_stream(monkeypatch)
-
-    def fake_post_multipart(base_url, token, path, fields, files):
-        request_posts.append((base_url, token, path, fields, files))
-        return {"id": "req_123", "variant_count": 1}
-
-    monkeypatch.setattr(cli.client, "post_multipart", fake_post_multipart)
-    monkeypatch.setattr(
-        cli.client,
-        "create_stream_post",
-        lambda *args, **kwargs: pytest.fail("legacy stream already contains the request decision post"),
-    )
-    monkeypatch.setattr(
-        "sys.argv",
-        [
-            "portal",
-            "post",
-            "--stream",
-            stream,
-            *argv_prefix,
-            "--title",
-            "t",
-            "--kind",
-            "pick-one",
-            str(upload),
-        ],
-    )
-
-    cli.main()
-
-    assert len(request_posts) == 1
-    assert json.loads(capsys.readouterr().out) == {
-        "id": "req_123",
-        "variant_count": 1,
-        "stream_post": {
-            "stream": stream,
-            "type": "decision",
-            "body": {"request_id": "req_123"},
-            "status": "already-attached",
-        },
-    }
 
 
 def test_client_upsert_journey_explicit_title_wins_over_doc_title(monkeypatch):

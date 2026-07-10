@@ -81,18 +81,6 @@ def _legacy_stream_slug(project: str | None) -> str:
     return f"{PROJECT_STREAM_PREFIX}{slug}"
 
 
-def _stream_decision_metadata(stream: str, request_id: str, status: str, error: str | None = None) -> dict:
-    metadata = {
-        "stream": stream,
-        "type": "decision",
-        "body": {"request_id": request_id},
-        "status": status,
-    }
-    if error is not None:
-        metadata["error"] = error
-    return metadata
-
-
 def _preflight_stream(base_url: str, token: str, slug: str) -> None:
     try:
         stream = client.get_stream(base_url, token, slug)
@@ -153,41 +141,13 @@ def cmd_post(args):
         "step": args.step,
         "purpose": args.purpose,
         "ask": args.ask,
+        "stream": args.stream,
     }
     try:
         result = client.post_multipart(base_url, token, "/api/requests", fields, request_files)
     except client.GalleryClientError as exc:
         _exit_client_error(exc)
 
-    if args.stream is not None:
-        request_id = result.get("id")
-        if not request_id:
-            print("error: request response missing id", file=sys.stderr)
-            sys.exit(1)
-        if args.stream == _legacy_stream_slug(args.project):
-            result = {**result, "stream_post": _stream_decision_metadata(args.stream, request_id, "already-attached")}
-        else:
-            try:
-                stream_post = client.create_stream_post(
-                    base_url,
-                    token,
-                    args.stream,
-                    "decision",
-                    args.title,
-                    "portal",
-                    body={"request_id": request_id},
-                    files=[],
-                )
-            except client.GalleryClientError as exc:
-                result = {
-                    **result,
-                    "stream_post": _stream_decision_metadata(args.stream, request_id, "attach-failed", str(exc)),
-                }
-                print(json.dumps(result))
-                suffix = f" (request created: {request_id})"
-                print(f"error: {exc}{suffix}", file=sys.stderr)
-                sys.exit(1)
-            result = {**result, "stream_post": stream_post}
     print(json.dumps(result))
 
 
@@ -486,7 +446,7 @@ def main():
         help="Decision kind; 'view' posts an interactive HTML view (first .html file is the entry) whose verdict is opaque JSON",
     )
     p.add_argument("--project", default=None)
-    p.add_argument("--stream", default=None, type=_stream_slug, help="Also attach this decision request to a Portal stream")
+    p.add_argument("--stream", default=None, type=_stream_slug, help="Set this Portal stream as the request's owning stream (created if missing); closing it makes the request read-only")
     p.add_argument("--before", default=None, help="Optional before image for before/after decisions")
     p.add_argument("--context", default=None, help="Optional markdown context blurb")
     p.add_argument("--manifest", default=None, help="Path to a JSON file mapping filename -> {caption, meta}")
