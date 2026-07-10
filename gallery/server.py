@@ -311,25 +311,45 @@ def _is_text_html(media_type: str | None) -> bool:
 
 
 # Producer HTML (views, report pages) owns the whole tab and bypasses Portal's
-# templates, so it gets no breadcrumbs. Inject a small fixed "Portal" home pill
-# so every producer page has a way back to the index (Batu, 2026-07-09).
-_HOME_PILL = (
-    b'<a href="/" style="position:fixed;left:12px;bottom:12px;z-index:2147483647;'
-    b'background:rgba(20,22,27,.82);color:#f4c542;font:600 13px/1 -apple-system,'
-    b'BlinkMacSystemFont,sans-serif;padding:8px 14px;border-radius:999px;'
-    b'text-decoration:none;border:1px solid rgba(244,197,66,.5);'
-    b'backdrop-filter:blur(4px)">\xe2\x86\x90 Portal</a>'
-)
+# templates, so it carries no orientation. Inject a slim fixed native context
+# header (home + stream + step + ask + status) above the producer page so every
+# producer page says where it is and what the human is being asked to do
+# (Batu, 2026-07-09). The header is self-contained inline styles — the sandboxed
+# producer page does not load Portal's style.css.
+_BODY_OPEN_RE = re.compile(rb"<body[^>]*>", re.IGNORECASE)
+
+# Deterministic status → inline chip style. Not user-controlled (status is drawn
+# from the lifecycle vocabulary), so it is injected as-is by the template.
+_STATUS_CHIP_STYLES = {
+    "open": "background:#3a2f12;color:#f4c542",
+    "decided": "background:#123321;color:#5fd39b",
+    "closed": "background:#2a2c31;color:#a7aab2",
+    "superseded": "background:#2a2c31;color:#a7aab2",
+}
 
 
-def _html_with_home_pill(path, media_type: str, headers: dict):
+def _context_header_bytes(*, stream: dict | None, step, ask, status) -> bytes:
+    """Render the self-contained context-header fragment for a producer page."""
+    stream_ctx = None
+    if stream is not None:
+        stream_ctx = {"slug": stream["slug"], "label": stream.get("title") or stream["slug"]}
+    html = templates.get_template("context_header.html").render(
+        stream=stream_ctx,
+        step=step or None,
+        ask=ask or None,
+        status=status or None,
+        status_style=_STATUS_CHIP_STYLES.get(status or "", "background:#2a2c31;color:#a7aab2"),
+    )
+    return html.encode("utf-8")
+
+
+def _html_with_context_header(path, media_type: str, headers: dict, header_bytes: bytes):
     raw = path.read_bytes()
-    lower = raw.lower()
-    idx = lower.rfind(b"</body>")
-    if idx != -1:
-        raw = raw[:idx] + _HOME_PILL + raw[idx:]
+    match = _BODY_OPEN_RE.search(raw)
+    if match is not None:
+        raw = raw[: match.end()] + header_bytes + raw[match.end() :]
     else:
-        raw = raw + _HOME_PILL
+        raw = header_bytes + raw
     return HTMLResponse(content=raw, media_type=media_type, headers=headers)
 
 
@@ -411,6 +431,21 @@ def _bounded_text(value: object, name: str, max_length: int) -> str:
     value = value.strip()
     if not value:
         raise HTTPException(status_code=400, detail=f"{name} is required")
+    if len(value) > max_length:
+        raise HTTPException(status_code=400, detail=f"{name} is too long")
+    _validate_json_response_safe(value)
+    return value
+
+
+def _bounded_optional_text(value: object, name: str, max_length: int) -> str | None:
+    """Bound an optional free-text field: absent/blank -> None, else validated like _bounded_text."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise HTTPException(status_code=400, detail=f"{name} must be a string")
+    value = value.strip()
+    if not value:
+        return None
     if len(value) > max_length:
         raise HTTPException(status_code=400, detail=f"{name} is too long")
     _validate_json_response_safe(value)
@@ -571,10 +606,16 @@ async def create_request(
     kind: str = Form(...),
     context: str | None = Form(None),
     manifest: str | None = Form(None),
+    step: str | None = Form(None),
+    purpose: str | None = Form(None),
+    ask: str | None = Form(None),
     before: UploadFile | None = File(None),
     files: list[UploadFile] = File(...),
 ):
     server_cfg = require_api_token(request)
+    step = _bounded_optional_text(step, "step", MAX_TITLE_LENGTH)
+    purpose = _bounded_optional_text(purpose, "purpose", MAX_TITLE_LENGTH)
+    ask = _bounded_optional_text(ask, "ask", MAX_TITLE_LENGTH)
 
     if kind not in db.KINDS:
         raise HTTPException(status_code=400, detail=f"invalid kind: {kind}. Must be one of {db.KINDS}")
@@ -636,6 +677,9 @@ async def create_request(
                 variants,
                 before_media_path=before_media_path,
                 before_media_type=before_media_type,
+                step=step,
+                purpose=purpose,
+                ask=ask,
             )
             break
         except ValueError as exc:
@@ -961,6 +1005,32 @@ async def supersede_request(request: Request, req_id: str):
 # --- media serving ---
 
 
+def _report_context_header_bytes(post_id: str) -> bytes:
+    """Context header for a report producer page: home + stream + metadata, no status."""
+    post = db.get_post(post_id)
+    stream = db.get_stream_by_id(post["stream_id"]) if post and post.get("stream_id") else None
+    body = post.get("body") if post else None
+    body = body if isinstance(body, dict) else {}
+    return _context_header_bytes(
+        stream=stream,
+        step=body.get("step"),
+        ask=body.get("ask"),
+        status=None,
+    )
+
+
+def _view_context_header_bytes(req_id: str) -> bytes:
+    """Context header for a view producer page: home + stream + metadata + request status."""
+    r = db.get_request(req_id)
+    stream = db.get_stream_by_id(r["stream_id"]) if r and r.get("stream_id") else None
+    return _context_header_bytes(
+        stream=stream,
+        step=(r or {}).get("step"),
+        ask=(r or {}).get("ask"),
+        status=(r or {}).get("status"),
+    )
+
+
 @app.get("/media/{req_id}/{filename}")
 def get_media(request: Request, req_id: str, filename: str):
     if not web_token_ok(request):
@@ -993,10 +1063,14 @@ def get_media(request: Request, req_id: str, filename: str):
     )
     if report_html_type is not None:
         headers["Content-Security-Policy"] = "sandbox allow-same-origin"
-        return _html_with_home_pill(path, report_html_type, headers)
+        return _html_with_context_header(
+            path, report_html_type, headers, _report_context_header_bytes(req_id)
+        )
     if _view_html_media_type(req_id, filename):
         headers["Content-Security-Policy"] = VIEW_HTML_CSP
-        return _html_with_home_pill(path, "text/html", headers)
+        return _html_with_context_header(
+            path, "text/html", headers, _view_context_header_bytes(req_id)
+        )
     if browser_safe_media:
         return FileResponse(path, media_type=media_type, headers=headers)
     return FileResponse(
@@ -1373,11 +1447,9 @@ def web_request_detail(request: Request, req_id: str):
         return response
     back = {"href": "/", "label": "Home"}
     if r.get("stream_id"):
-        conn = db.connect()
-        with db._lock:
-            row = conn.execute("SELECT slug, title FROM streams WHERE id = ?", (r["stream_id"],)).fetchone()
-        if row is not None:
-            back = {"href": f"/s/{quote(row['slug'], safe='')}", "label": row["title"] or row["slug"]}
+        stream = db.get_stream_by_id(r["stream_id"])
+        if stream is not None:
+            back = {"href": f"/s/{quote(stream['slug'], safe='')}", "label": stream["title"] or stream["slug"]}
 
     response = templates.TemplateResponse(
         request,

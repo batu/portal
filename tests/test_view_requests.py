@@ -154,11 +154,17 @@ def test_view_wait_shape_via_api_verdict(client, token):
     assert json.loads(json.dumps(resp.json()["payload"])) == payload
 
 
-def test_producer_html_gets_home_pill(client, token):
+def test_producer_html_gets_context_header(client, token):
+    # View branch: home link + stream + status chip, even with no step/ask metadata.
     req_id = _create_view(client, token).json()["id"]
     resp = client.get(f"/media/{req_id}/01_picker.html", params={"token": token})
     assert 'href="/"' in resp.text and "Portal</a>" in resp.text
+    assert 'href="/s/' in resp.text  # stream crumb
+    assert ">open<" in resp.text  # status chip for an open request
+    # Graceful: no metadata means no Step:/Ask: labels leak in.
+    assert "Step:" not in resp.text and "Ask:" not in resp.text
 
+    # Report branch: home link + stream, and NO status chip (reports have no status).
     resp = client.post(
         "/api/streams/reports/posts",
         data={"type": "report", "title": "r", "author": "a"},
@@ -168,3 +174,69 @@ def test_producer_html_gets_home_pill(client, token):
     post_id = resp.json()["post"]["id"]
     resp = client.get(f"/media/{post_id}/01_report.html", params={"token": token})
     assert 'href="/"' in resp.text and "Portal</a>" in resp.text
+    assert 'href="/s/reports"' in resp.text
+    assert ">open<" not in resp.text and "Step:" not in resp.text
+
+
+def test_view_header_shows_step_ask_and_status(client, token):
+    resp = client.post(
+        "/api/requests",
+        data={
+            "title": "Pick frames",
+            "kind": "view",
+            "step": "frame picking",
+            "ask": "pick the winning frame",
+            "purpose": "choose the hero shot",
+        },
+        files=[("files", ("picker.html", VIEW_HTML, "text/html"))],
+        headers=auth_headers(token),
+    )
+    req_id = resp.json()["id"]
+    assert db.get_request(req_id)["step"] == "frame picking"
+    assert db.get_request(req_id)["ask"] == "pick the winning frame"
+
+    page = client.get(f"/media/{req_id}/01_picker.html", params={"token": token})
+    assert "frame picking" in page.text
+    assert "pick the winning frame" in page.text
+    assert ">open<" in page.text
+    # Producer content is preserved alongside the header.
+    assert "picker" in page.text
+
+
+def test_report_header_shows_metadata_without_status(client, token):
+    resp = client.post(
+        "/api/streams/reports/posts",
+        data={
+            "type": "report",
+            "title": "r",
+            "author": "a",
+            "body": json.dumps({"step": "render review", "ask": "confirm the cut"}),
+        },
+        files=[("files", ("report.html", b"<html><body><p>hi</p></body></html>", "text/html"))],
+        headers=auth_headers(token),
+    )
+    post_id = resp.json()["post"]["id"]
+    page = client.get(f"/media/{post_id}/01_report.html", params={"token": token})
+    assert "render review" in page.text
+    assert "confirm the cut" in page.text
+    assert ">open<" not in page.text and ">decided<" not in page.text
+
+
+def test_producer_html_is_byte_preserved_apart_from_header(client, token):
+    original = b"<html><body>ORIGINAL PRODUCER BYTES</body></html>"
+    resp = client.post(
+        "/api/streams/reports/posts",
+        data={"type": "report", "title": "r", "author": "a"},
+        files=[("files", ("report.html", original, "text/html"))],
+        headers=auth_headers(token),
+    )
+    post_id = resp.json()["post"]["id"]
+    served = client.get(f"/media/{post_id}/01_report.html", params={"token": token}).content
+    # The header fragment is injected once, right after the opening <body> tag;
+    # stripping exactly that fragment reproduces the original file bytes.
+    seam = original.index(b"<body>") + len(b"<body>")
+    assert served[:seam] == original[:seam]
+    assert served.endswith(original[seam:])
+    fragment = served[seam : len(served) - (len(original) - seam)]
+    assert served == original[:seam] + fragment + original[seam:]
+    assert served.count(b"Portal</a>") == 1

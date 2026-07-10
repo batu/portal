@@ -1,0 +1,19 @@
+<div style="height:44px" aria-hidden="true"></div><nav style="position:fixed;top:0;left:0;right:0;height:44px;box-sizing:border-box;z-index:2147483647;display:flex;align-items:center;gap:14px;padding:0 16px;background:rgba(20,22,27,.92);border-bottom:1px solid rgba(255,255,255,.08);backdrop-filter:blur(6px);font:600 13px/1 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#e6e7ea;overflow:hidden">
+<a href="/" style="color:#f4c542;text-decoration:none;white-space:nowrap;flex:none">&#8592; Portal</a>
+{%- if stream %}
+<span style="color:#5a5d66;flex:none">/</span>
+<a href="/s/{{ stream.slug }}" style="color:#c9cbd1;text-decoration:none;white-space:nowrap;flex:none;overflow:hidden;text-overflow:ellipsis;max-width:22ch">{{ stream.label }}</a>
+{%- endif %}
+{%- if step %}
+<span style="color:#5a5d66;flex:none">&#8226;</span>
+<span style="white-space:nowrap;flex:none"><span style="color:#8b8e97;font-weight:500">Step:</span> {{ step }}</span>
+{%- endif %}
+{%- if ask %}
+<span style="color:#5a5d66;flex:none">&#8226;</span>
+<span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><span style="color:#8b8e97;font-weight:500">Ask:</span> {{ ask }}</span>
+{%- endif %}
+{%- if status %}
+<span style="flex:1 1 auto"></span>
+<span style="flex:none;padding:3px 10px;border-radius:999px;font-size:12px;font-weight:700;letter-spacing:.02em;text-transform:uppercase;{{ status_style }}">{{ status }}</span>
+{%- endif %}
+</nav>

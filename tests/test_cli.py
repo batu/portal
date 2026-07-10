@@ -149,6 +149,9 @@ def test_old_style_gallery_post_keeps_request_payload_and_no_stream_attach(monke
                 "kind": "pick-one",
                 "context": None,
                 "manifest": None,
+                "step": None,
+                "purpose": None,
+                "ask": None,
             },
             "files": [upload],
         }
@@ -268,6 +271,9 @@ def test_post_stream_creates_decision_post_with_request_id(monkeypatch, tmp_path
                 "kind": "pick-one",
                 "context": None,
                 "manifest": None,
+                "step": None,
+                "purpose": None,
+                "ask": None,
             },
             "files": [upload],
         }

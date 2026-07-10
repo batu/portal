@@ -127,12 +127,13 @@ def _variant():
 def test_fresh_db_has_portal_schema_v3(data_dir):
     conn = db.connect()
 
-    assert _user_version(conn) == 4
+    assert _user_version(conn) == 5
     assert {"requests", "variants", "verdicts", "streams", "posts", "messages"} <= _table_names(conn)
     assert {"stream_id", "before_media_path", "before_media_type"} <= _column_names(conn, "requests")
     assert {"superseded_by", "close_reason"} <= _column_names(conn, "requests")
+    assert {"step", "purpose", "ask"} <= _column_names(conn, "requests")
     # Exact order pins fresh-DB shape to the migrated-legacy shape: new columns
-    # arrive via ALTER in _migrate_v4, never via the base SCHEMA.
+    # arrive via ALTER in the versioned migrations, never via the base SCHEMA.
     assert [row["name"] for row in conn.execute("PRAGMA table_info(requests)")] == [
         "id",
         "title",
@@ -147,6 +148,9 @@ def test_fresh_db_has_portal_schema_v3(data_dir):
         "before_media_type",
         "superseded_by",
         "close_reason",
+        "step",
+        "purpose",
+        "ask",
     ]
     assert "payload_json" in _column_names(conn, "verdicts")
     assert {"id", "stream_id", "direction", "text", "created_at", "consumed_at"} <= _column_names(conn, "messages")
@@ -182,7 +186,7 @@ def test_legacy_db_upgrade_preserves_existing_rows(data_dir):
 
     conn = db.connect()
 
-    assert _user_version(conn) == 4
+    assert _user_version(conn) == 5
     assert {"streams", "posts", "messages"} <= _table_names(conn)
     assert {"stream_id", "before_media_path", "before_media_type"} <= _column_names(conn, "requests")
     assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
@@ -217,6 +221,9 @@ def test_legacy_db_upgrade_preserves_existing_rows(data_dir):
         "before_media_type",
         "superseded_by",
         "close_reason",
+        "step",
+        "purpose",
+        "ask",
     ]
     request = db.get_request("req_old")
     assert request["title"] == "Old request"
@@ -224,6 +231,9 @@ def test_legacy_db_upgrade_preserves_existing_rows(data_dir):
     assert request["stream_id"] is None
     assert request["superseded_by"] is None
     assert request["close_reason"] is None
+    assert request["step"] is None
+    assert request["purpose"] is None
+    assert request["ask"] is None
     assert request["before_media_path"] is None
     assert request["variants"][0]["meta"] == {"score": 1}
     assert request["variants"][1]["meta"] is None
@@ -255,7 +265,7 @@ def test_user_version_one_db_upgrades_to_v2_and_preserves_portal_rows(data_dir):
 
     conn = db.connect()
 
-    assert _user_version(conn) == 4
+    assert _user_version(conn) == 5
     assert "messages" in _table_names(conn)
     assert _column_names(conn, "messages") == {"id", "stream_id", "direction", "text", "created_at", "consumed_at"}
     assert _rows(conn, "SELECT id, slug, kind, title, created_at, closed_at FROM streams ORDER BY id") == [
@@ -301,7 +311,7 @@ def test_reconnecting_migrated_db_is_noop(data_dir):
         table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
         for table in ("requests", "variants", "verdicts", "streams", "posts", "messages")
     }
-    assert _user_version(conn) == 4
+    assert _user_version(conn) == 5
     assert after == before
 
 
@@ -320,7 +330,7 @@ def test_partial_v1_db_completes_migration(data_dir):
 
     conn = db.connect()
 
-    assert _user_version(conn) == 4
+    assert _user_version(conn) == 5
     assert {"stream_id", "before_media_path", "before_media_type"} <= _column_names(conn, "requests")
     assert "posts" in _table_names(conn)
     assert "messages" in _table_names(conn)
@@ -381,7 +391,7 @@ def test_failed_migration_rolls_back_and_connect_can_retry(data_dir, monkeypatch
 
     monkeypatch.setattr(db, "MIGRATIONS", original_migrations)
     conn = db.connect()
-    assert _user_version(conn) == 4
+    assert _user_version(conn) == 5
     assert {"streams", "posts", "messages"} <= _table_names(conn)
 
 

@@ -183,6 +183,8 @@ def _validate_schema_version(conn: sqlite3.Connection, version: int) -> None:
         _validate_v3_schema(conn)
     if version >= 4:
         _validate_v4_schema(conn)
+    if version >= 5:
+        _validate_v5_schema(conn)
 
 
 def _migrate_v1(conn: sqlite3.Connection) -> None:
@@ -256,7 +258,20 @@ def _validate_v4_schema(conn: sqlite3.Connection) -> None:
         raise RuntimeError(f"schema v4 missing requests columns: {missing_list}")
 
 
-MIGRATIONS = [(1, _migrate_v1), (2, _migrate_v2), (3, _migrate_v3), (4, _migrate_v4)]
+def _migrate_v5(conn: sqlite3.Connection) -> None:
+    _add_column_if_missing(conn, "requests", "step", "step TEXT")
+    _add_column_if_missing(conn, "requests", "purpose", "purpose TEXT")
+    _add_column_if_missing(conn, "requests", "ask", "ask TEXT")
+
+
+def _validate_v5_schema(conn: sqlite3.Connection) -> None:
+    missing = {"step", "purpose", "ask"} - _column_names(conn, "requests")
+    if missing:
+        missing_list = ", ".join(sorted(missing))
+        raise RuntimeError(f"schema v5 missing requests columns: {missing_list}")
+
+
+MIGRATIONS = [(1, _migrate_v1), (2, _migrate_v2), (3, _migrate_v3), (4, _migrate_v4), (5, _migrate_v5)]
 
 
 def _user_version(conn: sqlite3.Connection) -> int:
@@ -380,6 +395,12 @@ def get_stream(slug: str) -> dict | None:
     conn = connect()
     with _lock:
         return _get_stream_by_slug(conn, slug)
+
+
+def get_stream_by_id(stream_id: str) -> dict | None:
+    conn = connect()
+    with _lock:
+        return _get_stream_by_id(conn, stream_id)
 
 
 def get_stream_with_posts(slug: str) -> dict | None:
@@ -709,6 +730,9 @@ def create_request(
     variants: list[dict],
     before_media_path: str | None = None,
     before_media_type: str | None = None,
+    step: str | None = None,
+    purpose: str | None = None,
+    ask: str | None = None,
 ) -> str:
     """variants: list of {media_path, media_type, caption, meta} in display order (1-based idx)."""
     conn = connect()
@@ -718,8 +742,8 @@ def create_request(
             stream = _ensure_stream(conn, _stream_slug_for_project(project))
             conn.execute(
                 "INSERT INTO requests "
-                "(id, title, project, kind, status, context_md, created_at, stream_id, before_media_path, before_media_type) "
-                "VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?)",
+                "(id, title, project, kind, status, context_md, created_at, stream_id, before_media_path, before_media_type, step, purpose, ask) "
+                "VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     req_id,
                     title,
@@ -730,6 +754,9 @@ def create_request(
                     stream["id"],
                     before_media_path,
                     before_media_type,
+                    step,
+                    purpose,
+                    ask,
                 ),
             )
             for i, v in enumerate(variants, start=1):

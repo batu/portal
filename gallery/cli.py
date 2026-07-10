@@ -150,6 +150,9 @@ def cmd_post(args):
         "kind": args.kind,
         "context": args.context,
         "manifest": manifest,
+        "step": args.step,
+        "purpose": args.purpose,
+        "ask": args.ask,
     }
     try:
         result = client.post_multipart(base_url, token, "/api/requests", fields, request_files)
@@ -223,6 +226,11 @@ def cmd_supersede(args):
 def cmd_report(args):
     base_url, token = config.client_config()
     files = _resolve_files([args.file_html, *args.assets])
+    body = {
+        k: v
+        for k, v in {"step": args.step, "purpose": args.purpose, "ask": args.ask}.items()
+        if v is not None
+    }
     try:
         result = client.create_stream_post(
             base_url,
@@ -231,7 +239,7 @@ def cmd_report(args):
             "report",
             args.title,
             "portal",
-            body={},
+            body=body,
             files=files,
         )
     except client.GalleryClientError as exc:
@@ -452,6 +460,9 @@ def main():
     p.add_argument("--before", default=None, help="Optional before image for before/after decisions")
     p.add_argument("--context", default=None, help="Optional markdown context blurb")
     p.add_argument("--manifest", default=None, help="Path to a JSON file mapping filename -> {caption, meta}")
+    p.add_argument("--step", default=None, help="Optional: which step the human is looking at (e.g. 'frame picking')")
+    p.add_argument("--purpose", default=None, help="Optional: one-line purpose of this request")
+    p.add_argument("--ask", default=None, help="Optional: what the human is being asked to do")
     p.add_argument("files", nargs="+", help="File paths or globs, in display order")
 
     p = sub.add_parser("stream", help="Create or close Portal streams")
@@ -476,6 +487,9 @@ def main():
     p = sub.add_parser("report", help="Post an HTML report to a Portal stream")
     p.add_argument("--stream", required=True, type=_stream_slug)
     p.add_argument("--title", required=True)
+    p.add_argument("--step", default=None, help="Optional: which step this report covers")
+    p.add_argument("--purpose", default=None, help="Optional: one-line purpose of this report")
+    p.add_argument("--ask", default=None, help="Optional: what the human is being asked to do")
     p.add_argument("file_html")
     p.add_argument("assets", nargs="*")
 
