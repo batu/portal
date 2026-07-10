@@ -186,7 +186,7 @@
   function decideErrorMessage(detail) {
     // P5b made the decide 409 detail a dict; render its human fields readably.
     // Plain-string details (every other 4xx on this path) pass through verbatim.
-    if (typeof detail === "string") return detail;
+    if (typeof detail === "string") return detail || "failed to submit decision";
     if (detail && typeof detail === "object") {
       if (detail.error === "verdict_exists") {
         var n = detail.verdict_count;
