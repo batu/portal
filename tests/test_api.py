@@ -542,3 +542,51 @@ def test_web_decide_flow(client, token):
 
     detail = client.get(f"/api/requests/{req_id}", headers=auth_headers(token))
     assert detail.json()["status"] == "decided"
+
+
+def test_request_metadata_round_trip(client, token):
+    create = client.post(
+        "/api/requests",
+        headers=auth_headers(token),
+        data={
+            "title": "Pick a frame",
+            "kind": "pick-one",
+            "step": "  frame picking  ",
+            "purpose": "choose the hero shot",
+            "ask": "pick the winning frame",
+        },
+        files=_upload_files(1),
+    )
+    assert create.status_code == 200
+    req_id = create.json()["id"]
+
+    detail = client.get(f"/api/requests/{req_id}", headers=auth_headers(token)).json()
+    assert detail["step"] == "frame picking"  # stripped
+    assert detail["purpose"] == "choose the hero shot"
+    assert detail["ask"] == "pick the winning frame"
+
+
+def test_request_metadata_omitted_or_blank_is_null(client, token):
+    create = client.post(
+        "/api/requests",
+        headers=auth_headers(token),
+        data={"title": "No metadata", "kind": "pick-one", "step": "   "},
+        files=_upload_files(1),
+    )
+    assert create.status_code == 200
+    detail = client.get(f"/api/requests/{create.json()['id']}", headers=auth_headers(token)).json()
+    assert detail["step"] is None
+    assert detail["purpose"] is None
+    assert detail["ask"] is None
+
+
+def test_request_metadata_too_long_rejected(client, token):
+    for field in ("step", "purpose", "ask"):
+        resp = client.post(
+            "/api/requests",
+            headers=auth_headers(token),
+            data={"title": "t", "kind": "pick-one", field: "x" * (server.MAX_TITLE_LENGTH + 1)},
+            files=_upload_files(1),
+        )
+        assert resp.status_code == 400
+        assert f"{field} is too long" in resp.json()["detail"]

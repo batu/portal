@@ -317,6 +317,7 @@ def _is_text_html(media_type: str | None) -> bool:
 # (Batu, 2026-07-09). The header is self-contained inline styles — the sandboxed
 # producer page does not load Portal's style.css.
 _BODY_OPEN_RE = re.compile(rb"<body[^>]*>", re.IGNORECASE)
+_DOCTYPE_RE = re.compile(rb"\A\s*<!doctype[^>]*>", re.IGNORECASE)
 
 # Deterministic status → inline chip style. Not user-controlled (status is drawn
 # from the lifecycle vocabulary), so it is injected as-is by the template.
@@ -331,6 +332,18 @@ _STATUS_CHIP_STYLES = {
     "closed": _STATUS_CHIP_DEFAULT_STYLE,
     "superseded": _STATUS_CHIP_DEFAULT_STYLE,
 }
+
+
+def _render_safe_metadata(value: object) -> str | None:
+    """Coerce header metadata read from stored JSON (report body_json) at render
+    time: request rows are bounded at write time, but report bodies are arbitrary
+    JSON — drop non-strings (never render a Python repr) and bound the length."""
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    if not value:
+        return None
+    return value[:MAX_TITLE_LENGTH]
 
 
 def _context_header_bytes(*, stream: dict | None, step, ask, status) -> bytes:
@@ -350,7 +363,9 @@ def _context_header_bytes(*, stream: dict | None, step, ask, status) -> bytes:
 
 def _html_with_context_header(path, media_type: str, headers: dict, header_bytes: bytes):
     raw = path.read_bytes()
-    match = _BODY_OPEN_RE.search(raw)
+    # No <body> tag: still insert AFTER any leading doctype — content before the
+    # doctype would demote the whole page to quirks mode.
+    match = _BODY_OPEN_RE.search(raw) or _DOCTYPE_RE.match(raw)
     if match is not None:
         raw = raw[: match.end()] + header_bytes + raw[match.end() :]
     else:
@@ -431,15 +446,10 @@ def _validate_slug(slug: str) -> str:
 
 
 def _bounded_text(value: object, name: str, max_length: int) -> str:
-    if not isinstance(value, str):
-        raise HTTPException(status_code=400, detail=f"{name} must be a string")
-    value = value.strip()
-    if not value:
+    result = _bounded_optional_text(value, name, max_length)
+    if result is None:
         raise HTTPException(status_code=400, detail=f"{name} is required")
-    if len(value) > max_length:
-        raise HTTPException(status_code=400, detail=f"{name} is too long")
-    _validate_json_response_safe(value)
-    return value
+    return result
 
 
 def _bounded_optional_text(value: object, name: str, max_length: int) -> str | None:
@@ -1018,8 +1028,8 @@ def _report_context_header_bytes(post_id: str) -> bytes:
     body = body if isinstance(body, dict) else {}
     return _context_header_bytes(
         stream=stream,
-        step=body.get("step"),
-        ask=body.get("ask"),
+        step=_render_safe_metadata(body.get("step")),
+        ask=_render_safe_metadata(body.get("ask")),
         status=None,
     )
 

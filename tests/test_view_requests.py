@@ -2,7 +2,7 @@
 
 import json
 
-from gallery import db
+from gallery import db, server
 
 
 def auth_headers(token):
@@ -240,3 +240,42 @@ def test_producer_html_is_byte_preserved_apart_from_header(client, token):
     fragment = served[seam : len(served) - (len(original) - seam)]
     assert served == original[:seam] + fragment + original[seam:]
     assert served.count(b"Portal</a>") == 1
+
+
+def test_header_injection_without_body_tag_keeps_doctype_first(client, token):
+    # A valid HTML page with no explicit <body> tag: the header must land AFTER
+    # the doctype, never before it (content before <!doctype> forces quirks mode).
+    original = b"<!DOCTYPE html>\n<p>bare report</p>"
+    resp = client.post(
+        "/api/streams/reports/posts",
+        data={"type": "report", "title": "r", "author": "a"},
+        files=[("files", ("report.html", original, "text/html"))],
+        headers=auth_headers(token),
+    )
+    post_id = resp.json()["post"]["id"]
+    served = client.get(f"/media/{post_id}/01_report.html", params={"token": token}).content
+    assert served.startswith(b"<!DOCTYPE html>")
+    assert served.count(b"Portal</a>") == 1
+    assert served.endswith(b"<p>bare report</p>")
+
+
+def test_report_header_metadata_is_bounded_and_coerced(client, token):
+    # Report body_json is arbitrary JSON: non-string metadata must be dropped
+    # (never rendered as a Python repr) and oversized strings truncated.
+    huge = "y" * 5000
+    resp = client.post(
+        "/api/streams/reports/posts",
+        data={
+            "type": "report",
+            "title": "r",
+            "author": "a",
+            "body": json.dumps({"step": {"nested": 1}, "ask": huge}),
+        },
+        files=[("files", ("report.html", b"<html><body><p>hi</p></body></html>", "text/html"))],
+        headers=auth_headers(token),
+    )
+    post_id = resp.json()["post"]["id"]
+    page = client.get(f"/media/{post_id}/01_report.html", params={"token": token})
+    assert "nested" not in page.text  # dict dropped, no repr leak
+    assert "y" * server.MAX_TITLE_LENGTH in page.text  # bounded, not blanked
+    assert "y" * (server.MAX_TITLE_LENGTH + 1) not in page.text
