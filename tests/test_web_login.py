@@ -41,6 +41,16 @@ def test_https_proxy_login_cookie_is_secure(client, token):
     assert "Secure" in resp.headers["set-cookie"]
 
 
+def test_direct_https_login_cookie_is_secure(client, token):
+    resp = client.post(
+        "https://testserver/login",
+        data={"password": token},
+        follow_redirects=False,
+    )
+
+    assert "Secure" in resp.headers["set-cookie"]
+
+
 def test_https_proxy_query_token_cookie_is_secure(client, token):
     resp = client.get(
         f"/?token={token}",

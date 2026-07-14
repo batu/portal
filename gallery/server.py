@@ -14,7 +14,7 @@ import threading
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, unquote_plus, urlsplit
 
 import markdown as md_lib
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -44,10 +44,13 @@ MAX_JOURNEY_STEPS = 100
 MAX_STEP_MEDIA = 30
 STREAM_SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?$")
 SAFE_SEGMENT_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
-_SECRET_QUERY_RE = re.compile(
-    r"([?&](?:token|access_token|api_key|key|password)=)([^&#\s]*)",
-    re.IGNORECASE,
-)
+_SECRET_QUERY_KEYS = frozenset({"token", "access_token", "api_key", "key", "password"})
+_QUERY_PAIR_RE = re.compile(r"([?&;])([^=&#;\s]+)=([^&#;\s]*)")
+
+
+def _query_key_is_secret(value: str) -> bool:
+    return unquote_plus(value).lower() in _SECRET_QUERY_KEYS
+
 
 # Request context is stored, agent-controlled Markdown that renders into an
 # HTML `|safe` sink. Markdown preserves raw HTML, so its output is run through
@@ -75,7 +78,12 @@ _CONTEXT_SCHEME_RE = re.compile(r"^([a-z][a-z0-9+.-]*):")
 
 
 def _redact_query_secrets(value: str) -> str:
-    return _SECRET_QUERY_RE.sub(r"\1%5BREDACTED%5D", value)
+    def redact(match: re.Match) -> str:
+        if not _query_key_is_secret(match.group(2)):
+            return match.group(0)
+        return f"{match.group(1)}{match.group(2)}=%5BREDACTED%5D"
+
+    return _QUERY_PAIR_RE.sub(redact, value)
 
 
 class _QuerySecretAccessLogFilter(logging.Filter):
@@ -1609,6 +1617,7 @@ _DEFAULT_EDITOR_HUB = (
     {"id": "marble-grapesjs", "name": "Marble GrapesJS Editor", "status": "waiting"},
     {"id": "marble-phaser", "name": "Marble Phaser Editor", "status": "waiting"},
 )
+_EDITOR_HUB_IDS = {entry["id"] for entry in _DEFAULT_EDITOR_HUB}
 
 
 def _safe_external_url(value: object) -> str | None:
@@ -1619,6 +1628,8 @@ def _safe_external_url(value: object) -> str | None:
         return None
     parsed = urlsplit(value)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.username or parsed.password:
+        return None
+    if any(_query_key_is_secret(match.group(2)) for match in _QUERY_PAIR_RE.finditer(f"?{parsed.query}")):
         return None
     return value
 
@@ -1645,11 +1656,14 @@ def _editor_link_list(value: object) -> list[dict]:
 
 def _editor_hub_entries() -> list[dict]:
     configured = config.load_config().get("editor_hub")
-    raw_entries = configured if isinstance(configured, list) and configured else _DEFAULT_EDITOR_HUB
+    configured_entries = {
+        item.get("id"): item
+        for item in configured
+        if isinstance(item, dict) and item.get("id") in _EDITOR_HUB_IDS
+    } if isinstance(configured, list) else {}
+    raw_entries = [dict(default, **configured_entries.get(default["id"], {})) for default in _DEFAULT_EDITOR_HUB]
     entries = []
     for index, item in enumerate(raw_entries[:8]):
-        if not isinstance(item, dict):
-            continue
         apply_request = item.get("apply_request")
         if not isinstance(apply_request, dict):
             apply_request = {}

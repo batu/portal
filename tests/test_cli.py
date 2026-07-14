@@ -2,6 +2,7 @@ import json
 import tomllib
 import urllib.error
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -73,7 +74,7 @@ def test_no_command_prints_help_and_exits(monkeypatch, capsys):
 
 
 def test_init_does_not_print_token_in_url(data_dir, capsys):
-    cli.cmd_init(type("Args", (), {"force": False})())
+    cli.cmd_init(SimpleNamespace(force=False))
 
     output = capsys.readouterr()
     assert data_dir[1]["token"] not in output.out

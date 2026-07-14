@@ -55,11 +55,12 @@ systemd user unit for a future Linux move lives at `deploy/gallery.service`
 - `GALLERY_URL` / `GALLERY_TOKEN` override the CLI's server URL/token without
   touching config.json (handy for pointing the CLI at a scratch/test server).
 
-`editor_hub` is optional. An empty or missing value renders two disabled Marble
-Run placeholders. Each configured entry may provide `editor_url`, `preview_url`,
-`reference_links`, `evidence_links`, `baseline`, `reset`, and an `apply_request`.
-Portal renders only absolute HTTP(S) links; it does not proxy or validate the
-editor services.
+`editor_hub` is optional. An empty, partial, or malformed value keeps the two
+disabled Marble Run placeholders. Configure entries by stable ID
+(`marble-grapesjs` or `marble-phaser`); each may provide `editor_url`,
+`preview_url`, `reference_links`, `evidence_links`, `baseline`, `reset`, and an
+`apply_request`. Portal renders only absolute HTTP(S) links without credential
+query parameters; it does not proxy or validate the editor services.
 
 ### Doorbell notifications (optional)
 
@@ -302,15 +303,23 @@ After a reviewed commit is landed, update the launchd service deterministically
 from the repository checkout:
 
 ```bash
+set -euo pipefail
 ./deploy/install.sh
-launchctl print "gui/$(id -u)/com.appletolye.gallery"
+JOB="gui/$(id -u)/com.appletolye.gallery"
+launchctl print "$JOB" | tee /tmp/portal-launchd-status.txt
+JOB_PID="$(awk '$1 == "pid" && $2 == "=" { print $3; exit }' /tmp/portal-launchd-status.txt)"
+LISTENER_PID="$(lsof -nP -tiTCP:8787 -sTCP:LISTEN)"
+test -n "$JOB_PID"
+test "$JOB_PID" = "$LISTENER_PID"
 curl --fail --silent https://portal.basegamelab.com/api/health
 ```
 
 `deploy/install.sh` replaces the installed plist, bootstraps the user agent,
-and kickstarts it. This changes the live service; do not run it from a feature
-worktree or as part of tests. Proxy/DNS/Caddy changes are separate operations
-and are not performed by the installer.
+and kickstarts it. The PID comparison fails closed if an old unmanaged process
+still owns port 8787; do not kill or replace that process without explicit
+deployment approval. These commands change and probe the live service, so do
+not run them from a feature worktree or as part of tests. Proxy/DNS/Caddy
+changes are separate operations and are not performed by the installer.
 
 ## HTTP API
 
