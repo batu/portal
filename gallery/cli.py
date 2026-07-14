@@ -105,7 +105,7 @@ def cmd_init(args):
     cfg = config.init_config(force=args.force)
     print(f"Gallery data dir: {config.data_dir()}")
     print(f"Config: {config.config_path()}")
-    print(f"Phone URL (first visit sets a cookie): {cfg['url']}?token={cfg['token']}")
+    print(f"Portal login: {cfg['url'].rstrip('/')}/login")
     if not cfg.get("telegram_bot_token") or not cfg.get("telegram_chat_id"):
         print(
             "Doorbell notifications are OFF. Set telegram_bot_token and telegram_chat_id "

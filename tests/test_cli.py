@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from gallery import cli, db
+from gallery import cli, config, db
 
 
 def _stub_open_stream(monkeypatch):
@@ -70,6 +70,16 @@ def test_no_command_prints_help_and_exits(monkeypatch, capsys):
         cli.main()
     assert exc.value.code == 1
     assert "usage" in capsys.readouterr().out.lower()
+
+
+def test_init_does_not_print_token_in_url(data_dir, capsys):
+    cli.cmd_init(type("Args", (), {"force": False})())
+
+    output = capsys.readouterr()
+    assert data_dir[1]["token"] not in output.out
+    assert "?token=" not in output.out
+    assert config.load_config()["url"] in output.out
+    assert "/login" in output.out
 
 
 @pytest.mark.parametrize("binary", ["portal", "gallery"])

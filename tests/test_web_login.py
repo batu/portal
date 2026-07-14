@@ -2,7 +2,7 @@
 
 
 def test_unauthenticated_pages_redirect_to_login(client):
-    for path in ["/", "/s/some-stream", "/r/req_none"]:
+    for path in ["/", "/editor-hub", "/s/some-stream", "/r/req_none"]:
         resp = client.get(path, follow_redirects=False)
         assert resp.status_code == 303, path
         assert resp.headers["location"].startswith("/login?next="), path
@@ -22,6 +22,33 @@ def test_login_with_correct_passphrase_sets_cookie_and_redirects(client, token):
 
     resp = client.get("/", follow_redirects=False)
     assert resp.status_code == 200
+
+
+def test_http_login_cookie_stays_usable_for_local_development(client, token):
+    resp = client.post("/login", data={"password": token}, follow_redirects=False)
+
+    assert "Secure" not in resp.headers["set-cookie"]
+
+
+def test_https_proxy_login_cookie_is_secure(client, token):
+    resp = client.post(
+        "/login",
+        data={"password": token},
+        headers={"x-forwarded-proto": "https"},
+        follow_redirects=False,
+    )
+
+    assert "Secure" in resp.headers["set-cookie"]
+
+
+def test_https_proxy_query_token_cookie_is_secure(client, token):
+    resp = client.get(
+        f"/?token={token}",
+        headers={"x-forwarded-proto": "https"},
+        follow_redirects=False,
+    )
+
+    assert "Secure" in resp.headers["set-cookie"]
 
 
 def test_login_with_wrong_passphrase_rejected(client):

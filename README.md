@@ -4,9 +4,10 @@ A persistent pick-by-number review hub. Agents post "decision requests" (N
 image or video variants) and poll/block for the verdict; a single human
 reviews them on a phone-friendly web UI and picks by number.
 
-Runs as one always-on FastAPI + SQLite service on this Mac mini, reachable
-over Tailscale only, plus a `gallery` CLI for agents to post requests and
-wait for verdicts.
+Runs as one always-on FastAPI + SQLite service on this Mac mini, plus a
+`gallery` CLI for agents to post requests and wait for verdicts. The current
+deployment is reachable at `https://portal.basegamelab.com` through an HTTPS
+reverse proxy; it is not Tailscale-only.
 
 ## Install
 
@@ -16,8 +17,9 @@ gallery init
 ```
 
 `gallery init` creates `~/.gallery/` (SQLite db, media files, config, logs),
-generates a bearer token, and prints the phone URL with the token baked in —
-visit it once from your phone to set a cookie.
+generates a bearer token, and prints the token-free `/login` URL. Configure a
+human passphrase and sign in there; keep the machine bearer token in
+`config.json` or `GALLERY_TOKEN`, not in copied URLs.
 
 To run the service persistently under launchd (recommended on the Mac mini):
 
@@ -40,9 +42,11 @@ systemd user unit for a future Linux move lives at `deploy/gallery.service`
   "token": "...",
   "host": "0.0.0.0",
   "port": 8787,
-  "url": "http://bases-mac-mini:8787",
+  "url": "https://portal.basegamelab.com",
+  "passphrase": "choose-a-human-login-secret",
   "telegram_bot_token": null,
-  "telegram_chat_id": null
+  "telegram_chat_id": null,
+  "editor_hub": []
 }
 ```
 
@@ -50,6 +54,12 @@ systemd user unit for a future Linux move lives at `deploy/gallery.service`
   media dir, config, logs).
 - `GALLERY_URL` / `GALLERY_TOKEN` override the CLI's server URL/token without
   touching config.json (handy for pointing the CLI at a scratch/test server).
+
+`editor_hub` is optional. An empty or missing value renders two disabled Marble
+Run placeholders. Each configured entry may provide `editor_url`, `preview_url`,
+`reference_links`, `evidence_links`, `baseline`, `reset`, and an `apply_request`.
+Portal renders only absolute HTTP(S) links; it does not proxy or validate the
+editor services.
 
 ### Doorbell notifications (optional)
 
@@ -258,15 +268,49 @@ file. Run only one watcher process per repo/list context; the state file is
 written atomically but is not a cross-process lock, so concurrent watchers can
 race the same card.
 
-## Phone URL
+## Browser login and editor hub
 
-Visit `http://bases-mac-mini:8787?token=<token>` once (from `gallery init`'s
-output or `~/.gallery/config.json`) over Tailscale — this sets a cookie so
-you won't need the token in the URL again. The queue page (`/`) lists open
+Visit `https://portal.basegamelab.com/login` and enter the configured
+`passphrase` (the machine token also works as a recovery credential). The HTTPS
+proxy causes Portal to set an `HttpOnly`, `Secure`, `SameSite=Lax` cookie. The
+queue page (`/`) lists open
 requests newest-first, with a collapsed, searchable "Decided" history below.
 Each request opens at `/r/<id>` with a numbered variant grid and
 kind-specific controls (tap-to-select, rank-by-tapping-order, approve/reject,
 or just a comment box).
+
+The authenticated `/editor-hub` page is the stable test index for the
+real-game editor experiment. Disabled entries mean Fabrika has not published a
+service URL yet; they are not broken links.
+
+## Deployment and security boundary
+
+Portal's public hostname currently protects the whole service with one shared
+bearer token and optional human passphrase. There are no users, per-stream
+permissions, revocation scopes, or safe anonymous links. Treat everyone with
+either secret as a full operator, and do not use this deployment for untrusted
+or multi-tenant content. In particular, `kind=view` HTML can execute producer
+JavaScript on the authenticated Portal origin and is restricted to trusted
+producers. Do not expose the backend port directly to the public internet.
+
+Query-token compatibility remains for old links, but new human entry points
+must use `/login`: access logs redact common secret query keys and
+`gallery init` no longer prints token-bearing URLs. The reverse proxy must set
+`X-Forwarded-Proto: https`; Portal uses that signal only to harden its cookie.
+
+After a reviewed commit is landed, update the launchd service deterministically
+from the repository checkout:
+
+```bash
+./deploy/install.sh
+launchctl print "gui/$(id -u)/com.appletolye.gallery"
+curl --fail --silent https://portal.basegamelab.com/api/health
+```
+
+`deploy/install.sh` replaces the installed plist, bootstraps the user agent,
+and kickstarts it. This changes the live service; do not run it from a feature
+worktree or as part of tests. Proxy/DNS/Caddy changes are separate operations
+and are not performed by the installer.
 
 ## HTTP API
 

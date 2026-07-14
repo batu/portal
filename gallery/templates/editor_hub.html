@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Portal — Editor hub{% endblock %}
+{% block content %}
+<section class="editor-hub-header">
+  <p class="eyebrow">Real-game round trip</p>
+  <h1>Editor test hub</h1>
+  <p class="empty">Stable entry points for authoring, revision preview, references, evidence, and agent apply requests.</p>
+</section>
+
+<section class="editor-grid" aria-label="Editor services">
+  {% for editor in editors %}
+  <article class="editor-card" id="{{ editor.id }}">
+    <div class="editor-card-heading">
+      <h2>{{ editor.name }}</h2>
+      <span class="status-badge {{ editor.status }}">{{ editor.status }}</span>
+    </div>
+
+    {% if editor.editor_url %}
+      <a class="btn editor-service-link" href="{{ editor.editor_url }}" target="_blank" rel="noopener noreferrer">Open editor</a>
+    {% else %}
+      <span class="btn editor-service-disabled" aria-disabled="true">Waiting for Fabrika links</span>
+    {% endif %}
+
+    <dl class="editor-details">
+      <div>
+        <dt>Revision Preview</dt>
+        <dd>{% if editor.preview_url %}<a href="{{ editor.preview_url }}" target="_blank" rel="noopener noreferrer">Open selected revision</a>{% else %}<span class="empty">Unavailable</span>{% endif %}</dd>
+      </div>
+      <div><dt>Baseline</dt><dd>{{ editor.baseline }}</dd></div>
+      <div><dt>Reset</dt><dd>{{ editor.reset }}</dd></div>
+      <div>
+        <dt>References</dt>
+        <dd>{% if editor.reference_links %}{% for link in editor.reference_links %}<a href="{{ link.url }}" target="_blank" rel="noopener noreferrer">{{ link.label }}</a>{% if not loop.last %}<br>{% endif %}{% endfor %}{% else %}<span class="empty">Unavailable</span>{% endif %}</dd>
+      </div>
+      <div>
+        <dt>Evidence</dt>
+        <dd>{% if editor.evidence_links %}{% for link in editor.evidence_links %}<a href="{{ link.url }}" target="_blank" rel="noopener noreferrer">{{ link.label }}</a>{% if not loop.last %}<br>{% endif %}{% endfor %}{% else %}<span class="empty">Unavailable</span>{% endif %}</dd>
+      </div>
+      <div><dt>Apply request</dt><dd><span class="tag">{{ editor.apply_status }}</span>{% if editor.apply_summary %} {{ editor.apply_summary }}{% endif %}</dd></div>
+    </dl>
+  </article>
+  {% endfor %}
+</section>
+{% endblock %}

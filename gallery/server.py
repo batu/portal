@@ -14,7 +14,7 @@ import threading
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import markdown as md_lib
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -44,6 +44,10 @@ MAX_JOURNEY_STEPS = 100
 MAX_STEP_MEDIA = 30
 STREAM_SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?$")
 SAFE_SEGMENT_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+_SECRET_QUERY_RE = re.compile(
+    r"([?&](?:token|access_token|api_key|key|password)=)([^&#\s]*)",
+    re.IGNORECASE,
+)
 
 # Request context is stored, agent-controlled Markdown that renders into an
 # HTML `|safe` sink. Markdown preserves raw HTML, so its output is run through
@@ -68,6 +72,34 @@ _CONTEXT_DROP_CONTENT_TAGS = {"script", "style"}
 _CONTEXT_URL_ATTRS = {"href", "src"}
 _CONTEXT_SAFE_URL_SCHEMES = {"http", "https", "mailto"}
 _CONTEXT_SCHEME_RE = re.compile(r"^([a-z][a-z0-9+.-]*):")
+
+
+def _redact_query_secrets(value: str) -> str:
+    return _SECRET_QUERY_RE.sub(r"\1%5BREDACTED%5D", value)
+
+
+class _QuerySecretAccessLogFilter(logging.Filter):
+    """Scrub query credentials before any uvicorn access-log handler sees them."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.msg, str):
+            record.msg = _redact_query_secrets(record.msg)
+        if isinstance(record.args, tuple):
+            record.args = tuple(
+                _redact_query_secrets(value) if isinstance(value, str) else value
+                for value in record.args
+            )
+        elif isinstance(record.args, dict):
+            record.args = {
+                key: _redact_query_secrets(value) if isinstance(value, str) else value
+                for key, value in record.args.items()
+            }
+        return True
+
+
+_uvicorn_access_logger = logging.getLogger("uvicorn.access")
+if not any(isinstance(item, _QuerySecretAccessLogFilter) for item in _uvicorn_access_logger.filters):
+    _uvicorn_access_logger.addFilter(_QuerySecretAccessLogFilter())
 
 
 def _context_url_is_safe(value: str) -> bool:
@@ -232,10 +264,26 @@ def web_token_ok(request: Request) -> bool:
     return bool(cookie_token and cookie_token == expected)
 
 
+def _request_uses_https(request: Request) -> bool:
+    forwarded_proto = request.headers.get("x-forwarded-proto", "").split(",", 1)[0].strip().lower()
+    return request.url.scheme == "https" or forwarded_proto == "https"
+
+
+def _set_auth_cookie(response, request: Request, token: str) -> None:
+    response.set_cookie(
+        COOKIE_NAME,
+        token,
+        httponly=True,
+        secure=_request_uses_https(request),
+        samesite="lax",
+        max_age=3600 * 24 * 365,
+    )
+
+
 def _maybe_set_cookie(response, request: Request) -> None:
     qs_token = request.query_params.get("token")
     if qs_token and qs_token == _server_token():
-        response.set_cookie(COOKIE_NAME, qs_token, httponly=True, samesite="lax", max_age=3600 * 24 * 365)
+        _set_auth_cookie(response, request, qs_token)
 
 
 def _safe_next_path(value: str | None) -> str:
@@ -265,7 +313,7 @@ async def web_login_submit(request: Request, password: str = Form(""), next: str
     )
     if ok:
         response = RedirectResponse(url=_safe_next_path(next), status_code=303)
-        response.set_cookie(COOKIE_NAME, _server_token(), httponly=True, samesite="lax", max_age=3600 * 24 * 365)
+        _set_auth_cookie(response, request, _server_token())
         return response
     await asyncio.sleep(0.3)  # blunt brute-force damper; the passphrase is short
     return templates.TemplateResponse(
@@ -1553,6 +1601,82 @@ def web_index(request: Request, q: str | None = None):
             "journeys": journeys,
         },
     )
+    _maybe_set_cookie(response, request)
+    return response
+
+
+_DEFAULT_EDITOR_HUB = (
+    {"id": "marble-grapesjs", "name": "Marble GrapesJS Editor", "status": "waiting"},
+    {"id": "marble-phaser", "name": "Marble Phaser Editor", "status": "waiting"},
+)
+
+
+def _safe_external_url(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    if not value or len(value) > 2_048:
+        return None
+    parsed = urlsplit(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.username or parsed.password:
+        return None
+    return value
+
+
+def _bounded_display_text(value: object, fallback: str = "", limit: int = 300) -> str:
+    if not isinstance(value, str):
+        return fallback
+    value = value.strip()
+    return value[:limit] or fallback
+
+
+def _editor_link_list(value: object) -> list[dict]:
+    if not isinstance(value, list):
+        return []
+    links = []
+    for item in value[:20]:
+        if not isinstance(item, dict):
+            continue
+        url = _safe_external_url(item.get("url"))
+        if url is not None:
+            links.append({"label": _bounded_display_text(item.get("label"), "Open"), "url": url})
+    return links
+
+
+def _editor_hub_entries() -> list[dict]:
+    configured = config.load_config().get("editor_hub")
+    raw_entries = configured if isinstance(configured, list) and configured else _DEFAULT_EDITOR_HUB
+    entries = []
+    for index, item in enumerate(raw_entries[:8]):
+        if not isinstance(item, dict):
+            continue
+        apply_request = item.get("apply_request")
+        if not isinstance(apply_request, dict):
+            apply_request = {}
+        entries.append(
+            {
+                "id": _bounded_display_text(item.get("id"), f"editor-{index + 1}", 80),
+                "name": _bounded_display_text(item.get("name"), f"Editor {index + 1}"),
+                "status": _bounded_display_text(item.get("status"), "waiting", 40),
+                "editor_url": _safe_external_url(item.get("editor_url")),
+                "preview_url": _safe_external_url(item.get("preview_url")),
+                "reference_links": _editor_link_list(item.get("reference_links")),
+                "evidence_links": _editor_link_list(item.get("evidence_links")),
+                "baseline": _bounded_display_text(item.get("baseline"), "Not published yet", 1_000),
+                "reset": _bounded_display_text(item.get("reset"), "Not published yet", 1_000),
+                "apply_status": _bounded_display_text(apply_request.get("status"), "Not requested", 80),
+                "apply_summary": _bounded_display_text(apply_request.get("summary"), "", 1_000),
+            }
+        )
+    return entries
+
+
+@app.get("/editor-hub", response_class=HTMLResponse)
+def web_editor_hub(request: Request):
+    if not web_token_ok(request):
+        return _login_redirect(request)
+    response = templates.TemplateResponse(request, "editor_hub.html", {"editors": _editor_hub_entries()})
+    response.headers["Referrer-Policy"] = "no-referrer"
     _maybe_set_cookie(response, request)
     return response
 

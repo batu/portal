@@ -26,9 +26,10 @@ Principles, in priority order:
 4. **No full chat.** Human↔agent interaction is exactly two patterns:
    agent-asks/human-answers (blocking) and human-steers/agent-pulls
    (turn-boundary pickup). No streaming, no presence, no live-conversation UX.
-5. **Tailnet now, public later.** v1 stays Tailscale-only, but streams and
-   auth are shaped so a Cloudflare tunnel + per-user tokens can be added
-   without schema rework (see §9).
+5. **Public transport, single-operator auth.** The deployed service is behind
+   HTTPS at `portal.basegamelab.com`, but v1 still has one shared token and no
+   per-user or per-stream authorization. Public transport is not public sharing
+   (see §9).
 
 ## 2. Concepts
 
@@ -232,16 +233,27 @@ credentials only for now; configurable per-type/per-stream policy is deferred
 until there is a real settings consumer. Message text links straight to the
 stream URL.
 
-## 9. Access (designed-for, not built in v1)
+## 9. Access boundary
 
-v1: Tailscale-only, single bearer token, exactly as today. Auth failures are
-authentication failures (`401`), not authorization failures (`403`), because
-there is no user or per-stream permission state yet. The design keeps public
-exposure cheap later: streams are the sharing unit (a future
+v1 is publicly reachable through an HTTPS reverse proxy but remains a
+single-operator system guarded by one bearer token and optional human
+passphrase. Auth failures are authentication failures (`401`), not
+authorization failures (`403`), because there is no user or per-stream
+permission state. Possession of either secret grants full browser access; this
+is not a multi-tenant or anonymous-sharing boundary. Interactive `kind=view`
+HTML remains trusted-producer-only because it executes scripts on the
+authenticated Portal origin.
+
+Human entry uses the token-free `/login` form. Query-token compatibility is
+retained for existing producers, but access logs redact common secret query
+keys and new tools must not print token-bearing URLs. Cookies are `Secure` when
+the reverse proxy reports HTTPS through `X-Forwarded-Proto`.
+
+The design keeps scoped sharing possible later: streams are the sharing unit (a future
 `stream_tokens` table grants per-stream read or read+verdict access), and all
 media auth already flows through one place (`_maybe_set_cookie` / bearer
-check). Public exposure would be Cloudflare Tunnel or Tailscale Funnel in
-front of the same service — no schema change anticipated.
+check). Per-user/per-stream auth is still unbuilt and must be completed before
+treating a Portal link as safely shareable.
 
 ## 10. Producers to wire up (after core lands)
 
