@@ -7,12 +7,12 @@
   },
   "twf_gate": {
     "cmds": [
-      "uv run pytest -q"
+      "uv run --extra dev pytest -q"
     ]
   },
   "project_gate": {
     "cmds": [
-      "uv run pytest -q"
+      "uv run --extra dev pytest -q"
     ]
   },
   "trello": {
