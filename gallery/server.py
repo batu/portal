@@ -1626,7 +1626,10 @@ def _safe_external_url(value: object) -> str | None:
     value = value.strip()
     if not value or len(value) > 2_048:
         return None
-    parsed = urlsplit(value)
+    try:
+        parsed = urlsplit(value)
+    except ValueError:
+        return None
     if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.username or parsed.password:
         return None
     if any(_query_key_is_secret(match.group(2)) for match in _QUERY_PAIR_RE.finditer(f"?{parsed.query}")):

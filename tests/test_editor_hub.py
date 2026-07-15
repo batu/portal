@@ -157,3 +157,24 @@ def test_editor_hub_rejects_links_with_query_credentials(client, token, secret_k
     assert response.status_code == 200
     assert "do-not-handoff" not in response.text
     assert "editor-service-link" not in response.text
+
+
+def test_editor_hub_rejects_malformed_urls_without_losing_placeholders(client, token):
+    cfg = config.load_config()
+    cfg["editor_hub"] = [
+        {
+            "id": "marble-grapesjs",
+            "editor_url": "http://[",
+            "preview_url": "https://[broken",
+            "reference_links": [{"label": "Broken", "url": "http://["}],
+        }
+    ]
+    config.save_config(cfg)
+    client.cookies.set("gallery_token", token)
+
+    response = client.get("/editor-hub")
+
+    assert response.status_code == 200
+    assert "Marble GrapesJS Editor" in response.text
+    assert "Marble Phaser Editor" in response.text
+    assert response.text.count("Waiting for Fabrika links") == 2
