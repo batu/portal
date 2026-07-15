@@ -29,10 +29,13 @@
     {% endif %}
 
     <dl class="editor-details">
+      <div><dt>Editor revision</dt><dd><code title="{{ editor.editor_revision.value }}" aria-label="{{ editor.editor_revision.value }}">{{ editor.editor_revision.display }}</code></dd></div>
       <div>
         <dt>Revision Preview</dt>
         <dd>{% if editor.preview_url %}<a href="{{ editor.preview_url }}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">Open selected revision</a>{% else %}<span class="empty">Unavailable</span>{% endif %}</dd>
       </div>
+      <div><dt>Preview revision</dt><dd><code title="{{ editor.preview_revision.value }}" aria-label="{{ editor.preview_revision.value }}">{{ editor.preview_revision.display }}</code></dd></div>
+      <div><dt>Access</dt><dd>{{ editor.access }}</dd></div>
       <div><dt>Baseline</dt><dd>{{ editor.baseline }}</dd></div>
       <div><dt>Reset</dt><dd>{{ editor.reset }}</dd></div>
       <div>

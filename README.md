@@ -58,7 +58,8 @@ systemd user unit for a future Linux move lives at `deploy/gallery.service`
 `editor_hub` is optional. An empty, partial, or malformed value keeps the two
 disabled Marble Run placeholders. Configure entries by stable ID
 (`marble-grapesjs` or `marble-phaser`); each may provide `editor_url`,
-`preview_url`, `reference_links`, `evidence_links`, `baseline`, `reset`, and an
+`editor_revision`, `preview_url`, `preview_revision`, `access`,
+`reference_links`, `evidence_links`, `baseline`, `reset`, and an
 `apply_request`. Portal renders only absolute HTTP(S) links without credential
 query parameters; it does not proxy or validate the editor services.
 
@@ -283,6 +284,71 @@ or just a comment box).
 The authenticated `/editor-hub` page is the stable test index for the
 real-game editor experiment. Disabled entries mean Fabrika has not published a
 service URL yet; they are not broken links.
+
+### Marble editor service wiring
+
+Keep the editor processes local and reach them through an SSH loopback forward;
+do not publish ports `5203` or `19598`, and do not add `-public` to the Phaser
+Editor command. From the FabrikaV2 checkout that contains the saved Marble
+authority, launch Phaser Editor with the project plug-in directory explicitly:
+
+```bash
+FABRIKAV2=/Users/base/dev/appletolye/fabrikav2
+PHASER_PROJECT="$FABRIKAV2/games/marble_run/authoring/phaser-editor/project"
+
+/Applications/Phaser\ Editor\ 5.app/Contents/Resources/app/server/PhaserEditor \
+  -project "$PHASER_PROJECT" \
+  -plugins "$PHASER_PROJECT/plugins" \
+  -port 19598 \
+  -disable-open-browser \
+  -disable-check-for-updates
+```
+
+The `-plugins` argument is mandatory: without it Phaser Editor 5.0.2 cannot
+deserialize the Marble `MarbleCssBackdrop` scene object. The GrapesJS editor is
+currently expected on loopback port `5203`. Forward both ports in the same SSH
+session used to administer the Mac mini:
+
+```bash
+MAC_MINI_SSH_HOST=your-mac-mini-ssh-alias
+ssh -N \
+  -L 5203:127.0.0.1:5203 \
+  -L 19598:127.0.0.1:19598 \
+  "$MAC_MINI_SSH_HOST"
+```
+
+Then merge the following `editor_hub` field into `~/.gallery/config.json` with
+the saved publication revisions. Preserve every existing token, passphrase,
+host, port, URL, and notification field.
+Loopback links are intentionally operator-local: they work only after the SSH
+forward and must never be copied as public share links.
+
+```json
+{
+  "editor_hub": [
+    {
+      "id": "marble-grapesjs",
+      "status": "ready-local",
+      "editor_url": "http://127.0.0.1:5203/",
+      "editor_revision": "<current-grapes-publication-sha256>",
+      "preview_revision": "<current-grapes-publication-sha256>",
+      "access": "Requires the documented SSH loopback forward on port 5203."
+    },
+    {
+      "id": "marble-phaser",
+      "status": "ready-local",
+      "editor_url": "http://127.0.0.1:19598/editor/",
+      "editor_revision": "<current-phaser-publication-sha256>",
+      "preview_revision": "<current-phaser-publication-sha256>",
+      "access": "Requires the documented SSH loopback forward and a Phaser launch with -plugins project/plugins."
+    }
+  ]
+}
+```
+
+Add `preview_url` only when a revision-pinned Preview has a real operator-safe
+HTTP(S) endpoint. Do not reuse the editor URL as a Preview and do not place
+Portal tokens, editor credentials, or SSH secrets in any hub URL.
 
 ## Deployment and security boundary
 

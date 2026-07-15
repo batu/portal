@@ -87,6 +87,50 @@ def test_editor_hub_keeps_missing_marble_entry_as_a_placeholder(client, token):
     assert "https://editor.example/marble" in response.text
 
 
+def test_editor_hub_renders_configured_editor_and_preview_revisions_with_access_notes(client, token):
+    cfg = config.load_config()
+    cfg["editor_hub"] = [
+        {
+            "id": "marble-grapesjs",
+            "status": "ready-local",
+            "editor_url": "http://127.0.0.1:5203/",
+            "editor_revision": "sha256-grapes-editor",
+            "preview_url": "https://preview.example/grapes/sha256-grapes-preview",
+            "preview_revision": "sha256-grapes-preview",
+            "access": "Requires an SSH loopback forward; never publish the local URL.",
+        },
+        {
+            "id": "marble-phaser",
+            "status": "ready-local",
+            "editor_url": "http://127.0.0.1:19598/editor/",
+            "editor_revision": "sha256-phaser-editor",
+            "preview_url": "https://preview.example/phaser/sha256-phaser-preview",
+            "preview_revision": "sha256-phaser-preview",
+            "access": "Launch with the project plug-in directory <required>.",
+        },
+    ]
+    config.save_config(cfg)
+    client.cookies.set("gallery_token", token)
+
+    response = client.get("/editor-hub")
+
+    assert response.status_code == 200
+    for revision in [
+        "sha256-grapes-editor",
+        "sha256-grapes-preview",
+        "sha256-phaser-editor",
+        "sha256-phaser-preview",
+    ]:
+        assert revision in response.text
+    assert response.text.count("Editor revision") == 2
+    assert response.text.count("Preview revision") == 2
+    assert response.text.count("Access") == 2
+    assert "http://127.0.0.1:5203/" in response.text
+    assert "http://127.0.0.1:19598/editor/" in response.text
+    assert "Launch with the project plug-in directory &lt;required&gt;." in response.text
+    assert "Launch with the project plug-in directory <required>." not in response.text
+
+
 def test_editor_hub_sanitizes_and_hardens_external_links(client, token):
     cfg = config.load_config()
     cfg["editor_hub"] = [

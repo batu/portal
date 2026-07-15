@@ -113,6 +113,8 @@ h2 { font-size: 1.05rem; }
 
 .editor-details { margin: 0; }
 
+.editor-details code { overflow-wrap: anywhere; }
+
 .editor-details > div {
   padding: 10px 0;
   border-top: 1px solid var(--border);
@@ -400,6 +402,11 @@ h2 { font-size: 1.05rem; }
 }
 
 .status-badge.decided {
+  background: #16301e;
+  color: #71d083;
+}
+
+.status-badge.ready-local {
   background: #16301e;
   color: #71d083;
 }
@@ -705,6 +712,7 @@ h2 { font-size: 1.05rem; }
   .decision-link { background: #f7f8fa; }
   .status-badge.pending { background: #fff3cf; color: #7a4c00; }
   .status-badge.decided { background: #eafaf0; color: #1f7a3a; }
+  .status-badge.ready-local { background: #eafaf0; color: #1f7a3a; }
   .stream-message.is-consumed { background: #f7f8fa; }
   .stream-message.needs-answer { border-color: #7aa7ff; }
   .message-status.is-error { color: #a32424; }

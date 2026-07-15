@@ -1657,6 +1657,12 @@ def _editor_link_list(value: object) -> list[dict]:
     return links
 
 
+def _revision_context(value: object) -> dict[str, str]:
+    revision = _bounded_display_text(value, "Not published yet", 160)
+    display = revision if len(revision) <= 36 else f"{revision[:19]}…{revision[-8:]}"
+    return {"value": revision, "display": display}
+
+
 def _editor_hub_entries() -> list[dict]:
     configured = config.load_config().get("editor_hub")
     configured_entries = {
@@ -1670,13 +1676,18 @@ def _editor_hub_entries() -> list[dict]:
         apply_request = item.get("apply_request")
         if not isinstance(apply_request, dict):
             apply_request = {}
+        editor_revision = _revision_context(item.get("editor_revision"))
+        preview_revision = _revision_context(item.get("preview_revision"))
         entries.append(
             {
                 "id": _bounded_display_text(item.get("id"), f"editor-{index + 1}", 80),
                 "name": _bounded_display_text(item.get("name"), f"Editor {index + 1}"),
                 "status": _bounded_display_text(item.get("status"), "waiting", 40),
                 "editor_url": _safe_external_url(item.get("editor_url")),
+                "editor_revision": editor_revision,
                 "preview_url": _safe_external_url(item.get("preview_url")),
+                "preview_revision": preview_revision,
+                "access": _bounded_display_text(item.get("access"), "Not configured", 1_000),
                 "reference_links": _editor_link_list(item.get("reference_links")),
                 "evidence_links": _editor_link_list(item.get("evidence_links")),
                 "baseline": _bounded_display_text(item.get("baseline"), "Not published yet", 1_000),
