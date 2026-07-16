@@ -49,6 +49,13 @@ main {
   margin: 0 auto;
 }
 
+/* Request pages: wide layout with slim side padding so variant rows
+   (e.g. 5 cards) fit side by side at full card size. */
+main.wide {
+  max-width: 1280px;
+  padding: 16px 8px;
+}
+
 h1 { font-size: 1.3rem; margin: 0 0 8px; }
 h2 { font-size: 1.05rem; }
 
@@ -490,11 +497,151 @@ h2 { font-size: 1.05rem; }
   object-fit: contain;
 }
 
+.chain-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 12px 0 4px;
+}
+
+.chain-tab {
+  display: inline-block;
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px 8px 0 0;
+  background: var(--card);
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.chain-tab.active {
+  color: var(--fg);
+  border-color: var(--accent);
+  background: var(--bg);
+}
+
+.chain-tab.decided { color: var(--ok); }
+
+.chain-hint {
+  color: var(--muted);
+  font-size: 0.8rem;
+  margin-bottom: 12px;
+}
+
+.feedback-note {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  background: var(--card);
+  padding: 10px 14px;
+  margin: 12px 0;
+}
+
+.cols-control {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.cols-control button {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  padding: 2px 9px;
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+
+.cols-control button.active {
+  color: var(--fg);
+  border-color: var(--accent);
+}
+
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgba(10, 11, 14, 0.92);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+.lightbox figure {
+  margin: 0;
+  max-width: calc(100vw - 120px);
+  max-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.lightbox img {
+  max-width: 100%;
+  max-height: calc(100vh - 70px);
+  object-fit: contain;
+  border-radius: 8px;
+}
+
+.lightbox figcaption {
+  color: #d5d9e0;
+  font-size: 0.9rem;
+  padding: 10px 16px;
+  text-align: center;
+}
+
+.lightbox-nav {
+  background: rgba(255, 255, 255, 0.08);
+  border: none;
+  color: #fff;
+  font-size: 2.2rem;
+  line-height: 1;
+  border-radius: 10px;
+  padding: 18px 14px;
+  cursor: pointer;
+}
+
+.lightbox-nav:hover { background: rgba(255, 255, 255, 0.18); }
+
+.lightbox-close {
+  position: absolute;
+  top: 14px;
+  right: 16px;
+  background: none;
+  border: none;
+  color: #fff;
+  font-size: 2rem;
+  cursor: pointer;
+}
+
+.feedback-note-label {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
 .variant-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   gap: 10px;
   margin: 16px 0;
+}
+
+/* Wide screens: cap at 5 cards per row so large sets wrap into even rows
+   (e.g. 10 variants -> 2 rows of 5) instead of squeezing into one line. */
+@media (min-width: 900px) {
+  .variant-grid {
+    grid-template-columns: repeat(var(--variant-cols, 5), 1fr);
+  }
 }
 
 .variant {
@@ -520,6 +667,7 @@ h2 { font-size: 1.05rem; }
 .variant-footer {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   padding: 8px 10px;
   font-size: 0.85rem;
@@ -546,9 +694,9 @@ h2 { font-size: 1.05rem; }
 
 .variant-caption {
   color: var(--muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  flex-basis: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .decision-panel {
@@ -867,3 +1015,36 @@ h2 { font-size: 1.05rem; }
   .journey-chip.superseded,
   .journey-chip.unknown { background: #eef0f3; color: #55606f; }
 }
+
+.lightbox-full {
+  position: absolute;
+  top: 14px;
+  right: 64px;
+  width: 40px;
+  height: 40px;
+  border: 0;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.10);
+  color: #fff;
+  font-size: 20px;
+  cursor: pointer;
+}
+.lightbox-full:hover { background: rgba(255, 255, 255, 0.18); }
+/* Full-page mode: media only, edge to edge, black stage (final-game look). */
+.lightbox--full figure,
+.lightbox figure:fullscreen {
+  margin: 0;
+  background: #000;
+  display: grid;
+  place-items: center;
+}
+.lightbox--full img,
+.lightbox figure:fullscreen img {
+  width: 100vw;
+  height: 100vh;
+  object-fit: contain;
+  max-width: none;
+  max-height: none;
+}
+.lightbox--full figcaption,
+.lightbox figure:fullscreen figcaption { display: none; }

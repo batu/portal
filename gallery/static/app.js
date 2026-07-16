@@ -331,3 +331,129 @@
     });
   });
 })();
+
+// ── Variant grid extras: per-row control + lightbox viewer ──────────────
+(function () {
+  var section = document.querySelector(".request-detail");
+  if (!section) return;
+  var grid = section.querySelector(".variant-grid");
+  if (!grid) return;
+
+  // Per-row control (persisted). "auto" falls back to the server default.
+  var COLS_KEY = "portal.variantCols";
+  var control = document.createElement("div");
+  control.className = "cols-control";
+  control.appendChild(document.createTextNode("per row:"));
+  ["3", "4", "5", "6", "auto"].forEach(function (opt) {
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = opt;
+    btn.dataset.cols = opt;
+    control.appendChild(btn);
+  });
+  grid.parentNode.insertBefore(control, grid);
+  function applyCols(value) {
+    if (value && value !== "auto") grid.style.setProperty("--variant-cols", value);
+    else grid.style.removeProperty("--variant-cols");
+    control.querySelectorAll("button").forEach(function (b) {
+      b.classList.toggle("active", b.dataset.cols === (value || "auto"));
+    });
+  }
+  applyCols(localStorage.getItem(COLS_KEY));
+  control.addEventListener("click", function (e) {
+    var btn = e.target.closest("button");
+    if (!btn) return;
+    localStorage.setItem(COLS_KEY, btn.dataset.cols);
+    applyCols(btn.dataset.cols);
+  });
+
+  // Lightbox: click an image to view large; arrows / swipe keys navigate.
+  // One reusable overlay; neighbor images are preloaded so navigation is
+  // instant and nothing re-renders the page behind it.
+  var items = [];
+  section.querySelectorAll(".variant").forEach(function (el) {
+    var img = el.querySelector(".variant-media img");
+    if (!img) return;
+    var link = el.querySelector(".variant-media a");
+    var caption = el.querySelector(".variant-caption");
+    items.push({
+      url: link ? link.href : img.src,
+      idx: el.dataset.idx,
+      caption: caption ? caption.textContent : "",
+      anchor: link || img,
+    });
+  });
+  if (items.length === 0) return;
+
+  var overlay = document.createElement("div");
+  overlay.className = "lightbox";
+  overlay.hidden = true;
+  overlay.innerHTML =
+    '<button type="button" class="lightbox-nav prev" aria-label="Previous">&#8249;</button>' +
+    '<figure><img alt=""><figcaption></figcaption></figure>' +
+    '<button type="button" class="lightbox-nav next" aria-label="Next">&#8250;</button>' +
+    '<button type="button" class="lightbox-full" aria-label="Full screen">&#x26F6;</button>' +
+    '<button type="button" class="lightbox-close" aria-label="Close">&times;</button>';
+  document.body.appendChild(overlay);
+  var lbImg = overlay.querySelector("img");
+  var lbCaption = overlay.querySelector("figcaption");
+  var current = 0;
+
+  function preload(i) {
+    if (i < 0 || i >= items.length) return;
+    var im = new Image();
+    im.src = items[i].url;
+  }
+  function show(i) {
+    current = (i + items.length) % items.length;
+    lbImg.src = items[current].url;
+    lbCaption.textContent = items[current].caption || "#" + items[current].idx;
+    overlay.hidden = false;
+    document.body.style.overflow = "hidden";
+    preload(current + 1);
+    preload(current - 1);
+  }
+  function close() {
+    overlay.hidden = true;
+    document.body.style.overflow = "";
+  }
+  items.forEach(function (item, i) {
+    item.anchor.addEventListener("click", function (e) {
+      e.preventDefault();
+      e.stopPropagation(); // do not toggle selection when opening the viewer
+      show(i);
+    });
+  });
+  overlay.querySelector(".prev").addEventListener("click", function () { show(current - 1); });
+  overlay.querySelector(".next").addEventListener("click", function () { show(current + 1); });
+  overlay.querySelector(".lightbox-close").addEventListener("click", close);
+  // Full-page mode: the media alone, edge to edge — as close to the final
+  // in-game look as the browser allows (native Fullscreen API on the figure,
+  // CSS fallback class otherwise).
+  overlay.querySelector(".lightbox-full").addEventListener("click", function () {
+    var fig = overlay.querySelector("figure");
+    if (document.fullscreenElement) {
+      document.exitFullscreen();
+    } else if (fig.requestFullscreen) {
+      overlay.classList.add("lightbox--full");
+      fig.requestFullscreen().catch(function () {});
+    } else if (fig.webkitRequestFullscreen) {
+      overlay.classList.add("lightbox--full");
+      fig.webkitRequestFullscreen();
+    } else {
+      overlay.classList.toggle("lightbox--full");
+    }
+  });
+  document.addEventListener("fullscreenchange", function () {
+    if (!document.fullscreenElement) overlay.classList.remove("lightbox--full");
+  });
+  overlay.addEventListener("click", function (e) {
+    if (e.target === overlay) close();
+  });
+  document.addEventListener("keydown", function (e) {
+    if (overlay.hidden) return;
+    if (e.key === "ArrowLeft") show(current - 1);
+    else if (e.key === "ArrowRight") show(current + 1);
+    else if (e.key === "Escape") close();
+  });
+})();
