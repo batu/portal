@@ -1043,11 +1043,24 @@ def _apply_verdict(req_id: str, body: dict) -> dict:
             raise HTTPException(status_code=400, detail=f"selected indices not found on this request: {bad}")
 
     try:
-        return db.record_verdict(req_id, selected, ratings, comment, payload=payload)
+        result = db.record_verdict(req_id, selected, ratings, comment, payload=payload)
     except ValueError as exc:
         detail = str(exc)
         status = 409 if isinstance(exc, db.RequestTerminalError) or "closed" in detail else 400
         raise HTTPException(status_code=status, detail=detail) from exc
+    # Push the verdict back to the posting agent (todos/cards/007): configured
+    # hook fires in a background thread; a decide never waits on or fails from it.
+    try:
+        server_cfg = config.load_config()
+        chain_url = f"{server_cfg.get('url', '')}/c/{req_id}"
+        threading.Thread(
+            target=notify.run_verdict_hook,
+            args=(server_cfg, r, result.get("verdict") or {"selected": selected, "comment": comment}, chain_url),
+            daemon=True,
+        ).start()
+    except Exception as exc:  # noqa: BLE001 - notification startup must never fail a decide
+        log.warning("verdict notify hook failed to start: %s", exc)
+    return result
 
 
 @app.post("/api/requests/{req_id}/verdict")

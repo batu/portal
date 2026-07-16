@@ -7,6 +7,8 @@ callers fire this in a background thread and any error is just logged.
 
 import json
 import logging
+import os
+import subprocess
 import urllib.request
 
 log = logging.getLogger("gallery.notify")
@@ -40,3 +42,32 @@ def send_text(cfg: dict, text: str) -> None:
 def send_doorbell(cfg: dict, title: str, variant_count: int, url_with_token: str) -> None:
     text = f"\U0001f5bc {title} ({variant_count} variants) — {url_with_token}"
     send_text(cfg, text)
+
+
+def run_verdict_hook(cfg: dict, request: dict, verdict: dict, chain_url: str) -> None:
+    """Fire the configured verdict_notify_command so the posting agent learns a
+    decision landed without polling. Fire-and-forget: detached process, env-var
+    payload, any error only logged — a decide must never block or fail on this."""
+    command = cfg.get("verdict_notify_command")
+    if not command:
+        return
+    env = {
+        **os.environ,
+        "PORTAL_REQ_ID": str(request.get("id", "")),
+        "PORTAL_REQ_TITLE": str(request.get("title", "")),
+        "PORTAL_REQ_KIND": str(request.get("kind", "")),
+        "PORTAL_VERDICT_SELECTED": json.dumps(verdict.get("selected", [])),
+        "PORTAL_VERDICT_COMMENT": str(verdict.get("comment") or ""),
+        "PORTAL_CHAIN_URL": chain_url,
+    }
+    try:
+        subprocess.Popen(
+            command,
+            shell=True,
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except Exception as exc:  # noqa: BLE001 - notification must never break the decide
+        log.warning("verdict notify hook failed to launch: %s", exc)

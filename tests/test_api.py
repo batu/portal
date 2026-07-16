@@ -751,3 +751,51 @@ def test_colliding_stored_names_do_not_overwrite(client, token):
     # Each stored file resolves to its own uploaded bytes.
     assert client.get(f"/media/{req_id}/{names[0]}", params={"token": token}).content == b"AAAA"
     assert client.get(f"/media/{req_id}/{names[1]}", params={"token": token}).content == b"BBBB"
+
+
+def test_verdict_fires_notify_hook(client, data_dir, tmp_path):
+    """A recorded verdict launches the configured verdict_notify_command with
+    the request/verdict payload in env vars — and a decide never fails on it."""
+    import json as json_lib
+    import time
+
+    token = config.load_config()["token"]
+    out = tmp_path / "hook-out.txt"
+    cfg = config.load_config()
+    cfg["verdict_notify_command"] = (
+        f'printf "%s|%s|%s" "$PORTAL_REQ_ID" "$PORTAL_VERDICT_SELECTED" "$PORTAL_CHAIN_URL" > {out}'
+    )
+    config.save_config(cfg)
+
+    req_id = _create_request(client, token, kind="pick-one", n=2, title="hooked")
+    resp = client.post(
+        f"/api/requests/{req_id}/verdict",
+        json={"selected": [2], "comment": "pick the second"},
+        headers=auth_headers(token),
+    )
+    assert resp.status_code == 200
+
+    for _ in range(50):
+        if out.exists() and out.read_text():
+            break
+        time.sleep(0.05)
+    assert out.exists(), "verdict notify hook did not run"
+    got_id, got_selected, got_chain = out.read_text().split("|")
+    assert got_id == req_id
+    assert json_lib.loads(got_selected) == [2]
+    assert got_chain.endswith(f"/c/{req_id}")
+
+
+def test_verdict_succeeds_when_notify_hook_is_broken(client, data_dir):
+    token = config.load_config()["token"]
+    cfg = config.load_config()
+    cfg["verdict_notify_command"] = "/nonexistent-binary-hopefully"
+    config.save_config(cfg)
+
+    req_id = _create_request(client, token, kind="pick-one", n=1, title="hook-broken")
+    resp = client.post(
+        f"/api/requests/{req_id}/verdict",
+        json={"selected": [1]},
+        headers=auth_headers(token),
+    )
+    assert resp.status_code == 200
