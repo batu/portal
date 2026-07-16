@@ -24,6 +24,34 @@
 </div>
 <div class="chain-hint">Permanent link — a plain refresh always opens the latest version.</div>
 
+{% if prev %}
+{% macro compare_media(req, v) -%}
+  {% if v.media_type == "video" %}
+  <video controls playsinline preload="none" src="/media/{{ req.id }}/{{ v.media_path }}?token={{ request.query_params.get('token', '') }}"></video>
+  {% elif v.loop_mp4 %}
+  <video autoplay muted loop playsinline preload="metadata" src="/media/{{ req.id }}/{{ v.loop_mp4 }}?token={{ request.query_params.get('token', '') }}"></video>
+  {% else %}
+  <img loading="lazy" src="/media/{{ req.id }}/{{ v.media_path }}?token={{ request.query_params.get('token', '') }}" alt="">
+  {% endif %}
+{%- endmacro %}
+<button type="button" class="btn chain-compare-toggle" data-compare-toggle aria-expanded="false">
+  Compare with v{{ chain_idx - 1 }}
+</button>
+<div class="chain-compare" id="chain-compare" hidden>
+  <div class="chain-compare-head"><span>v{{ chain_idx - 1 }} (previous)</span><span>v{{ chain_idx }} (this version)</span></div>
+  {% for v in r.variants %}
+  <div class="chain-compare-row">
+    <div class="chain-compare-cell">
+      {% set pv = prev.variants[loop.index0] if loop.index0 < prev.variants|length else None %}
+      {% if pv %}{{ compare_media(prev, pv) }}{% else %}<div class="chain-compare-missing">no counterpart</div>{% endif %}
+    </div>
+    <div class="chain-compare-cell">{{ compare_media(r, v) }}</div>
+  </div>
+  {% if v.caption %}<div class="chain-compare-caption">{{ v.caption }}</div>{% endif %}
+  {% endfor %}
+</div>
+{% endif %}
+
 {% set back = None %}
 {% include "_request_body.html" %}
 {% endblock %}

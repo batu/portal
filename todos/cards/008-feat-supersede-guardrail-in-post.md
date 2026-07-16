@@ -1,6 +1,7 @@
 # feat: warn when posting into a stream with a live predecessor and no --supersedes
 
 Source: 2026-07-16 iteration loop — chain nearly mislinked twice before the one-shot flag.
+Status: Implemented 2026-07-17.
 
 ## Problem
 

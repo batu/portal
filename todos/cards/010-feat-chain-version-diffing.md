@@ -1,6 +1,7 @@
 # feat: compare-with-previous toggle in the chain view
 
 Source: 2026-07-16 iteration loop — most feedback was comparative across versions.
+Status: Implemented 2026-07-17.
 
 ## Problem
 

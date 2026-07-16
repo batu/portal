@@ -154,14 +154,33 @@ def cmd_post(args):
         _exit_client_error(exc)
 
     if args.supersedes:
+        feedback = args.feedback
+        if not feedback:
+            # The decide-comment on the predecessor is usually the exact
+            # critique that prompted this version — carry it into the chain.
+            try:
+                old = client.get_request(base_url, token, args.supersedes)
+                comment = (old.get("verdict") or {}).get("comment")
+                if comment:
+                    feedback = comment
+                    print(f"using predecessor's verdict comment as --feedback: {comment!r}", file=sys.stderr)
+            except client.GalleryClientError:
+                pass
         # One-shot iteration step: retire the old version and carry the human
         # feedback onto it, so the /c/ chain view stays the whole story.
         try:
-            client.supersede_request(base_url, token, args.supersedes, result["id"], feedback=args.feedback)
+            client.supersede_request(base_url, token, args.supersedes, result["id"], feedback=feedback)
         except client.GalleryClientError as exc:
             print(f"posted {result['id']} but failed to supersede {args.supersedes}: {exc}", file=sys.stderr)
             sys.exit(1)
         result["supersedes"] = args.supersedes
+    elif result.get("open_in_stream"):
+        newest = result["open_in_stream"][0]
+        print(
+            f"warning: stream already has a live request {newest['id']} ({newest['title']!r}) — "
+            f"if this post replaces it, chain them: portal supersede {newest['id']} --successor {result['id']} --feedback \"...\"",
+            file=sys.stderr,
+        )
 
     result["chain_url"] = f"{base_url}/c/{result['id']}"
     print(json.dumps(result))

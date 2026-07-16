@@ -99,6 +99,11 @@ def close_request(base_url: str, token: str, req_id: str, reason: str) -> dict:
     return post_json(base_url, token, f"/api/requests/{req_id}/close", {"reason": reason})
 
 
+def get_request(base_url: str, token: str, req_id: str) -> dict:
+    req_id = urllib.parse.quote(req_id, safe="")
+    return get_json(base_url, token, f"/api/requests/{req_id}")
+
+
 def set_request_feedback(base_url: str, token: str, req_id: str, feedback: str) -> dict:
     return post_json(base_url, token, f"/api/requests/{req_id}/feedback", {"feedback": feedback})
 

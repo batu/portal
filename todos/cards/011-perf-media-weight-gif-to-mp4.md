@@ -1,6 +1,7 @@
 # perf: auto-transcode GIFs to looping MP4 + lazy-load variant media
 
 Source: 2026-07-16 iteration loop — 22 versions x ~4MB GIFs per card.
+Status: Implemented 2026-07-17.
 
 ## Problem
 

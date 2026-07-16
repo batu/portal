@@ -455,3 +455,23 @@
     else if (e.key === "Escape") close();
   });
 })();
+
+// ── Chain view: compare-with-previous toggle ─────────────────────────────
+(function () {
+  var toggle = document.querySelector("[data-compare-toggle]");
+  var panel = document.getElementById("chain-compare");
+  if (!toggle || !panel) return;
+  toggle.addEventListener("click", function () {
+    var open = panel.hidden;
+    panel.hidden = !open;
+    toggle.setAttribute("aria-expanded", String(open));
+  });
+})();
+
+// ── Chain tabs: keep the active version visible in the scrollable strip ──
+(function () {
+  var active = document.querySelector(".chain-tab.active");
+  if (active && active.scrollIntoView) {
+    active.scrollIntoView({ inline: "center", block: "nearest" });
+  }
+})();

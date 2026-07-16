@@ -799,3 +799,79 @@ def test_verdict_succeeds_when_notify_hook_is_broken(client, data_dir):
         headers=auth_headers(token),
     )
     assert resp.status_code == 200
+
+
+def test_post_into_stream_with_live_sibling_reports_open_in_stream(client, data_dir):
+    token = config.load_config()["token"]
+    first = client.post(
+        "/api/requests",
+        data={"title": "v1", "kind": "pick-one", "stream": "loop-a"},
+        files=_upload_files(1),
+        headers=auth_headers(token),
+    ).json()
+    second = client.post(
+        "/api/requests",
+        data={"title": "v2", "kind": "pick-one", "stream": "loop-a"},
+        files=_upload_files(1),
+        headers=auth_headers(token),
+    ).json()
+    assert [s["id"] for s in second["open_in_stream"]] == [first["id"]]
+    # no explicit stream -> no guardrail payload
+    plain = client.post(
+        "/api/requests",
+        data={"title": "solo", "kind": "pick-one"},
+        files=_upload_files(1),
+        headers=auth_headers(token),
+    ).json()
+    assert "open_in_stream" not in plain
+
+
+def test_static_url_is_content_hashed_and_stable(data_dir):
+    first = server.static_url("style.css")
+    assert first.startswith("/static/style.css?v=")
+    assert len(first.split("v=")[1]) == 8
+    assert server.static_url("style.css") == first
+    assert server.static_url("does-not-exist.css") == "/static/does-not-exist.css"
+
+
+def test_pages_use_hashed_static_urls(client, data_dir):
+    token = config.load_config()["token"]
+    page = client.get(f"/?token={token}")
+    assert "style.css?v=" in page.text and "style.css?v=5" not in page.text
+
+
+def test_gif_upload_gets_loop_mp4_sibling_and_template_uses_it(client, data_dir, tmp_path, monkeypatch):
+    """GIF variants gain a .loop.mp4 sibling (background transcode) and pages
+    render the loop video instead of the GIF once it exists."""
+    import shutil as shutil_mod
+    import time
+
+    token = config.load_config()["token"]
+    if shutil_mod.which("ffmpeg") is None:
+        pytest.skip("ffmpeg not available")
+    # a tiny 2-frame gif via PIL is unavailable; use ffmpeg itself to make one
+    import subprocess as sp
+    gif_path = tmp_path / "tiny.gif"
+    sp.run(
+        ["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=red:s=16x16:d=0.2", str(gif_path)],
+        check=True,
+    )
+    resp = client.post(
+        "/api/requests",
+        data={"title": "gif-loop", "kind": "pick-one"},
+        files=[("files", ("anim.gif", gif_path.read_bytes(), "image/gif"))],
+        headers=auth_headers(token),
+    )
+    assert resp.status_code == 200
+    req_id = resp.json()["id"]
+
+    media_dir = config.media_dir() / req_id
+    for _ in range(100):
+        if list(media_dir.glob("*.loop.mp4")):
+            break
+        time.sleep(0.1)
+    assert list(media_dir.glob("*.loop.mp4")), "loop mp4 sibling was not created"
+
+    page = client.get(f"/r/{req_id}?token={token}")
+    assert "variant-loop" in page.text
+    assert ".loop.mp4" in page.text

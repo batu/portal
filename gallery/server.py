@@ -1,6 +1,7 @@
 """Gallery FastAPI app: JSON API + server-rendered web UI + media serving."""
 
 import asyncio
+import hashlib
 import html as html_lib
 import json
 import logging
@@ -10,6 +11,7 @@ import re
 import secrets
 import shutil
 import sqlite3
+import subprocess
 import threading
 from datetime import datetime, timezone
 from html.parser import HTMLParser
@@ -184,6 +186,29 @@ _here = Path(__file__).parent
 app.mount("/static", StaticFiles(directory=str(_here / "static")), name="static")
 templates = Jinja2Templates(directory=str(_here / "templates"))
 
+_static_version_cache: dict[str, tuple[float, str]] = {}
+
+
+def static_url(name: str) -> str:
+    """Content-hashed static asset URL — replaces hand-bumped ?v=N versions.
+
+    Hash is keyed on file mtime, so an edited file busts browser caches on the
+    next page render with no code change. Missing files fall back to a bare
+    URL rather than erroring a page render."""
+    path = _here / "static" / name
+    try:
+        mtime = path.stat().st_mtime
+        cached = _static_version_cache.get(name)
+        if cached is None or cached[0] != mtime:
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()[:8]
+            _static_version_cache[name] = (mtime, digest)
+        return f"/static/{name}?v={_static_version_cache[name][1]}"
+    except OSError:
+        return f"/static/{name}"
+
+
+templates.env.globals["static_url"] = static_url
+
 COOKIE_NAME = "gallery_token"
 
 
@@ -282,6 +307,45 @@ async def web_login_submit(request: Request, password: str = Form(""), next: str
 @app.get("/api/health")
 def health():
     return {"status": "ok", "open_count": db.open_count()}
+
+
+def _transcode_gifs_to_loop_mp4(dest_dir: Path, media_paths: list[str]) -> None:
+    """Best-effort GIF -> muted looping MP4 siblings (<name>.loop.mp4), ~10x
+    smaller than the GIF. Runs in a background thread after the request is
+    created; pages fall back to the GIF until the sibling exists."""
+    for name in media_paths:
+        if not name.lower().endswith(".gif"):
+            continue
+        src = dest_dir / name
+        out = dest_dir / f"{name}.loop.mp4"
+        if not src.is_file() or out.exists():
+            continue
+        try:
+            subprocess.run(
+                [
+                    "ffmpeg", "-y", "-loglevel", "error", "-i", str(src),
+                    "-movflags", "+faststart", "-pix_fmt", "yuv420p",
+                    "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+                    "-an", str(out),
+                ],
+                check=True,
+                timeout=120,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception as exc:  # noqa: BLE001 - transcode is an optimization, never a failure
+            log.warning("gif->mp4 transcode failed for %s: %s", name, exc)
+            out.unlink(missing_ok=True)
+
+
+def _augment_variant_loops(r: dict) -> None:
+    """Annotate image/gif variants whose loop MP4 sibling exists, so templates
+    can render a <video> loop instead of the heavy GIF."""
+    media_root = config.media_dir() / r["id"]
+    for v in r.get("variants", []):
+        if v.get("media_type") == "image" and str(v.get("media_path", "")).lower().endswith(".gif"):
+            if (media_root / f"{v['media_path']}.loop.mp4").is_file():
+                v["loop_mp4"] = f"{v['media_path']}.loop.mp4"
 
 
 # --- JSON API ---
@@ -766,6 +830,14 @@ async def create_request(
                 stream=stream,
                 author=author,
             )
+            try:
+                threading.Thread(
+                    target=_transcode_gifs_to_loop_mp4,
+                    args=(dest_dir, [v["media_path"] for v in variants]),
+                    daemon=True,
+                ).start()
+            except Exception as exc:  # noqa: BLE001 - transcode startup must never fail request creation
+                log.warning("gif transcode thread failed to start: %s", exc)
             break
         except ValueError as exc:
             shutil.rmtree(dest_dir, ignore_errors=True)
@@ -792,7 +864,14 @@ async def create_request(
     except Exception as exc:  # noqa: BLE001 - notification startup must never fail request creation
         log.warning("request notification failed to start: %s", exc)
 
-    return {"id": req_id, "url": f"{server_cfg['url']}/r/{req_id}", "variant_count": len(variants)}
+    result = {"id": req_id, "url": f"{server_cfg['url']}/r/{req_id}", "variant_count": len(variants)}
+    if stream:
+        created = db.get_request(req_id)
+        if created and created.get("stream_id"):
+            siblings = db.open_requests_in_stream(created["stream_id"], exclude_id=req_id)
+            if siblings:
+                result["open_in_stream"] = siblings
+    return result
 
 
 @app.get("/api/requests")
@@ -1665,6 +1744,7 @@ def web_request_detail(request: Request, req_id: str):
         if stream is not None:
             back = {"href": f"/s/{quote(stream['slug'], safe='')}", "label": stream["title"] or stream["slug"]}
 
+    _augment_variant_loops(r)
     response = templates.TemplateResponse(
         request,
         "request.html",
@@ -1831,13 +1911,23 @@ def web_request_chain(request: Request, req_id: str):
         if stream is not None:
             back = {"href": f"/s/{quote(stream['slug'], safe='')}", "label": stream["title"] or stream["slug"]}
 
+    _augment_variant_loops(r)
+    prev = chain[chain_idx - 2] if chain_idx > 1 else None
+    if prev is not None:
+        _augment_variant_loops(prev)
     response = templates.TemplateResponse(
         request,
         "chain.html",
         {
             "r": r,
+            "prev": prev,
             "chain": chain,
             "chain_idx": chain_idx,
+            "view_entry_url": (
+                _media_url(r["id"], _view_entry_media_path(r))
+                if _view_entry_media_path(r)
+                else None
+            ),
             "context_html": context_html,
             "stream_read_only": _request_stream_closed(r),
             "before_media": _before_media_context(r),

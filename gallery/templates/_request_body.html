@@ -103,7 +103,11 @@
   {% endif %}
 
   {% if r.kind == "view" %}
+  {% if view_entry_url %}
+  <a class="view-entry-launch" href="{{ view_entry_url }}">Open interactive view →</a>
+  {% else %}
   <div class="archive-note">This view request has no HTML entry file.</div>
+  {% endif %}
   {% else %}
   <div class="variant-grid" style="--variant-cols: {{ [r.variants|length, 5]|min }}"{% if before_media %} data-candidate-grid{% endif %}>
     {% for v in r.variants %}
@@ -111,6 +115,12 @@
       <div class="variant-media">
         {% if v.media_type == "video" %}
         <video controls playsinline preload="metadata" src="/media/{{ r.id }}/{{ v.media_path }}?token={{ request.query_params.get('token', '') }}"></video>
+        {% elif v.loop_mp4 %}
+        {# GIF with a transcoded loop sibling: ~10x lighter, same motion. The
+           anchor keeps the original GIF reachable for the lightbox. #}
+        <a href="/media/{{ r.id }}/{{ v.media_path }}?token={{ request.query_params.get('token', '') }}" target="_blank" rel="noopener">
+          <video class="variant-loop" autoplay muted loop playsinline preload="metadata" src="/media/{{ r.id }}/{{ v.loop_mp4 }}?token={{ request.query_params.get('token', '') }}"></video>
+        </a>
         {% else %}
         <a href="/media/{{ r.id }}/{{ v.media_path }}?token={{ request.query_params.get('token', '') }}" target="_blank" rel="noopener">
           <img loading="lazy" src="/media/{{ r.id }}/{{ v.media_path }}?token={{ request.query_params.get('token', '') }}" alt="variant {{ v.idx }}">

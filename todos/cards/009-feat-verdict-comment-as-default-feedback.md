@@ -1,6 +1,7 @@
 # feat: offer the predecessor's verdict comment as default --feedback
 
 Source: 2026-07-16 iteration loop — human critiques were retyped by the agent into --feedback.
+Status: Implemented 2026-07-17.
 
 ## Problem
 

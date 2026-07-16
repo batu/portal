@@ -881,10 +881,17 @@ def list_requests(status: str | None = None, project: str | None = None, q: str 
                 request_ids,
             ).fetchall()
             variant_counts = {r["request_id"]: r["variant_count"] for r in count_rows}
+            thumb_rows = conn.execute(
+                "SELECT request_id, MIN(idx) AS idx FROM variants "
+                f"WHERE request_id IN ({placeholders}) AND media_type = 'image' GROUP BY request_id",
+                request_ids,
+            ).fetchall()
+            has_thumb = {r["request_id"] for r in thumb_rows}
         out = []
         for r in rows:
             d = dict(r)
             d["variant_count"] = variant_counts.get(d["id"], 0)
+            d["has_image"] = d["id"] in has_thumb
             out.append(d)
         return out
 
@@ -972,6 +979,20 @@ def record_verdict(
         )
         conn.commit()
     return get_latest_verdict(req_id)
+
+
+def open_requests_in_stream(stream_id: str, exclude_id: str | None = None) -> list[dict]:
+    """Open requests in a stream, newest first — the chain-guardrail signal
+    for `portal post` (a live sibling usually means a missing --supersedes)."""
+    conn = connect()
+    with _lock:
+        rows = conn.execute(
+            "SELECT id, title, created_at FROM requests "
+            "WHERE stream_id = ? AND status = 'open' AND id != COALESCE(?, '') "
+            "ORDER BY created_at DESC LIMIT 5",
+            (stream_id, exclude_id),
+        ).fetchall()
+        return [dict(row) for row in rows]
 
 
 def open_count() -> int:

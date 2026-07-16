@@ -1071,3 +1071,126 @@ h2 { font-size: 1.05rem; }
   width: auto;
   border-radius: 0;
 }
+
+.variant-loop {
+  width: 100%;
+  height: auto;
+  display: block;
+  pointer-events: none; /* clicks go to the wrapping anchor -> lightbox */
+}
+
+.chain-compare-toggle {
+  margin: 0 0 10px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--fg);
+  padding: 8px 14px;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.chain-compare-toggle[aria-expanded="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.chain-compare {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  margin-bottom: 14px;
+  background: var(--card);
+}
+
+.chain-compare-head {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  font-weight: 700;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+
+.chain-compare-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+
+.chain-compare-cell img,
+.chain-compare-cell video {
+  width: 100%;
+  height: auto;
+  display: block;
+  border-radius: 6px;
+}
+
+.chain-compare-missing {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 80px;
+  color: var(--muted);
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+}
+
+.chain-compare-caption {
+  color: var(--muted);
+  font-size: 0.82rem;
+  margin: 0 0 12px;
+}
+
+/* ── UI/UX pass (2026-07-17) ─────────────────────────────────────── */
+
+/* Home cards: first-image thumbnail for skimmability. */
+.request-card.has-thumb {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.request-thumb {
+  flex: 0 0 auto;
+  width: 64px;
+  height: 64px;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: #0c0d10;
+}
+
+.request-card-body { min-width: 0; }
+
+/* Chain tabs: one scrollable row on narrow screens instead of tab soup. */
+@media (max-width: 700px) {
+  .chain-tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 4px;
+    scrollbar-width: thin;
+  }
+  .chain-tab { flex: 0 0 auto; }
+}
+
+/* Compare cells: cap media height so tall shots don't dwarf the page. */
+.chain-compare-cell img,
+.chain-compare-cell video {
+  max-height: 55vh;
+  object-fit: contain;
+  background: #0c0d10;
+}
+
+.view-entry-launch {
+  display: inline-block;
+  margin: 14px 0;
+  padding: 12px 20px;
+  background: #238636;
+  color: #fff;
+  border-radius: 10px;
+  font-weight: 600;
+  text-decoration: none;
+}

@@ -9,13 +9,17 @@
   <ul class="request-list">
     {% for r in open_requests %}
     <li>
-      <a class="request-card" href="/r/{{ r.id }}">
-        <div class="request-title">{{ r.title }}</div>
-        <div class="request-meta">
-          {% if r.project %}<span class="tag">{{ r.project }}</span>{% endif %}
-          <span class="tag kind">{{ r.kind }}</span>
-          <span class="tag">{{ r.variant_count }} variant{{ 's' if r.variant_count != 1 else '' }}</span>
-          <span class="age">{{ r.created_at|ago }}</span>
+      <a class="request-card{% if r.has_image %} has-thumb{% endif %}" href="/r/{{ r.id }}">
+        {% if r.has_image %}<img class="request-thumb" loading="lazy" src="/og/{{ r.id }}" alt="">{% endif %}
+        <div class="request-card-body">
+          <div class="request-title">{{ r.title }}</div>
+          <div class="request-meta">
+            {% if r.project %}<span class="tag">{{ r.project }}</span>{% endif %}
+            <span class="tag kind">{{ r.kind }}</span>
+            {% if r.author %}<span class="tag">{{ r.author }}</span>{% endif %}
+            <span class="tag">{{ r.variant_count }} variant{{ 's' if r.variant_count != 1 else '' }}</span>
+            <span class="age">{{ r.created_at|ago }}</span>
+          </div>
         </div>
       </a>
     </li>

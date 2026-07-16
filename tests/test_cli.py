@@ -1164,3 +1164,51 @@ def test_ask_pull_client_errors_exit_1(monkeypatch, capsys, argv, failing_helper
     assert exc.value.code == 1
     assert captured.out == ""
     assert "error: HTTP 500: broken" in captured.err
+
+
+def test_post_supersedes_defaults_feedback_to_predecessor_verdict_comment(monkeypatch, capsys):
+    calls = []
+    monkeypatch.setattr(cli.config, "client_config", lambda: ("http://gallery", "tok"))
+    monkeypatch.setattr(
+        cli.client, "post_multipart",
+        lambda base_url, token, path, fields, files: {"id": "req_new", "variant_count": 1},
+    )
+    monkeypatch.setattr(
+        cli.client, "get_request",
+        lambda base_url, token, req_id: {"id": req_id, "verdict": {"comment": "make it pop"}},
+    )
+    monkeypatch.setattr(
+        cli.client, "supersede_request",
+        lambda base_url, token, req_id, successor, feedback=None: calls.append((req_id, successor, feedback))
+        or {"id": req_id, "status": "superseded", "superseded_by": successor},
+    )
+    monkeypatch.setattr(cli, "_resolve_files", lambda patterns: ["v.png"])
+    monkeypatch.setattr(
+        "sys.argv",
+        ["portal", "post", "--title", "t", "--kind", "pick-one", "--supersedes", "req_old", "v.png"],
+    )
+    cli.main()
+    assert calls == [("req_old", "req_new", "make it pop")]
+    err = capsys.readouterr().err
+    assert "using predecessor's verdict comment" in err
+
+
+def test_post_warns_on_live_sibling_without_supersedes(monkeypatch, capsys):
+    monkeypatch.setattr(cli.config, "client_config", lambda: ("http://gallery", "tok"))
+    monkeypatch.setattr(
+        cli.client, "post_multipart",
+        lambda base_url, token, path, fields, files: {
+            "id": "req_new", "variant_count": 1,
+            "open_in_stream": [{"id": "req_live", "title": "v4", "created_at": "2026-07-17"}],
+        },
+    )
+    monkeypatch.setattr(cli, "_resolve_files", lambda patterns: ["v.png"])
+    monkeypatch.setattr(
+        "sys.argv",
+        ["portal", "post", "--title", "t", "--kind", "pick-one", "--stream", "loop-a", "v.png"],
+    )
+    monkeypatch.setattr(cli, "_preflight_stream", lambda base_url, token, slug: None)
+    cli.main()
+    err = capsys.readouterr().err
+    assert "already has a live request req_live" in err
+    assert "portal supersede req_live --successor req_new" in err
