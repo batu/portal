@@ -187,6 +187,10 @@ def _validate_schema_version(conn: sqlite3.Connection, version: int) -> None:
         _validate_v5_schema(conn)
     if version >= 6:
         _validate_v6_schema(conn)
+    if version >= 7:
+        _validate_v7_schema(conn)
+    if version >= 8:
+        _validate_v8_schema(conn)
 
 
 def _migrate_v1(conn: sqlite3.Connection) -> None:
@@ -296,6 +300,24 @@ def _validate_v6_schema(conn: sqlite3.Connection) -> None:
         raise RuntimeError(f"schema v6 missing journeys columns: {missing_list}")
 
 
+def _migrate_v7(conn: sqlite3.Connection) -> None:
+    _add_column_if_missing(conn, "requests", "feedback_md", "feedback_md TEXT")
+
+
+def _validate_v7_schema(conn: sqlite3.Connection) -> None:
+    if "feedback_md" not in _column_names(conn, "requests"):
+        raise RuntimeError("schema v7 missing requests column: feedback_md")
+
+
+def _migrate_v8(conn: sqlite3.Connection) -> None:
+    _add_column_if_missing(conn, "requests", "author", "author TEXT")
+
+
+def _validate_v8_schema(conn: sqlite3.Connection) -> None:
+    if "author" not in _column_names(conn, "requests"):
+        raise RuntimeError("schema v8 missing requests column: author")
+
+
 MIGRATIONS = [
     (1, _migrate_v1),
     (2, _migrate_v2),
@@ -303,6 +325,8 @@ MIGRATIONS = [
     (4, _migrate_v4),
     (5, _migrate_v5),
     (6, _migrate_v6),
+    (7, _migrate_v7),
+    (8, _migrate_v8),
 ]
 
 
@@ -766,6 +790,7 @@ def create_request(
     purpose: str | None = None,
     ask: str | None = None,
     stream: str | None = None,
+    author: str | None = None,
 ) -> str:
     """variants: list of {media_path, media_type, caption, meta} in display order (1-based idx).
 
@@ -780,8 +805,8 @@ def create_request(
             stream_row = _ensure_stream(conn, slug)
             conn.execute(
                 "INSERT INTO requests "
-                "(id, title, project, kind, status, context_md, created_at, stream_id, before_media_path, before_media_type, step, purpose, ask) "
-                "VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?)",
+                "(id, title, project, kind, status, context_md, created_at, stream_id, before_media_path, before_media_type, step, purpose, ask, author) "
+                "VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     req_id,
                     title,
@@ -795,6 +820,7 @@ def create_request(
                     step,
                     purpose,
                     ask,
+                    author,
                 ),
             )
             for i, v in enumerate(variants, start=1):
@@ -986,7 +1012,67 @@ def close_request(req_id: str, reason: str) -> dict:
             raise
 
 
-def supersede_request(req_id: str, successor_id: str) -> dict:
+def set_feedback(req_id: str, feedback_md: str) -> dict:
+    """Attach/replace the human feedback note on a request.
+
+    Deliberately allowed on terminal requests: feedback is an annotation about
+    why a version was retired, not a lifecycle mutation.
+    """
+    conn = connect()
+    with _lock:
+        try:
+            row = conn.execute("SELECT id FROM requests WHERE id = ?", (req_id,)).fetchone()
+            if row is None:
+                raise RequestNotFoundError(f"request not found: {req_id}")
+            conn.execute("UPDATE requests SET feedback_md = ? WHERE id = ?", (feedback_md, req_id))
+            conn.commit()
+            request = _get_request(conn, req_id)
+            assert request is not None
+            return request
+        except Exception:
+            conn.rollback()
+            raise
+
+
+def request_chain(req_id: str) -> list[dict]:
+    """The full supersede chain containing req_id, oldest first.
+
+    Walks superseded_by links in both directions. Assumes chains are linear
+    (one predecessor per request); if multiple predecessors exist the earliest
+    created one is followed.
+    """
+    conn = connect()
+    with _lock:
+        row = conn.execute("SELECT id FROM requests WHERE id = ?", (req_id,)).fetchone()
+        if row is None:
+            raise RequestNotFoundError(f"request not found: {req_id}")
+        seen = {req_id}
+        # Walk back to the root.
+        root = req_id
+        while True:
+            prev = conn.execute(
+                "SELECT id FROM requests WHERE superseded_by = ? ORDER BY created_at LIMIT 1", (root,)
+            ).fetchone()
+            if prev is None or prev["id"] in seen:
+                break
+            root = prev["id"]
+            seen.add(root)
+        # Walk forward to the head.
+        chain = []
+        current: str | None = root
+        while current is not None:
+            r = _get_request(conn, current)
+            if r is None:
+                break
+            chain.append(r)
+            nxt = r.get("superseded_by")
+            if nxt in {c["id"] for c in chain}:
+                break
+            current = nxt
+        return chain
+
+
+def supersede_request(req_id: str, successor_id: str, feedback_md: str | None = None) -> dict:
     """Mark a request superseded by a live successor. Terminal states are immutable."""
     conn = connect()
     with _lock:
@@ -1007,6 +1093,8 @@ def supersede_request(req_id: str, successor_id: str) -> dict:
                 "UPDATE requests SET status = 'superseded', superseded_by = ? WHERE id = ?",
                 (successor_id, req_id),
             )
+            if feedback_md is not None:
+                conn.execute("UPDATE requests SET feedback_md = ? WHERE id = ?", (feedback_md, req_id))
             conn.commit()
             request = _get_request(conn, req_id)
             assert request is not None

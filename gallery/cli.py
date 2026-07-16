@@ -4,6 +4,7 @@ import argparse
 import glob
 import hashlib
 import json
+import os
 import re
 import sys
 import time
@@ -116,6 +117,9 @@ def cmd_init(args):
 
 def cmd_post(args):
     base_url, token = config.client_config()
+    if args.feedback and not args.supersedes:
+        print("error: --feedback requires --supersedes (it is recorded on the request being replaced)", file=sys.stderr)
+        sys.exit(1)
     if args.stream is not None:
         _preflight_stream(base_url, token, args.stream)
 
@@ -142,12 +146,24 @@ def cmd_post(args):
         "purpose": args.purpose,
         "ask": args.ask,
         "stream": args.stream,
+        "author": args.author,
     }
     try:
         result = client.post_multipart(base_url, token, "/api/requests", fields, request_files)
     except client.GalleryClientError as exc:
         _exit_client_error(exc)
 
+    if args.supersedes:
+        # One-shot iteration step: retire the old version and carry the human
+        # feedback onto it, so the /c/ chain view stays the whole story.
+        try:
+            client.supersede_request(base_url, token, args.supersedes, result["id"], feedback=args.feedback)
+        except client.GalleryClientError as exc:
+            print(f"posted {result['id']} but failed to supersede {args.supersedes}: {exc}", file=sys.stderr)
+            sys.exit(1)
+        result["supersedes"] = args.supersedes
+
+    result["chain_url"] = f"{base_url}/c/{result['id']}"
     print(json.dumps(result))
 
 
@@ -206,8 +222,23 @@ def cmd_close(args):
 
 def cmd_supersede(args):
     base_url, token = config.client_config()
+    if not args.feedback:
+        print(
+            "note: no --feedback given — the superseded version's chain tab will have no feedback note "
+            "(add later with: portal feedback <id> \"...\")",
+            file=sys.stderr,
+        )
     try:
-        result = client.supersede_request(base_url, token, args.id, args.successor)
+        result = client.supersede_request(base_url, token, args.id, args.successor, feedback=args.feedback)
+    except client.GalleryClientError as exc:
+        _exit_client_error(exc)
+    print(json.dumps(result))
+
+
+def cmd_feedback(args):
+    base_url, token = config.client_config()
+    try:
+        result = client.set_request_feedback(base_url, token, args.id, args.text)
     except client.GalleryClientError as exc:
         _exit_client_error(exc)
     print(json.dumps(result))
@@ -453,6 +484,21 @@ def main():
     p.add_argument("--step", default=None, help="Optional: which step the human is looking at (e.g. 'frame picking')")
     p.add_argument("--purpose", default=None, help="Optional: one-line purpose of this request")
     p.add_argument("--ask", default=None, help="Optional: what the human is being asked to do")
+    p.add_argument(
+        "--author",
+        default=os.environ.get("PORTAL_AUTHOR"),
+        help="Who/what authored this version (e.g. model id 'claude-fable-5'). Defaults to $PORTAL_AUTHOR.",
+    )
+    p.add_argument(
+        "--supersedes",
+        default=None,
+        help="Request id this post replaces; it is superseded atomically after the post (share the /c/ chain link)",
+    )
+    p.add_argument(
+        "--feedback",
+        default=None,
+        help="Human feedback that prompted this new version; recorded on the superseded request (requires --supersedes)",
+    )
     p.add_argument("files", nargs="+", help="File paths or globs, in display order")
 
     p = sub.add_parser("stream", help="Create or close Portal streams")
@@ -486,6 +532,11 @@ def main():
     p = sub.add_parser("supersede", help="Mark a request superseded by a live successor request")
     p.add_argument("id")
     p.add_argument("--successor", required=True, help="Request id of the live successor")
+    p.add_argument("--feedback", default=None, help="Human feedback that prompted the new version (shown on the old version's chain tab)")
+
+    p = sub.add_parser("feedback", help="Attach/replace the human feedback note on a request (works on superseded requests too)")
+    p.add_argument("id")
+    p.add_argument("text", help="Feedback text (markdown)")
 
     p = sub.add_parser("report", help="Post an HTML report to a Portal stream")
     p.add_argument("--stream", required=True, type=_stream_slug)
@@ -561,6 +612,7 @@ def main():
         "journey": cmd_journey,
         "close": cmd_close,
         "supersede": cmd_supersede,
+        "feedback": cmd_feedback,
         "report": cmd_report,
         "wait": cmd_wait,
         "ask": cmd_ask,

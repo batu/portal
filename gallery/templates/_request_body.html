@@ -1,0 +1,153 @@
+{% set selectable_variants = r.kind in ["pick-one", "before-after", "pick-many", "rank"] %}
+{% set can_decide = r.status == "open" and not stream_read_only %}
+<section class="request-detail" data-req-id="{{ r.id }}" data-kind="{{ r.kind }}" data-status="{{ r.status }}"{% if before_media %} data-before-default-view="{{ before_media.default_view }}" data-can-decide="{{ 'true' if can_decide else 'false' }}"{% endif %}>
+  {% if back %}
+  <nav class="breadcrumb" aria-label="Breadcrumb">
+    <a href="/">Index</a>
+    {% if back.href != "/" %}
+    <span class="breadcrumb-separator" aria-hidden="true">/</span>
+    <a href="{{ back.href }}">{{ back.label }}</a>
+    {% endif %}
+    <span class="breadcrumb-separator" aria-hidden="true">/</span>
+    <span aria-current="page">{{ r.title }}</span>
+  </nav>
+  {% endif %}
+  <h1>{{ r.title }}</h1>
+  <div class="request-meta">
+    {% if r.project %}<span class="tag">{{ r.project }}</span>{% endif %}
+    <span class="tag kind">{{ r.kind }}</span>
+    {% if r.author %}<span class="tag author" title="Authored by">{{ r.author }}</span>{% endif %}
+    <span class="age">{{ r.created_at|ago }}</span>
+  </div>
+
+  {% if context_html %}
+  <div class="context">{{ context_html|safe }}</div>
+  {% endif %}
+
+  {% if r.status == "decided" and r.verdict %}
+  <div class="verdict-banner">
+    <strong>Decided</strong> {{ r.decided_at|ago }} —
+    {% if r.kind == "view" %}view verdict recorded{% elif r.verdict.selected %}selected: {{ r.verdict.selected|join(', ') }}{% else %}no selection{% endif %}
+    {% if r.verdict.comment %}<div class="verdict-comment">&ldquo;{{ r.verdict.comment }}&rdquo;</div>{% endif %}
+  </div>
+  {% endif %}
+
+  {% if r.status == "superseded" %}
+  <div class="verdict-banner lifecycle-banner">
+    <strong>Superseded</strong> — live version:
+    {% if r.superseded_by %}<a href="/r/{{ r.superseded_by }}">{{ r.superseded_by }}</a>{% else %}(unknown){% endif %}
+  </div>
+  {% elif r.status == "closed" %}
+  <div class="verdict-banner lifecycle-banner">
+    <strong>Closed</strong>{% if r.close_reason %}: {{ r.close_reason }}{% endif %}
+  </div>
+  {% endif %}
+
+  {% if stream_read_only %}
+  <div class="archive-note">Archived stream. This request is read-only.</div>
+  {% endif %}
+
+  {% if feedback_html %}
+  <div class="feedback-note">
+    <div class="feedback-note-label">Feedback on this version</div>
+    {{ feedback_html|safe }}
+  </div>
+  {% endif %}
+
+  {% if before_media %}
+  <div class="before-after-review" data-before-review data-mode="{{ before_media.default_view }}">
+    <div class="view-switcher" role="group" aria-label="Before after view">
+      <button type="button" class="view-switcher-option" data-before-view="side-by-side" aria-pressed="{{ 'true' if before_media.default_view == 'side-by-side' else 'false' }}">Side-by-side</button>
+      <button type="button" class="view-switcher-option" data-before-view="toggle" aria-pressed="{{ 'true' if before_media.default_view == 'toggle' else 'false' }}">Toggle</button>
+    </div>
+
+    <div class="before-card before-side-by-side" data-before-block data-side-by-side{% if before_media.default_view != "side-by-side" %} hidden{% endif %}>
+      <div class="before-label">BEFORE</div>
+      <div class="before-media">
+        {% if before_media.media_type == "video" %}
+        <video controls playsinline preload="metadata" src="{{ before_media.url }}?token={{ request.query_params.get('token', '') }}"></video>
+        {% else %}
+        <a href="{{ before_media.url }}?token={{ request.query_params.get('token', '') }}" target="_blank" rel="noopener">
+          <img loading="lazy" src="{{ before_media.url }}?token={{ request.query_params.get('token', '') }}" alt="before image">
+        </a>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="toggle-view" data-before-toggle{% if before_media.default_view != "toggle" %} hidden{% endif %}>
+      <div class="toggle-frame" data-toggle-frame>
+        <div class="toggle-layer toggle-before-layer" data-toggle-layer="before">
+          <div class="before-label">BEFORE</div>
+          <div class="before-media">
+            {% if before_media.media_type == "video" %}
+            <video controls playsinline preload="metadata" src="{{ before_media.url }}?token={{ request.query_params.get('token', '') }}"></video>
+            {% else %}
+            <img loading="lazy" src="{{ before_media.url }}?token={{ request.query_params.get('token', '') }}" alt="before image">
+            {% endif %}
+          </div>
+        </div>
+        <div class="toggle-layer toggle-candidate-layer" data-toggle-layer="candidate">
+          {% for v in r.variants %}
+          <div class="toggle-candidate-media" data-toggle-candidate="{{ v.idx }}" hidden>
+            {% if v.media_type == "video" %}
+            <video controls playsinline preload="metadata" src="/media/{{ r.id }}/{{ v.media_path }}?token={{ request.query_params.get('token', '') }}"></video>
+            {% else %}
+            <img loading="lazy" src="/media/{{ r.id }}/{{ v.media_path }}?token={{ request.query_params.get('token', '') }}" alt="variant {{ v.idx }}">
+            {% endif %}
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if r.kind == "view" %}
+  <div class="archive-note">This view request has no HTML entry file.</div>
+  {% else %}
+  <div class="variant-grid" style="--variant-cols: {{ [r.variants|length, 5]|min }}"{% if before_media %} data-candidate-grid{% endif %}>
+    {% for v in r.variants %}
+    <div class="variant" data-idx="{{ v.idx }}"{% if before_media and selectable_variants and can_decide %} tabindex="0" role="button" aria-pressed="false"{% endif %}>
+      <div class="variant-media">
+        {% if v.media_type == "video" %}
+        <video controls playsinline preload="metadata" src="/media/{{ r.id }}/{{ v.media_path }}?token={{ request.query_params.get('token', '') }}"></video>
+        {% else %}
+        <a href="/media/{{ r.id }}/{{ v.media_path }}?token={{ request.query_params.get('token', '') }}" target="_blank" rel="noopener">
+          <img loading="lazy" src="/media/{{ r.id }}/{{ v.media_path }}?token={{ request.query_params.get('token', '') }}" alt="variant {{ v.idx }}">
+        </a>
+        {% endif %}
+      </div>
+      <div class="variant-footer">
+        <span class="variant-number">{{ v.idx }}</span>
+        <span class="order-badge" hidden></span>
+        {% if v.caption %}<span class="variant-caption">{{ v.caption }}</span>{% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if can_decide and r.kind != "view" %}
+  <div class="decision-panel">
+    {% if r.kind == "approve" %}
+    <div class="approve-buttons">
+      <button type="button" class="btn approve" data-approve="yes">Approve</button>
+      <button type="button" class="btn reject" data-approve="no">Reject</button>
+    </div>
+    {% endif %}
+
+    <textarea class="comment-box" placeholder="Comment (optional)…"></textarea>
+
+    {% if r.kind != "approve" %}
+    <button type="button" class="btn decide" id="decide-btn">{{ "Done" if r.kind == "comment" else "Decide" }}</button>
+    {% endif %}
+    <div class="hint">
+      {% if r.kind == "pick-one" or r.kind == "before-after" %}Tap one variant, then Decide.
+      {% elif r.kind == "pick-many" %}Tap any number of variants, then Decide.
+      {% elif r.kind == "rank" %}Tap variants in order (tap again to remove), then Decide.
+      {% elif r.kind == "comment" %}Just leave a comment and press Done.
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+</section>

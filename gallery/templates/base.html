@@ -4,15 +4,25 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
   <title>{% block title %}Portal{% endblock %}</title>
-  <link rel="stylesheet" href="/static/style.css">
+  {% if og %}
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="{{ og.title }}">
+  {% if og.description %}<meta property="og:description" content="{{ og.description }}">{% endif %}
+  {% if og.image %}
+  <meta property="og:image" content="{{ og.image }}">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:image" content="{{ og.image }}">
+  {% endif %}
+  {% endif %}
+  <link rel="stylesheet" href="/static/style.css?v=5">
 </head>
 <body>
   <header class="topbar">
     <a href="/" class="brand">Portal</a>
   </header>
-  <main>
+  <main class="{% block main_class %}{% endblock %}">
     {% block content %}{% endblock %}
   </main>
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v=3"></script>
 </body>
 </html>

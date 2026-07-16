@@ -107,7 +107,7 @@ def test_request_without_before_keeps_existing_key_markup(client, token):
         f'<section class="request-detail" data-req-id="{req_id}" data-kind="pick-one" data-status="open">'
         in page.text
     )
-    assert '<div class="variant-grid">' in page.text
+    assert '<div class="variant-grid" style="--variant-cols: 1">' in page.text
     assert '<div class="variant" data-idx="1">' in page.text
     assert '<div class="decision-panel">' in page.text
     assert '<button type="button" class="btn decide" id="decide-btn">Decide</button>' in page.text

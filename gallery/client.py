@@ -99,9 +99,16 @@ def close_request(base_url: str, token: str, req_id: str, reason: str) -> dict:
     return post_json(base_url, token, f"/api/requests/{req_id}/close", {"reason": reason})
 
 
-def supersede_request(base_url: str, token: str, req_id: str, successor: str) -> dict:
+def set_request_feedback(base_url: str, token: str, req_id: str, feedback: str) -> dict:
+    return post_json(base_url, token, f"/api/requests/{req_id}/feedback", {"feedback": feedback})
+
+
+def supersede_request(base_url: str, token: str, req_id: str, successor: str, feedback: str | None = None) -> dict:
     req_id = urllib.parse.quote(req_id, safe="")
-    return post_json(base_url, token, f"/api/requests/{req_id}/supersede", {"successor": successor})
+    body: dict = {"successor": successor}
+    if feedback is not None:
+        body["feedback"] = feedback
+    return post_json(base_url, token, f"/api/requests/{req_id}/supersede", body)
 
 
 def create_stream(base_url: str, token: str, slug: str, kind: str, title: str) -> dict:

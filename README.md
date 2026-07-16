@@ -94,6 +94,32 @@ gallery list --json
 
 `kind` is one of `pick-one`, `pick-many`, `rank`, `approve`, `comment`.
 
+### Iteration loops (new version of an existing request)
+
+When a request is a revision of an earlier one, never post it standalone.
+Post with `--supersedes` and `--feedback` so the whole loop stays one chain:
+
+```bash
+portal post --title "Ball styles (v2)" --kind pick-one --stream my-loop \
+  --supersedes req_old --feedback "Sheen looked bad — removed; added toon" \
+  --author "claude-fable-5" \
+  out/*.png
+# -> {"id": "req_new", ..., "supersedes": "req_old", "chain_url": ".../c/req_new"}
+```
+
+Share the `chain_url` **once**: `/c/<id>` is permanent, resolves from any
+request id in the chain, shows one tab per version (old tabs display the
+recorded feedback and author), and a plain refresh always opens the latest
+version. `--feedback` should quote the human's actual words, so the trail
+reads as they said it. `--author` records who/what produced the version
+(defaults to `$PORTAL_AUTHOR`; agents should pass their model id).
+
+Attach or fix feedback after the fact (works on superseded requests):
+
+```bash
+portal feedback req_old "the highlight dot looked like a cutout"
+```
+
 Optional `--manifest path/to/manifest.json` maps original filenames to
 per-variant metadata: `{"variant_1.png": {"caption": "warmer tone", "meta": {"model": "x", "cost": 0.02}}}`.
 

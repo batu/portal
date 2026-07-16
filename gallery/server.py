@@ -684,6 +684,7 @@ async def create_request(
     purpose: str | None = Form(None),
     ask: str | None = Form(None),
     stream: str | None = Form(None),
+    author: str | None = Form(None),
     before: UploadFile | None = File(None),
     files: list[UploadFile] = File(...),
 ):
@@ -692,6 +693,7 @@ async def create_request(
     step = _bounded_optional_text(step, "step", MAX_TITLE_LENGTH)
     purpose = _bounded_optional_text(purpose, "purpose", MAX_TITLE_LENGTH)
     ask = _bounded_optional_text(ask, "ask", MAX_TITLE_LENGTH)
+    author = _bounded_optional_text(author, "author", MAX_AUTHOR_LENGTH)
     if stream is not None and stream.strip():
         stream = _validate_slug(stream)
     else:
@@ -762,6 +764,7 @@ async def create_request(
                 purpose=purpose,
                 ask=ask,
                 stream=stream,
+                author=author,
             )
             break
         except ValueError as exc:
@@ -1078,10 +1081,22 @@ async def supersede_request(request: Request, req_id: str):
     require_api_token(request)
     body = await _json_object_body(request)
     successor = _bounded_text(body.get("successor"), "successor", 128)
+    feedback = _bounded_optional_text(body.get("feedback"), "feedback", MAX_MESSAGE_TEXT_LENGTH)
     try:
-        return db.supersede_request(req_id, successor)
+        return db.supersede_request(req_id, successor, feedback_md=feedback)
     except ValueError as exc:
         raise HTTPException(status_code=_lifecycle_mutation_status(exc), detail=str(exc)) from exc
+
+
+@app.post("/api/requests/{req_id}/feedback")
+async def set_request_feedback(request: Request, req_id: str):
+    require_api_token(request)
+    body = await _json_object_body(request)
+    feedback = _bounded_text(body.get("feedback"), "feedback", MAX_MESSAGE_TEXT_LENGTH)
+    try:
+        return db.set_feedback(req_id, feedback)
+    except db.RequestNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 # --- journeys ---
@@ -1605,6 +1620,11 @@ async def web_stream_answer(request: Request, slug: str):
 @app.get("/r/{req_id}", response_class=HTMLResponse)
 def web_request_detail(request: Request, req_id: str):
     if not web_token_ok(request):
+        if _is_link_preview_crawler(request):
+            r = db.get_request(req_id)
+            if r is None:
+                raise HTTPException(status_code=404, detail="request not found")
+            return _crawler_preview_response(request, r)
         return _login_redirect(request)
     r = db.get_request(req_id)
     if r is None:
@@ -1642,8 +1662,119 @@ def web_request_detail(request: Request, req_id: str):
             "before_media": before_media,
             "view_entry_url": _media_url(r["id"], view_entry) if view_entry else None,
             "back": back,
+            "feedback_html": _feedback_html(r),
+            "og": _og_context(request, r),
         },
     )
+    _apply_request_page_csp(response)
+    _maybe_set_cookie(response, request)
+    return response
+
+
+CRAWLER_UA_RE = re.compile(
+    r"whatsapp|facebookexternalhit|twitterbot|slackbot|telegrambot|discordbot|linkedinbot|imessage",
+    re.IGNORECASE,
+)
+
+
+def _is_link_preview_crawler(request: Request) -> bool:
+    return bool(CRAWLER_UA_RE.search(request.headers.get("user-agent", "")))
+
+
+def _public_base(request: Request) -> str:
+    base = str(request.base_url).rstrip("/")
+    if request.headers.get("x-forwarded-proto") == "https" and base.startswith("http:"):
+        base = "https:" + base[5:]
+    return base
+
+
+def _first_image_url(request: Request, r: dict) -> str | None:
+    """Tokenless preview-image URL (served by the public /og route)."""
+    for v in r.get("variants", []):
+        if v.get("media_type") != "video":
+            return f"{_public_base(request)}/og/{r['id']}"
+    return None
+
+
+def _crawler_preview_response(request: Request, r: dict, fallbacks: list[dict] | None = None) -> HTMLResponse:
+    """Meta-tags-only page for link-preview crawlers: no auth, no content
+    beyond title/ask/first image, so chats can render a preview card."""
+    og = _og_context(request, r, fallbacks)
+    import html as html_lib
+    title = html_lib.escape(og["title"])
+    desc = html_lib.escape(og.get("description") or "")
+    image = og.get("image")
+    tags = [
+        '<meta property="og:type" content="website">',
+        f'<meta property="og:title" content="{title}">',
+    ]
+    if desc:
+        tags.append(f'<meta property="og:description" content="{desc}">')
+    if image:
+        tags.append(f'<meta property="og:image" content="{image}">')
+        tags.append('<meta name="twitter:card" content="summary_large_image">')
+    body = (
+        "<!doctype html><html><head><meta charset='utf-8'>"
+        f"<title>{title}</title>{''.join(tags)}</head>"
+        f"<body>{title}</body></html>"
+    )
+    return HTMLResponse(body)
+
+
+@app.get("/og/{req_id}")
+def get_og_image(req_id: str):
+    """Public (tokenless) preview image: the request's FIRST image variant
+    only, for link-preview crawlers that fetch og:image without cookies."""
+    if not SAFE_SEGMENT_RE.fullmatch(req_id) or req_id in {".", ".."}:
+        raise HTTPException(status_code=404, detail="not found")
+    r = db.get_request(req_id)
+    if r is None:
+        raise HTTPException(status_code=404, detail="not found")
+    for v in r.get("variants", []):
+        if v.get("media_type") != "video":
+            media_root = config.media_dir().resolve()
+            path = (media_root / req_id / v["media_path"]).resolve()
+            try:
+                path.relative_to(media_root)
+            except ValueError as exc:
+                raise HTTPException(status_code=404, detail="not found") from exc
+            if not path.is_file():
+                break
+            media_type, _ = mimetypes.guess_type(str(path))
+            return FileResponse(
+                path,
+                media_type=media_type or "application/octet-stream",
+                headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "public, max-age=3600"},
+            )
+    raise HTTPException(status_code=404, detail="not found")
+
+
+def _og_context(request: Request, r: dict, fallbacks: list[dict] | None = None) -> dict:
+    """Open Graph card for link previews (WhatsApp/iMessage/Slack).
+
+    Uses the first image variant as og:image. The crawler fetches without
+    cookies, so the token from the shared URL is forwarded on the image URL.
+    """
+    image = _first_image_url(request, r)
+    if image is None:
+        # Video-only version: fall back to the newest earlier version that has
+        # an image, so chat previews always show something skimmable.
+        for other in reversed(fallbacks or []):
+            image = _first_image_url(request, other)
+            if image:
+                break
+    return {
+        "title": r["title"],
+        "description": r.get("ask") or r.get("purpose") or "",
+        "image": image,
+    }
+
+
+def _feedback_html(r: dict) -> str:
+    return _sanitize_context_html(md_lib.markdown(r["feedback_md"])) if r.get("feedback_md") else ""
+
+
+def _apply_request_page_csp(response) -> None:
     # Defense in depth: even if a sanitizer gap let markup through, this CSP
     # blocks inline/injected script and non-self resources. The Portal page
     # only loads same-origin /static assets and /media, so 'self' suffices.
@@ -1652,6 +1783,57 @@ def web_request_detail(request: Request, req_id: str):
         "img-src 'self'; media-src 'self'; connect-src 'self'; "
         "base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
     )
+
+
+@app.get("/c/{req_id}", response_class=HTMLResponse)
+def web_request_chain(request: Request, req_id: str):
+    """Permanent chain view: one tab per version, defaulting to the latest.
+
+    Any request id in the chain resolves to the same page, so links stay
+    valid as new versions supersede old ones.
+    """
+    if not web_token_ok(request):
+        if _is_link_preview_crawler(request):
+            try:
+                chain = db.request_chain(req_id)
+            except db.RequestNotFoundError:
+                raise HTTPException(status_code=404, detail="request not found")
+            return _crawler_preview_response(request, chain[-1], chain)
+        return _login_redirect(request)
+    try:
+        chain = db.request_chain(req_id)
+    except db.RequestNotFoundError:
+        raise HTTPException(status_code=404, detail="request not found")
+
+    v = request.query_params.get("v", "")
+    chain_idx = int(v) if v.isdigit() and 1 <= int(v) <= len(chain) else len(chain)
+    r = chain[chain_idx - 1]
+
+    context_html = (
+        _sanitize_context_html(md_lib.markdown(r["context_md"])) if r.get("context_md") else ""
+    )
+    back = {"href": "/", "label": "Home"}
+    if r.get("stream_id"):
+        stream = db.get_stream_by_id(r["stream_id"])
+        if stream is not None:
+            back = {"href": f"/s/{quote(stream['slug'], safe='')}", "label": stream["title"] or stream["slug"]}
+
+    response = templates.TemplateResponse(
+        request,
+        "chain.html",
+        {
+            "r": r,
+            "chain": chain,
+            "chain_idx": chain_idx,
+            "context_html": context_html,
+            "stream_read_only": _request_stream_closed(r),
+            "before_media": _before_media_context(r),
+            "back": back,
+            "feedback_html": _feedback_html(r),
+            "og": _og_context(request, r, chain),
+        },
+    )
+    _apply_request_page_csp(response)
     _maybe_set_cookie(response, request)
     return response
 

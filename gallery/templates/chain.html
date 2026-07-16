@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+
+{% block main_class %}wide{% endblock %}
+{% block title %}{{ r.title }} — Portal{% endblock %}
+{% block content %}
+<nav class="breadcrumb" aria-label="Breadcrumb">
+  <a href="/">Index</a>
+  {% if back and back.href != "/" %}
+  <span class="breadcrumb-separator" aria-hidden="true">/</span>
+  <a href="{{ back.href }}">{{ back.label }}</a>
+  {% endif %}
+  <span class="breadcrumb-separator" aria-hidden="true">/</span>
+  <span aria-current="page">{{ chain[-1].title }}</span>
+</nav>
+
+<div class="chain-tabs" role="tablist" aria-label="Versions">
+  {% for c in chain %}
+  <a class="chain-tab{% if loop.index == chain_idx %} active{% endif %}{% if c.status == 'decided' %} decided{% endif %}"
+     role="tab" aria-selected="{{ 'true' if loop.index == chain_idx else 'false' }}"
+     href="/c/{{ chain[0].id }}?v={{ loop.index }}{% if request.query_params.get('token') %}&token={{ request.query_params.get('token') }}{% endif %}">
+    v{{ loop.index }}{% if loop.last %} · latest{% endif %}
+  </a>
+  {% endfor %}
+</div>
+<div class="chain-hint">Permanent link — a plain refresh always opens the latest version.</div>
+
+{% set back = None %}
+{% include "_request_body.html" %}
+{% endblock %}

@@ -392,7 +392,7 @@
     '<button type="button" class="lightbox-nav prev" aria-label="Previous">&#8249;</button>' +
     '<figure><img alt=""><figcaption></figcaption></figure>' +
     '<button type="button" class="lightbox-nav next" aria-label="Next">&#8250;</button>' +
-    '<button type="button" class="lightbox-full" aria-label="Full screen">&#x26F6;</button>' +
+    '<button type="button" class="lightbox-full" aria-label="Full screen" title="Full screen — phone-sized, like the real game">&#x26F6;</button>' +
     '<button type="button" class="lightbox-close" aria-label="Close">&times;</button>';
   document.body.appendChild(overlay);
   var lbImg = overlay.querySelector("img");
@@ -414,9 +414,27 @@
     preload(current - 1);
   }
   function close() {
+    if (document.fullscreenElement) document.exitFullscreen();
+    overlay.classList.remove("fullpage");
     overlay.hidden = true;
     document.body.style.overflow = "";
   }
+
+  // Full-page mode: true browser fullscreen with the media alone at phone
+  // proportions on black — as close to holding the final game as the web gets.
+  var fullBtn = overlay.querySelector(".lightbox-full");
+  fullBtn.addEventListener("click", function () {
+    if (overlay.classList.contains("fullpage")) {
+      overlay.classList.remove("fullpage");
+      if (document.fullscreenElement) document.exitFullscreen();
+      return;
+    }
+    overlay.classList.add("fullpage");
+    if (overlay.requestFullscreen) overlay.requestFullscreen().catch(function () {});
+  });
+  document.addEventListener("fullscreenchange", function () {
+    if (!document.fullscreenElement) overlay.classList.remove("fullpage");
+  });
   items.forEach(function (item, i) {
     item.anchor.addEventListener("click", function (e) {
       e.preventDefault();
@@ -427,26 +445,6 @@
   overlay.querySelector(".prev").addEventListener("click", function () { show(current - 1); });
   overlay.querySelector(".next").addEventListener("click", function () { show(current + 1); });
   overlay.querySelector(".lightbox-close").addEventListener("click", close);
-  // Full-page mode: the media alone, edge to edge — as close to the final
-  // in-game look as the browser allows (native Fullscreen API on the figure,
-  // CSS fallback class otherwise).
-  overlay.querySelector(".lightbox-full").addEventListener("click", function () {
-    var fig = overlay.querySelector("figure");
-    if (document.fullscreenElement) {
-      document.exitFullscreen();
-    } else if (fig.requestFullscreen) {
-      overlay.classList.add("lightbox--full");
-      fig.requestFullscreen().catch(function () {});
-    } else if (fig.webkitRequestFullscreen) {
-      overlay.classList.add("lightbox--full");
-      fig.webkitRequestFullscreen();
-    } else {
-      overlay.classList.toggle("lightbox--full");
-    }
-  });
-  document.addEventListener("fullscreenchange", function () {
-    if (!document.fullscreenElement) overlay.classList.remove("lightbox--full");
-  });
   overlay.addEventListener("click", function (e) {
     if (e.target === overlay) close();
   });

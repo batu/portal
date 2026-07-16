@@ -153,11 +153,16 @@ def test_old_style_gallery_post_keeps_request_payload_and_no_stream_attach(monke
                 "purpose": None,
                 "ask": None,
                 "stream": None,
+                "author": None,
             },
             "files": [upload],
         }
     ]
-    assert json.loads(capsys.readouterr().out) == {"id": "req_123", "variant_count": 1}
+    assert json.loads(capsys.readouterr().out) == {
+        "id": "req_123",
+        "variant_count": 1,
+        "chain_url": "http://gallery/c/req_123",
+    }
 
 
 def test_post_before_upload_uses_named_before_field(monkeypatch, tmp_path):
@@ -263,11 +268,16 @@ def test_post_stream_forwards_stream_field_without_second_post(monkeypatch, tmp_
                 "purpose": None,
                 "ask": None,
                 "stream": "alpha",
+                "author": None,
             },
             "files": [upload],
         }
     ]
-    assert json.loads(capsys.readouterr().out) == {"id": "req_123", "variant_count": 1}
+    assert json.loads(capsys.readouterr().out) == {
+        "id": "req_123",
+        "variant_count": 1,
+        "chain_url": "http://gallery/c/req_123",
+    }
 
 
 def test_post_stream_with_before_keeps_before_out_of_candidates(monkeypatch, tmp_path):
@@ -691,14 +701,16 @@ def test_supersede_calls_client_and_prints_result(monkeypatch, capsys):
     monkeypatch.setattr(
         cli.client,
         "supersede_request",
-        lambda base_url, token, req_id, successor: calls.append((base_url, token, req_id, successor))
+        lambda base_url, token, req_id, successor, feedback=None: calls.append(
+            (base_url, token, req_id, successor, feedback)
+        )
         or {"id": req_id, "status": "superseded", "superseded_by": successor},
     )
     monkeypatch.setattr("sys.argv", ["portal", "supersede", "req_old", "--successor", "req_new"])
 
     cli.main()
 
-    assert calls == [("http://gallery", "tok", "req_old", "req_new")]
+    assert calls == [("http://gallery", "tok", "req_old", "req_new", None)]
     assert json.loads(capsys.readouterr().out) == {
         "id": "req_old",
         "status": "superseded",
