@@ -4,7 +4,11 @@
 
 ## Project Context
 
-<!-- Replace this section with project-specific context. -->
+Portal ("gallery") — review hub for agent outputs and human decisions.
+
+- `docs/solutions/` — documented lessons from past work (flat, date-prefixed files with YAML frontmatter: module, tags, problem_type; see INDEX.md). Relevant when implementing or debugging in documented areas.
+- `CONCEPTS.md` — shared domain vocabulary (Request, Chain, Supersession, Feedback, …) — relevant when orienting to the codebase.
+
 Read the README, repo guide, and nearby code before making claims about the project. Do not assume the stack, architecture, commands, or conventions when they can be checked.
 
 ## Operating Contract

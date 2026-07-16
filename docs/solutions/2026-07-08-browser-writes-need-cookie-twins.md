@@ -50,3 +50,5 @@ For each browser write route:
   fixed by token-free twin URLs and explicit POST actions.
 - `docs/evidence/2026-07-08-portal-phase1/evidence.md`, token scan and browser
   verdict route hardening.
+
+> **Carve-out (2026-07-16):** the public `/og/<req_id>` link-preview route and the crawler meta-tags page are deliberate tokenless exceptions to this rule — scoped to a request's first image variant so chat link previews work without auth. Do not "fix" them back behind the token. See [Iteration Chains](2026-07-16-iteration-chains-supersede-with-feedback.md).

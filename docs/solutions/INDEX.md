@@ -24,6 +24,7 @@ source that made the rule durable.
 
 | Entry | Rule | Key sources |
 |---|---|---|
+| [Iteration Chains: Supersede With Feedback, Share the /c/ Link](2026-07-16-iteration-chains-supersede-with-feedback.md) | Post new versions with `--supersedes/--feedback/--author` and share the permanent `/c/` chain link once. | marble-run-simplification chain `req_9566e8`; `gallery/cli.py`, `gallery/db.py` |
 | [Iframe Report Rendering Needs Both Cookie Sandbox And Inline Media](2026-07-08-iframe-report-rendering-needs-cookie-sandbox-and-inline-media.md) | Iframed authenticated report HTML needs `sandbox="allow-same-origin"` and report-only inline media headers. | cards `A9oMiXGV`, `zKUB2Tnl`; stream web-pages and phase-1 evidence |
 | [TestClient Needs Browser Header Proxies](2026-07-08-testclient-needs-browser-header-proxies.md) | When browser execution is unavailable, assert the markup and headers that browsers actually depend on. | card `zKUB2Tnl`; phase-1 evidence |
 | [Run Uv With Sandbox Cache](2026-07-08-run-uv-with-sandbox-cache.md) | In sandboxed workers, run uv commands with `UV_CACHE_DIR=/private/tmp/uv-cache`. | `twf` lesson `3b565316`; card `8OEiwp9u` |
