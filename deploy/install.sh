@@ -24,7 +24,7 @@ mkdir -p "$HOME/Library/LaunchAgents"
 sed "s#__HOME__#$HOME#g" "$PLIST_SRC" > "$PLIST_DEST"
 
 UID_NUM=$(id -u)
-DOMAIN="gui/$UID_NUM"
+DOMAIN="user/$UID_NUM"
 
 echo "==> (Re)loading launchd agent"
 launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true

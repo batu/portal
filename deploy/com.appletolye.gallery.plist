@@ -19,6 +19,13 @@
     <key>RunAtLoad</key>
     <true/>
 
+    <!--
+      Portal runs on a headless Mac mini. Loading into the Background user
+      session keeps the service independent of an Aqua/console login.
+    -->
+    <key>LimitLoadToSessionType</key>
+    <string>Background</string>
+
     <key>KeepAlive</key>
     <true/>
 
