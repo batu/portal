@@ -221,6 +221,7 @@ def publish_game_build(
     video: Path,
     poster: Path,
     description: str = "",
+    web: Path | None = None,
 ) -> dict:
     slug = urllib.parse.quote(slug, safe="")
     fields = {
@@ -229,13 +230,10 @@ def publish_game_build(
         "changelog": changelog,
         "description": description,
     }
-    return post_multipart(
-        base_url,
-        token,
-        f"/api/games/{slug}/builds",
-        fields,
-        [("artifact", artifact), ("video", video), ("poster", poster)],
-    )
+    files = [("artifact", artifact), ("video", video), ("poster", poster)]
+    if web is not None:
+        files.append(("web", web))
+    return post_multipart(base_url, token, f"/api/games/{slug}/builds", fields, files)
 
 
 def update_game_changelog(base_url: str, token: str, slug: str, version: str, changelog: str) -> dict:

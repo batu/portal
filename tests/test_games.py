@@ -1,4 +1,6 @@
 import hashlib
+import io
+import zipfile
 
 from gallery import config, db
 
@@ -232,3 +234,147 @@ def test_game_release_management_requires_auth_and_valid_poster(client, token):
         json={"changelog": "changed"},
     ).status_code == 401
     assert client.delete("/api/games/marble-run/builds/1.0.0").status_code == 401
+
+
+def make_bundle(members, *, root=""):
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        for name, content in members.items():
+            archive.writestr(f"{root}{name}", content)
+    return buffer.getvalue()
+
+
+WEB_BUNDLE = {
+    "index.html": "<!doctype html><title>Marble Run</title><script src='assets/app.js'></script>",
+    "assets/app.js": "console.log('marble')",
+}
+
+
+def publish_with_web(client, token, bundle, *, version="1.0.0"):
+    return client.post(
+        f"/api/games/marble-run/builds",
+        headers=auth_headers(token),
+        data={"title": "Marble Run", "version": version, "changelog": "- Playable in the browser"},
+        files={
+            "artifact": ("marble-run.apk", b"build-data", "application/vnd.android.package-archive"),
+            "video": ("gameplay.mp4", b"video-data", "video/mp4"),
+            "poster": ("preview.jpg", b"poster-data", "image/jpeg"),
+            "web": ("dist.zip", bundle, "application/zip"),
+        },
+    )
+
+
+def test_web_bundle_publishes_and_serves_a_sandboxed_playable_preview(client, token):
+    response = publish_with_web(client, token, make_bundle(WEB_BUNDLE))
+    assert response.status_code == 200
+    body = response.json()
+    assert body["preview_url"] == "/games/marble-run/builds/1.0.0/play/"
+    assert body["web_preview_path"] == "web/index.html"
+
+    entry = client.get("/games/marble-run/builds/1.0.0/play/")
+    assert entry.status_code == 200
+    assert "Marble Run" in entry.text
+    assert "sandbox" in entry.headers["content-security-policy"]
+    assert entry.headers["x-content-type-options"] == "nosniff"
+
+    asset = client.get("/games/marble-run/builds/1.0.0/play/assets/app.js")
+    assert asset.status_code == 200
+    assert asset.content == b"console.log('marble')"
+    assert asset.headers["content-type"].startswith("text/javascript") or "javascript" in asset.headers["content-type"]
+
+    page = client.get("/games/marble-run")
+    assert 'data-src="/games/marble-run/builds/1.0.0/play/"' in page.text
+    assert 'sandbox="allow-scripts"' in page.text
+    assert "allow-same-origin" not in page.text
+    assert "data-device-preset" in page.text
+
+
+def test_web_bundle_accepts_a_single_top_level_dist_directory(client, token):
+    response = publish_with_web(client, token, make_bundle(WEB_BUNDLE, root="dist/"))
+    assert response.status_code == 200
+    assert response.json()["web_preview_path"] == "web/dist/index.html"
+    assert client.get("/games/marble-run/builds/1.0.0/play/").status_code == 200
+    assert client.get("/games/marble-run/builds/1.0.0/play/assets/app.js").status_code == 200
+
+
+def test_web_bundle_cannot_escape_its_release_directory(client, token):
+    escape = publish_with_web(client, token, make_bundle({"index.html": "x", "../evil.txt": "pwn"}))
+    assert escape.status_code == 400
+    assert not (config.games_dir() / "marble-run" / "evil.txt").exists()
+    assert not (config.games_dir() / "evil.txt").exists()
+    assert db.get_game("marble-run") is None
+    assert not (config.games_dir() / "marble-run" / "1.0.0").exists()
+
+    assert publish_with_web(client, token, make_bundle(WEB_BUNDLE)).status_code == 200
+    (config.games_dir() / "marble-run" / "secret.txt").write_text("nope")
+    assert client.get("/games/marble-run/builds/1.0.0/play/../secret.txt").status_code == 404
+    assert client.get("/games/marble-run/builds/1.0.0/play/%2e%2e/secret.txt").status_code == 404
+    assert client.get("/games/marble-run/builds/1.0.0/play/../../../../etc/passwd").status_code == 404
+
+
+def test_web_bundle_rejects_bombs_unsupported_members_and_missing_entry(client, token):
+    too_many = publish_with_web(client, token, make_bundle(
+        {"index.html": "x", **{f"assets/f{i}.js": "x" for i in range(2001)}}
+    ))
+    assert too_many.status_code == 400
+    assert "files" in too_many.json()["detail"]
+
+    unsupported = publish_with_web(client, token, make_bundle({"index.html": "x", "run.sh": "rm -rf /"}))
+    assert unsupported.status_code == 400
+    assert "unsupported" in unsupported.json()["detail"]
+
+    no_entry = publish_with_web(client, token, make_bundle({"main.html": "x"}))
+    assert no_entry.status_code == 400
+    assert "index.html" in no_entry.json()["detail"]
+
+    not_a_zip = publish_with_web(client, token, b"definitely-not-a-zip")
+    assert not_a_zip.status_code == 400
+    assert db.get_game("marble-run") is None
+
+
+def test_releases_without_a_web_bundle_stay_fully_usable(client, token):
+    assert publish(client, token).status_code == 200
+    build = db.get_game_build("marble-run", "1.0.0")
+    assert build["web_preview_path"] == ""
+
+    assert client.get("/games/marble-run/builds/1.0.0/play/").status_code == 404
+    assert client.get("/games/marble-run/builds/1.0.0/play/assets/app.js").status_code == 404
+
+    page = client.get("/games/marble-run")
+    assert page.status_code == 200
+    assert "No browser preview for this build" in page.text
+    assert "data-play-surface" not in page.text
+    assert 'href="/games/marble-run/builds/1.0.0/public-download"' in page.text
+
+
+def test_web_preview_is_public_to_read_while_publishing_stays_authenticated(client, token):
+    assert publish_with_web(client, token, make_bundle(WEB_BUNDLE)).status_code == 200
+    assert client.get("/games/marble-run/builds/1.0.0/play/", follow_redirects=False).status_code == 200
+    assert publish_with_web(client, "wrong", make_bundle(WEB_BUNDLE), version="2.0.0").status_code == 401
+
+
+def test_removing_a_release_takes_its_web_preview_with_it(client, token):
+    assert publish_with_web(client, token, make_bundle(WEB_BUNDLE)).status_code == 200
+    removed = client.delete("/api/games/marble-run/builds/1.0.0", headers=auth_headers(token))
+    assert removed.status_code == 200
+    trash_path = config.data_dir() / removed.json()["recoverable_path"]
+    assert (trash_path / "web" / "index.html").is_file()
+    assert client.get("/games/marble-run/builds/1.0.0/play/").status_code == 404
+
+
+def test_v10_database_migrates_to_an_empty_web_preview_path(data_dir):
+    conn = db.connect()
+    conn.execute("PRAGMA user_version = 10")
+    conn.execute("ALTER TABLE game_builds DROP COLUMN web_preview_path")
+    conn.commit()
+    conn.close()
+    db._conn = None
+    assert "web_preview_path" in db._column_names(db.connect(), "game_builds")
+
+    build = db.create_game_build(
+        "marble-run",
+        title="Marble Run", description="", version="0.9.0", changelog_md="- Legacy",
+        artifact_path="a.apk", artifact_size=1, artifact_sha256="x",
+        video_path="v.mp4", preview_path="p.jpg",
+    )
+    assert build["web_preview_path"] == ""

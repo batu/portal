@@ -13,9 +13,10 @@ import shutil
 import sqlite3
 import subprocess
 import threading
+import zipfile
 from datetime import datetime, timezone
 from html.parser import HTMLParser
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from urllib.parse import quote
 
 import markdown as md_lib
@@ -49,6 +50,21 @@ GAME_VERSION_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,62}[A-Za-z0-9])?$
 GAME_ARTIFACT_FIELD = "artifact_path"
 GAME_VIDEO_FIELD = "video_path"
 GAME_PREVIEW_FIELD = "preview_path"
+GAME_WEB_FIELD = "web_preview_path"
+GAME_WEB_DIR = "web"
+GAME_WEB_ENTRY = "index.html"
+MAX_GAME_WEB_FILES = 2000
+MAX_GAME_WEB_UNCOMPRESSED_BYTES = 256 * 1024 * 1024
+GAME_WEB_EXTS = {
+    ".html", ".htm", ".js", ".mjs", ".css", ".json", ".wasm", ".map", ".txt",
+    ".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg", ".ico", ".avif",
+    ".mp3", ".ogg", ".wav", ".m4a", ".mp4", ".webm",
+    ".woff", ".woff2", ".ttf", ".otf",
+}
+# The web bundle is untrusted third-party build output. It is framed with
+# sandbox="allow-scripts" and no allow-same-origin (opaque origin: no Portal
+# cookies, no parent DOM), and these headers keep a direct hit on the URL inert.
+GAME_WEB_CSP = "sandbox allow-scripts"
 STREAM_SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?$")
 SAFE_SEGMENT_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 
@@ -341,6 +357,62 @@ async def _write_game_upload(upload: UploadFile, destination: Path) -> tuple[int
     return size, digest.hexdigest()
 
 
+def _extract_game_web_bundle(zip_path: Path, release_dir: Path) -> str:
+    """Extract an untrusted Vite dist/ zip into <release_dir>/web/.
+
+    Returns the entry file path relative to the release dir. Every rejection is
+    a 400 so the publisher learns which rule the bundle broke.
+    """
+    dest = (release_dir / GAME_WEB_DIR).resolve()
+    try:
+        archive = zipfile.ZipFile(zip_path)
+    except zipfile.BadZipFile as exc:
+        raise HTTPException(status_code=400, detail="web bundle must be a zip file") from exc
+    with archive:
+        members = [info for info in archive.infolist() if not info.is_dir()]
+        if not members:
+            raise HTTPException(status_code=400, detail="web bundle is empty")
+        if len(members) > MAX_GAME_WEB_FILES:
+            raise HTTPException(status_code=400, detail=f"web bundle exceeds {MAX_GAME_WEB_FILES} files")
+        # Read sizes from the central directory before extracting: a zip bomb
+        # never gets written to disk.
+        if sum(info.file_size for info in members) > MAX_GAME_WEB_UNCOMPRESSED_BYTES:
+            cap_mb = MAX_GAME_WEB_UNCOMPRESSED_BYTES // (1024 * 1024)
+            raise HTTPException(status_code=400, detail=f"web bundle uncompressed size exceeds {cap_mb} MB")
+        targets = []
+        for info in members:
+            name = info.filename
+            if (info.external_attr >> 16) & 0o170000 == 0o120000:
+                raise HTTPException(status_code=400, detail=f"web bundle contains a symlink: {name}")
+            parts = PurePosixPath(name).parts
+            if name.startswith("/") or ".." in parts or (len(name) > 1 and name[1] == ":"):
+                raise HTTPException(status_code=400, detail=f"web bundle contains an unsafe path: {name}")
+            if PurePosixPath(name).suffix.lower() not in GAME_WEB_EXTS:
+                raise HTTPException(status_code=400, detail=f"web bundle contains an unsupported file: {name}")
+            target = (dest / name).resolve()
+            try:
+                target.relative_to(dest)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=f"web bundle escapes its release directory: {name}") from exc
+            targets.append((info, target))
+
+        names = [info.filename for info in members]
+        prefix = ""
+        if GAME_WEB_ENTRY not in names:
+            roots = {PurePosixPath(name).parts[0] for name in names if len(PurePosixPath(name).parts) > 1}
+            if len(roots) == 1 and f"{next(iter(roots))}/{GAME_WEB_ENTRY}" in names:
+                prefix = next(iter(roots))
+            else:
+                raise HTTPException(status_code=400, detail="web bundle must contain index.html at its root")
+
+        for info, target in targets:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with archive.open(info) as source, open(target, "xb") as handle:
+                shutil.copyfileobj(source, handle, UPLOAD_CHUNK_SIZE)
+    entry = f"{prefix}/{GAME_WEB_ENTRY}" if prefix else GAME_WEB_ENTRY
+    return f"{GAME_WEB_DIR}/{entry}"
+
+
 def _validate_game_release_ref(slug: str, version: str) -> None:
     if not STREAM_SLUG_RE.fullmatch(slug):
         raise HTTPException(status_code=400, detail="invalid game slug")
@@ -359,6 +431,7 @@ async def publish_game_build(
     artifact: UploadFile = File(...),
     video: UploadFile = File(...),
     poster: UploadFile = File(...),
+    web: UploadFile | None = File(None),
 ):
     require_api_token(request)
     _validate_game_release_ref(slug, version)
@@ -384,6 +457,12 @@ async def publish_game_build(
         artifact_size, artifact_sha256 = await _write_game_upload(artifact, release_dir / artifact_name)
         await _write_game_upload(video, release_dir / video_name)
         await _write_game_upload(poster, release_dir / poster_name)
+        web_preview_path = ""
+        if web is not None and web.filename:
+            bundle_zip = release_dir / "_web.zip"
+            await _write_game_upload(web, bundle_zip)
+            web_preview_path = await run_in_threadpool(_extract_game_web_bundle, bundle_zip, release_dir)
+            bundle_zip.unlink()
         build = db.create_game_build(
             slug,
             title=title.strip(),
@@ -395,14 +474,17 @@ async def publish_game_build(
             artifact_sha256=artifact_sha256,
             video_path=video_name,
             preview_path=poster_name,
+            web_preview_path=web_preview_path,
         )
     except Exception:
         shutil.rmtree(release_dir, ignore_errors=True)
         raise
+    encoded_version = quote(version, safe="")
     return {
         **build,
         "game_url": f"/games/{slug}",
-        "download_url": f"/games/{slug}/builds/{quote(version, safe='')}/public-download",
+        "download_url": f"/games/{slug}/builds/{encoded_version}/public-download",
+        "preview_url": f"/games/{slug}/builds/{encoded_version}/play/" if web_preview_path else None,
     }
 
 
@@ -1829,6 +1911,9 @@ def _game_page_context(slug: str) -> dict:
         except OSError:
             video_revision = 0
         build["video_url"] = f"/games/{slug}/builds/{encoded_version}/public-video?rev={video_revision}"
+        build["preview_url"] = (
+            f"/games/{slug}/builds/{encoded_version}/play/" if build[GAME_WEB_FIELD] else None
+        )
     return game
 
 
@@ -1883,16 +1968,25 @@ def _resolve_game_release_path(slug: str, version: str, stored_name: str) -> Pat
     return path
 
 
-def _game_file_response(path: Path, *, public: bool, download: bool, fallback_media_type: str):
+def _game_file_response(
+    path: Path,
+    *,
+    public: bool,
+    download: bool,
+    fallback_media_type: str,
+    extra_headers: dict[str, str] | None = None,
+):
+    headers = {
+        "Cache-Control": f"{'public' if public else 'private'}, max-age=31536000, immutable",
+        "Referrer-Policy": "no-referrer",
+    }
+    headers.update(extra_headers or {})
     return FileResponse(
         path,
         media_type=mimetypes.guess_type(path.name)[0] or fallback_media_type,
         filename=path.name if download else None,
         content_disposition_type="attachment" if download else "inline",
-        headers={
-            "Cache-Control": f"{'public' if public else 'private'}, max-age=31536000, immutable",
-            "Referrer-Policy": "no-referrer",
-        },
+        headers=headers,
     )
 
 
@@ -1917,6 +2011,30 @@ def public_download_game_build(slug: str, version: str):
 @app.get("/games/{slug}/builds/{version}/video")
 def watch_game_build(request: Request, slug: str, version: str):
     return _private_game_release_file(request, slug, version, GAME_VIDEO_FIELD, download=False)
+
+
+@app.get("/games/{slug}/builds/{version}/play/{path:path}")
+def public_play_game_build(slug: str, version: str, path: str = ""):
+    """Serve one file of a release's browser preview bundle, publicly and inertly."""
+    _validate_game_release_ref(slug, version)
+    build = db.get_game_build(slug, version)
+    if build is None:
+        raise HTTPException(status_code=404, detail="game build not found")
+    entry = build[GAME_WEB_FIELD]
+    if not entry:
+        raise HTTPException(status_code=404, detail="game build has no browser preview")
+    stored_name = entry if not path else f"{PurePosixPath(entry).parent}/{path}"
+    resolved = _resolve_game_release_path(slug, version, stored_name)
+    return _game_file_response(
+        resolved,
+        public=True,
+        download=False,
+        fallback_media_type="application/octet-stream",
+        extra_headers={
+            "Content-Security-Policy": GAME_WEB_CSP,
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @app.get("/games/{slug}/builds/{version}/public-video")
