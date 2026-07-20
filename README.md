@@ -142,6 +142,29 @@ portal game publish \
   --video gameplay.mp4 --poster preview.jpg
 ```
 
+### Browser preview
+
+Pass `--web dist.zip` to attach a browser-playable preview to the release:
+
+```bash
+portal game publish ... --web dist.zip
+```
+
+`dist.zip` is a zip of the game's built Vite `dist/` directory. Build it with
+`base: './'` so the bundle's asset URLs stay relative — absolute `/assets/...`
+paths will 404 inside the preview. The bundle is extracted into the release
+directory and served publicly at `/games/<slug>/builds/<version>/play/`.
+
+The game page then frames that preview on the release's version tab with device
+presets (iPhone SE, iPhone 15 Pro, iPhone 15 Pro Max, Pixel 8, iPad) and a
+portrait/landscape toggle that change the iframe's real pixel viewport. The
+preview is **rapid design review only** — it is the web layer in a sandboxed
+iframe, not native-device or performance proof, and Capacitor plugin calls will
+not work there. Verify on a real device before release.
+
+Releases published without `--web` are unchanged: they render a short "no
+browser preview" note and keep their video, poster, and permanent download.
+
 The poster must be JPEG; use a 1200x630 frame so WhatsApp and other link
 previews display cleanly. Record gameplay at normal speed. A changelog must
 describe only the delta from the immediately preceding Portal release. For a

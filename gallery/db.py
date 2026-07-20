@@ -195,6 +195,8 @@ def _validate_schema_version(conn: sqlite3.Connection, version: int) -> None:
         _validate_v9_schema(conn)
     if version >= 10:
         _validate_v10_schema(conn)
+    if version >= 11:
+        _validate_v11_schema(conn)
 
 
 def _migrate_v1(conn: sqlite3.Connection) -> None:
@@ -378,6 +380,15 @@ def _validate_v10_schema(conn: sqlite3.Connection) -> None:
         raise RuntimeError("schema v10 missing game_builds column: preview_path")
 
 
+def _migrate_v11(conn: sqlite3.Connection) -> None:
+    _add_column_if_missing(conn, "game_builds", "web_preview_path", "web_preview_path TEXT NOT NULL DEFAULT ''")
+
+
+def _validate_v11_schema(conn: sqlite3.Connection) -> None:
+    if "web_preview_path" not in _column_names(conn, "game_builds"):
+        raise RuntimeError("schema v11 missing game_builds column: web_preview_path")
+
+
 MIGRATIONS = [
     (1, _migrate_v1),
     (2, _migrate_v2),
@@ -389,6 +400,7 @@ MIGRATIONS = [
     (8, _migrate_v8),
     (9, _migrate_v9),
     (10, _migrate_v10),
+    (11, _migrate_v11),
 ]
 
 
@@ -461,6 +473,7 @@ def create_game_build(
     artifact_sha256: str,
     video_path: str,
     preview_path: str,
+    web_preview_path: str = "",
     build_id: str | None = None,
     created_at: str | None = None,
 ) -> dict:
@@ -485,13 +498,15 @@ def create_game_build(
                 """
                 INSERT INTO game_builds (
                     id, game_slug, version, changelog_md, artifact_path,
-                    artifact_size, artifact_sha256, video_path, preview_path, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    artifact_size, artifact_sha256, video_path, preview_path,
+                    web_preview_path, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 RETURNING *
                 """,
                 (
                     build_id, slug, version, changelog_md, artifact_path,
-                    artifact_size, artifact_sha256, video_path, preview_path, timestamp,
+                    artifact_size, artifact_sha256, video_path, preview_path,
+                    web_preview_path, timestamp,
                 ),
             ).fetchone()
             conn.commit()

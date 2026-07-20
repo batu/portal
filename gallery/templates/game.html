@@ -32,6 +32,41 @@
     {% if not loop.first %}hidden{% endif %}
   >
     <div class="release-media">
+      {% if build.preview_url %}
+      <section class="play-surface" data-play-surface aria-label="Browser preview of {{ build.version }}">
+        <div class="play-controls">
+          <label>Device
+            <select data-device-preset>
+              <option value="iphone-se">iPhone SE · 375×667</option>
+              <option value="iphone-15-pro" selected>iPhone 15 Pro · 393×852</option>
+              <option value="iphone-15-pro-max">iPhone 15 Pro Max · 430×932</option>
+              <option value="pixel-8">Pixel 8 · 412×915</option>
+              <option value="ipad">iPad 10.9" · 820×1180</option>
+            </select>
+          </label>
+          <button type="button" class="orientation-toggle" data-orientation-toggle aria-pressed="false">Portrait</button>
+          <span class="play-dims" data-play-dims></span>
+        </div>
+        <p class="play-disclaimer">Browser preview — rapid design review. Not native-device or performance proof; verify on a real device before release.</p>
+        <div class="device-frame" data-device-frame>
+          <iframe
+            data-play-frame
+            data-src="{{ build.preview_url }}"
+            sandbox="allow-scripts"
+            allow="autoplay; gamepad"
+            title="Browser preview of {{ game.title }} {{ build.version }}"
+          ></iframe>
+          <div class="safe-area-guide safe-area-top" data-safe-top aria-hidden="true"></div>
+          <div class="safe-area-guide safe-area-bottom" data-safe-bottom aria-hidden="true"></div>
+          <div class="play-state play-loading" data-play-loading>Starting build…</div>
+          <div class="play-state play-error" data-play-error hidden>
+            Preview failed to load for {{ build.version }}. <a href="{{ build.download_url }}">Download the build</a> instead.
+          </div>
+        </div>
+      </section>
+      {% else %}
+      <p class="play-absent">No browser preview for this build — download the native build below.</p>
+      {% endif %}
       <video controls preload="metadata" playsinline data-src="{{ build.video_url }}"{% if loop.first %} src="{{ build.video_url }}"{% endif %}></video>
     </div>
     <div class="release-copy">

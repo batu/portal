@@ -240,9 +240,12 @@ def cmd_game(args):
                 title=args.title, version=args.version, changelog=changelog,
                 artifact=_resolve_file(args.artifact), video=_resolve_file(args.video),
                 poster=_resolve_file(args.poster), description=args.description,
+                web=_resolve_file(args.web) if args.web else None,
             )
             result["game_url"] = f"{base_url}{result['game_url']}"
             result["download_url"] = f"{base_url}{result['download_url']}"
+            if result.get("preview_url"):
+                result["preview_url"] = f"{base_url}{result['preview_url']}"
         elif args.game_command == "changelog":
             changelog = Path(args.changelog_file).read_text() if args.changelog_file else args.changelog
             result = client.update_game_changelog(base_url, token, args.slug, args.version, changelog)
@@ -585,6 +588,7 @@ def main():
     gp.add_argument("--artifact", required=True)
     gp.add_argument("--video", required=True)
     gp.add_argument("--poster", required=True, help="JPEG preview image, ideally 1200x630")
+    gp.add_argument("--web", help="Zip of the built Vite web bundle (dist/, built with base: './') for the browser preview")
 
     gp = game_sub.add_parser("changelog", help="Correct a published release changelog")
     gp.add_argument("--slug", required=True, type=_stream_slug)
