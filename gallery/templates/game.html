@@ -47,6 +47,7 @@
           <button type="button" class="orientation-toggle" data-orientation-toggle aria-pressed="false">Portrait</button>
           <span class="play-dims" data-play-dims></span>
         </div>
+        <p class="play-disclaimer">Browser preview — rapid design review. Not native-device or performance proof; verify on a real device before release.</p>
         <div class="device-frame" data-device-frame>
           <iframe
             data-play-frame
@@ -62,7 +63,6 @@
             Preview failed to load for {{ build.version }}. <a href="{{ build.download_url }}">Download the build</a> instead.
           </div>
         </div>
-        <p class="play-disclaimer">Browser preview — rapid design review. Not native-device or performance proof; verify on a real device before release.</p>
       </section>
       {% else %}
       <p class="play-absent">No browser preview for this build — download the native build below.</p>
