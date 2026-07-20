@@ -193,6 +193,8 @@ def _validate_schema_version(conn: sqlite3.Connection, version: int) -> None:
         _validate_v8_schema(conn)
     if version >= 9:
         _validate_v9_schema(conn)
+    if version >= 10:
+        _validate_v10_schema(conn)
 
 
 def _migrate_v1(conn: sqlite3.Connection) -> None:
@@ -367,6 +369,15 @@ def _validate_v9_schema(conn: sqlite3.Connection) -> None:
             raise RuntimeError(f"schema v9 missing {table} columns: {', '.join(sorted(missing))}")
 
 
+def _migrate_v10(conn: sqlite3.Connection) -> None:
+    _add_column_if_missing(conn, "game_builds", "preview_path", "preview_path TEXT NOT NULL DEFAULT 'preview.jpg'")
+
+
+def _validate_v10_schema(conn: sqlite3.Connection) -> None:
+    if "preview_path" not in _column_names(conn, "game_builds"):
+        raise RuntimeError("schema v10 missing game_builds column: preview_path")
+
+
 MIGRATIONS = [
     (1, _migrate_v1),
     (2, _migrate_v2),
@@ -377,6 +388,7 @@ MIGRATIONS = [
     (7, _migrate_v7),
     (8, _migrate_v8),
     (9, _migrate_v9),
+    (10, _migrate_v10),
 ]
 
 
@@ -448,6 +460,7 @@ def create_game_build(
     artifact_size: int,
     artifact_sha256: str,
     video_path: str,
+    preview_path: str,
     build_id: str | None = None,
     created_at: str | None = None,
 ) -> dict:
@@ -472,13 +485,13 @@ def create_game_build(
                 """
                 INSERT INTO game_builds (
                     id, game_slug, version, changelog_md, artifact_path,
-                    artifact_size, artifact_sha256, video_path, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    artifact_size, artifact_sha256, video_path, preview_path, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 RETURNING *
                 """,
                 (
                     build_id, slug, version, changelog_md, artifact_path,
-                    artifact_size, artifact_sha256, video_path, timestamp,
+                    artifact_size, artifact_sha256, video_path, preview_path, timestamp,
                 ),
             ).fetchone()
             conn.commit()
@@ -497,6 +510,47 @@ def get_game_build(slug: str, version: str) -> dict | None:
             (slug, version),
         ).fetchone()
         return dict(row) if row is not None else None
+
+
+def get_latest_game_build(slug: str) -> dict | None:
+    conn = connect()
+    with _lock:
+        row = conn.execute(
+            "SELECT * FROM game_builds WHERE game_slug = ? ORDER BY created_at DESC, rowid DESC LIMIT 1",
+            (slug,),
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+
+def update_game_build_changelog(slug: str, version: str, changelog_md: str) -> dict | None:
+    conn = connect()
+    with _lock:
+        row = conn.execute(
+            "UPDATE game_builds SET changelog_md = ? WHERE game_slug = ? AND version = ? RETURNING *",
+            (changelog_md, slug, version),
+        ).fetchone()
+        conn.commit()
+        return dict(row) if row is not None else None
+
+
+def delete_game_build(slug: str, version: str) -> dict | None:
+    conn = connect()
+    with _lock:
+        try:
+            row = conn.execute(
+                "DELETE FROM game_builds WHERE game_slug = ? AND version = ? RETURNING *",
+                (slug, version),
+            ).fetchone()
+            if row is not None:
+                conn.execute(
+                    "DELETE FROM games WHERE slug = ? AND NOT EXISTS (SELECT 1 FROM game_builds WHERE game_slug = ?)",
+                    (slug, slug),
+                )
+            conn.commit()
+            return dict(row) if row is not None else None
+        except Exception:
+            conn.rollback()
+            raise
 
 
 def get_game(slug: str) -> dict | None:

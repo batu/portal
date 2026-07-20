@@ -127,6 +127,40 @@ By default the CLI reads `~/.gallery/config.json` for the server URL and
 token; set `GALLERY_URL` / `GALLERY_TOKEN` to point at a different server
 (e.g. in tests) without touching that file.
 
+## Game releases
+
+Portal publishes permanent, downloadable game releases at `/games/<slug>`.
+Each release gets its own version tab, changelog, real-time gameplay video,
+share preview, and immutable artifact URL. Release files live outside Git in
+`~/.gallery/games/<slug>/<version>/`.
+
+```bash
+portal game publish \
+  --slug marble-run --title "Marble Run" --version 2026.07.20-1 \
+  --description "Guide marbles through handcrafted tracks." \
+  --changelog-file CHANGELOG.md --artifact MarbleRun.apk \
+  --video gameplay.mp4 --poster preview.jpg
+```
+
+The poster must be JPEG; use a 1200x630 frame so WhatsApp and other link
+previews display cleanly. Record gameplay at normal speed. A changelog must
+describe only the delta from the immediately preceding Portal release. For a
+game's first release, say `Initial release` instead of inventing a comparison.
+
+Published release files are immutable. Correct release notes or recoverably
+remove a mistaken release with the supported commands:
+
+```bash
+portal game changelog --slug marble-run --version 2026.07.20-1 \
+  --changelog-file CHANGELOG.md
+portal game remove --slug marble-run --version 2026.07.20-1 --yes
+```
+
+Removal moves the release directory under `~/.gallery/trash/games/` before
+removing its database record. Public game pages, videos, preview images, and
+downloads are read-only; publishing and release management require the API
+token.
+
 ## Portal streams
 
 Portal is the current agent-facing surface of this service. Use the `portal`

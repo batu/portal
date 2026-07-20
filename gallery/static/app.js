@@ -493,7 +493,14 @@
     panels.forEach(function (panel) {
       var active = panel.dataset.buildPanel === selected.dataset.buildTab;
       panel.hidden = !active;
-      if (!active) panel.querySelectorAll("video").forEach(function (video) { video.pause(); });
+      panel.querySelectorAll("video").forEach(function (video) {
+        if (active && !video.getAttribute("src")) {
+          video.setAttribute("src", video.dataset.src);
+          video.load();
+        } else if (!active) {
+          video.pause();
+        }
+      });
     });
     if (updateHash) history.replaceState(null, "", "#build-" + selected.dataset.buildTab);
     selected.scrollIntoView({ inline: "center", block: "nearest" });

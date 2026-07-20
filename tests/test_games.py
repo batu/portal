@@ -20,6 +20,7 @@ def publish(client, token, *, version="1.0.0"):
         files={
             "artifact": ("marble-run.apk", b"build-data", "application/vnd.android.package-archive"),
             "video": ("gameplay.mp4", b"video-data", "video/mp4"),
+            "poster": ("preview.jpg", b"poster-data", "image/jpeg"),
         },
     )
 
@@ -39,6 +40,7 @@ def test_publish_persists_immutable_release_files_and_metadata(client, token):
     assert body["artifact_sha256"] == hashlib.sha256(b"build-data").hexdigest()
     assert (config.games_dir() / "marble-run" / "1.0.0" / "marble-run.apk").read_bytes() == b"build-data"
     assert (config.games_dir() / "marble-run" / "1.0.0" / "gameplay.mp4").read_bytes() == b"video-data"
+    assert (config.games_dir() / "marble-run" / "1.0.0" / "preview.jpg").read_bytes() == b"poster-data"
 
     duplicate = publish(client, token)
     assert duplicate.status_code == 409
@@ -54,6 +56,7 @@ def test_publish_requires_auth_changelog_and_video(client, token):
         files={
             "artifact": ("build.zip", b"x", "application/zip"),
             "video": ("gameplay.mp4", b"y", "video/mp4"),
+            "poster": ("preview.jpg", b"z", "image/jpeg"),
         },
     )
     assert missing_changelog.status_code == 422
@@ -65,6 +68,7 @@ def test_publish_requires_auth_changelog_and_video(client, token):
         files={
             "artifact": ("build.zip", b"x", "application/zip"),
             "video": ("notes.txt", b"y", "text/plain"),
+            "poster": ("preview.jpg", b"z", "image/jpeg"),
         },
     )
     assert bad_video.status_code == 400
@@ -77,7 +81,7 @@ def test_games_pages_render_video_changelog_and_stable_download(client, token):
     assert page.status_code == 200
     assert "Marble Run" in page.text
     assert "First downloadable build" in page.text
-    assert 'src="/games/marble-run/builds/1.0.0/public-video?rev=' in page.text
+    assert 'data-src="/games/marble-run/builds/1.0.0/public-video?rev=' in page.text
     assert 'href="/games/marble-run/builds/1.0.0/public-download"' in page.text
     assert "Download APK · 1.0.0" in page.text
     assert 'role="tablist" aria-label="Build versions"' in page.text
@@ -95,9 +99,6 @@ def test_games_pages_render_video_changelog_and_stable_download(client, token):
 
 def test_game_link_preview_is_public_to_whatsapp_with_image_and_video(client, token):
     assert publish(client, token, version="1.0.0").status_code == 200
-    release_dir = config.games_dir() / "marble-run" / "1.0.0"
-    (release_dir / "preview.jpg").write_bytes(b"poster-data")
-
     preview = client.get(
         "/games/marble-run",
         headers={"User-Agent": "WhatsApp/2.26.1"},
@@ -157,6 +158,7 @@ def test_game_changelog_is_sanitized_before_safe_template_render(client, token):
         files={
             "artifact": ("build.zip", b"build", "application/zip"),
             "video": ("game.mp4", b"video", "video/mp4"),
+            "poster": ("preview.jpg", b"poster", "image/jpeg"),
         },
     )
     assert response.status_code == 200
@@ -175,13 +177,58 @@ def test_publish_sanitizes_traversal_shaped_upload_names(client, token):
         files={
             "artifact": ("../../outside build.zip", b"build", "application/zip"),
             "video": ("../capture final.mp4", b"video", "video/mp4"),
+            "poster": ("../preview final.jpg", b"poster", "image/jpeg"),
         },
     )
     assert response.status_code == 200
     build = response.json()
     assert build["artifact_path"] == "outside_build.zip"
     assert build["video_path"] == "capture_final.mp4"
+    assert build["preview_path"] == "preview_final.jpg"
     release_dir = config.games_dir() / "marble-run" / "1.0.0"
     assert (release_dir / build["artifact_path"]).read_bytes() == b"build"
     assert (release_dir / build["video_path"]).read_bytes() == b"video"
+    assert (release_dir / build["preview_path"]).read_bytes() == b"poster"
     assert not (config.games_dir() / "outside build.zip").exists()
+
+
+def test_changelog_correction_and_recoverable_release_removal(client, token):
+    assert publish(client, token).status_code == 200
+
+    updated = client.post(
+        "/api/games/marble-run/builds/1.0.0/changelog",
+        headers=auth_headers(token),
+        json={"changelog": "- Correct release delta"},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["changelog_md"] == "- Correct release delta"
+
+    removed = client.delete(
+        "/api/games/marble-run/builds/1.0.0",
+        headers=auth_headers(token),
+    )
+    assert removed.status_code == 200
+    trash_path = config.data_dir() / removed.json()["recoverable_path"]
+    assert (trash_path / "marble-run.apk").read_bytes() == b"build-data"
+    assert db.get_game("marble-run") is None
+    assert not (config.games_dir() / "marble-run" / "1.0.0").exists()
+
+
+def test_game_release_management_requires_auth_and_valid_poster(client, token):
+    bad_poster = client.post(
+        "/api/games/marble-run/builds",
+        headers=auth_headers(token),
+        data={"title": "Marble Run", "version": "1.0.0", "changelog": "Initial release"},
+        files={
+            "artifact": ("build.apk", b"build", "application/octet-stream"),
+            "video": ("game.mp4", b"video", "video/mp4"),
+            "poster": ("preview.png", b"poster", "image/png"),
+        },
+    )
+    assert bad_poster.status_code == 400
+    assert publish(client, token).status_code == 200
+    assert client.post(
+        "/api/games/marble-run/builds/1.0.0/changelog",
+        json={"changelog": "changed"},
+    ).status_code == 401
+    assert client.delete("/api/games/marble-run/builds/1.0.0").status_code == 401

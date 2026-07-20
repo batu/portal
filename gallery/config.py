@@ -38,6 +38,10 @@ def games_dir() -> Path:
     return data_dir() / "games"
 
 
+def game_trash_dir() -> Path:
+    return data_dir() / "trash" / "games"
+
+
 def config_path() -> Path:
     return data_dir() / "config.json"
 

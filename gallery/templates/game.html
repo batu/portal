@@ -32,7 +32,7 @@
     {% if not loop.first %}hidden{% endif %}
   >
     <div class="release-media">
-      <video controls preload="metadata" playsinline src="{{ build.video_url }}"></video>
+      <video controls preload="metadata" playsinline data-src="{{ build.video_url }}"{% if loop.first %} src="{{ build.video_url }}"{% endif %}></video>
     </div>
     <div class="release-copy">
       <div class="release-kicker">{% if loop.first %}Latest build{% else %}Build{% endif %} · {{ build.created_at|ago }}</div>

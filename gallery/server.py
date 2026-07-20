@@ -30,6 +30,7 @@ from . import config, db, notify
 log = logging.getLogger("gallery.server")
 
 VIDEO_EXTS = {".mp4", ".mov", ".webm", ".m4v", ".avi"}
+GAME_PREVIEW_EXTS = {".jpg", ".jpeg"}
 HTML_EXTS = {".html", ".htm"}
 # Interactive view HTML runs producer JS against the authed origin. Accepted for
 # the single-user tailnet deployment; revisit before any public exposure.
@@ -45,8 +46,9 @@ MAX_BODY_JSON_BYTES = 1_000_000
 MAX_JOURNEY_STEPS = 100
 MAX_STEP_MEDIA = 30
 GAME_VERSION_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,62}[A-Za-z0-9])?$")
-GAME_ARTIFACT_FILE = ("artifact_path", True)
-GAME_VIDEO_FILE = ("video_path", False)
+GAME_ARTIFACT_FIELD = "artifact_path"
+GAME_VIDEO_FIELD = "video_path"
+GAME_PREVIEW_FIELD = "preview_path"
 STREAM_SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?$")
 SAFE_SEGMENT_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 
@@ -328,18 +330,14 @@ def health():
 
 
 async def _write_game_upload(upload: UploadFile, destination: Path) -> tuple[int, str]:
-    size = 0
     digest = hashlib.sha256()
-    with destination.open("xb") as output:
-        while chunk := await upload.read(UPLOAD_CHUNK_SIZE):
-            size += len(chunk)
-            if size > POST_UPLOAD_SOFT_CAP_BYTES:
-                raise HTTPException(
-                    status_code=413,
-                    detail=f"game build file exceeds {POST_UPLOAD_SOFT_CAP_BYTES // (1024 * 1024)} MB",
-                )
-            digest.update(chunk)
-            output.write(chunk)
+    size = await _stream_upload(
+        upload,
+        destination,
+        mode="xb",
+        size_limit=POST_UPLOAD_SOFT_CAP_BYTES,
+        digest=digest,
+    )
     return size, digest.hexdigest()
 
 
@@ -360,6 +358,7 @@ async def publish_game_build(
     description: str = Form(""),
     artifact: UploadFile = File(...),
     video: UploadFile = File(...),
+    poster: UploadFile = File(...),
 ):
     require_api_token(request)
     _validate_game_release_ref(slug, version)
@@ -371,8 +370,11 @@ async def publish_game_build(
         raise HTTPException(status_code=409, detail="build version already exists")
     artifact_name = _safe_upload_name(artifact.filename, "build.zip")
     video_name = _safe_upload_name(video.filename, "build.mp4")
+    poster_name = _safe_upload_name(poster.filename, "preview.jpg")
     if Path(video_name).suffix.lower() not in VIDEO_EXTS:
         raise HTTPException(status_code=400, detail="video must be a supported video file")
+    if Path(poster_name).suffix.lower() not in GAME_PREVIEW_EXTS:
+        raise HTTPException(status_code=400, detail="poster must be a JPEG image")
     release_dir = config.games_dir() / slug / version
     try:
         release_dir.mkdir(parents=True, exist_ok=False)
@@ -381,6 +383,7 @@ async def publish_game_build(
     try:
         artifact_size, artifact_sha256 = await _write_game_upload(artifact, release_dir / artifact_name)
         await _write_game_upload(video, release_dir / video_name)
+        await _write_game_upload(poster, release_dir / poster_name)
         build = db.create_game_build(
             slug,
             title=title.strip(),
@@ -391,6 +394,7 @@ async def publish_game_build(
             artifact_size=artifact_size,
             artifact_sha256=artifact_sha256,
             video_path=video_name,
+            preview_path=poster_name,
         )
     except Exception:
         shutil.rmtree(release_dir, ignore_errors=True)
@@ -400,6 +404,39 @@ async def publish_game_build(
         "game_url": f"/games/{slug}",
         "download_url": f"/games/{slug}/builds/{quote(version, safe='')}/public-download",
     }
+
+
+@app.post("/api/games/{slug}/builds/{version}/changelog")
+async def update_game_build_changelog(request: Request, slug: str, version: str):
+    require_api_token(request)
+    _validate_game_release_ref(slug, version)
+    body = await _json_object_body(request)
+    changelog = _bounded_text(body.get("changelog"), "changelog", MAX_MESSAGE_TEXT_LENGTH)
+    build = db.update_game_build_changelog(slug, version, changelog)
+    if build is None:
+        raise HTTPException(status_code=404, detail="game build not found")
+    return build
+
+
+@app.delete("/api/games/{slug}/builds/{version}")
+def remove_game_build(request: Request, slug: str, version: str):
+    require_api_token(request)
+    _validate_game_release_ref(slug, version)
+    if db.get_game_build(slug, version) is None:
+        raise HTTPException(status_code=404, detail="game build not found")
+    release_dir = config.games_dir() / slug / version
+    trash_dir = config.game_trash_dir() / slug / f"{version}-{secrets.token_hex(4)}"
+    trash_dir.parent.mkdir(parents=True, exist_ok=True)
+    if release_dir.exists():
+        shutil.move(str(release_dir), str(trash_dir))
+    try:
+        removed = db.delete_game_build(slug, version)
+    except Exception:
+        if trash_dir.exists():
+            release_dir.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(trash_dir), str(release_dir))
+        raise
+    return {"removed": removed, "recoverable_path": str(trash_dir.relative_to(config.data_dir()))}
 
 
 def _transcode_gifs_to_loop_mp4(dest_dir: Path, media_paths: list[str]) -> None:
@@ -617,14 +654,32 @@ def _before_media_path(filename: str | None) -> str:
 
 
 async def _write_upload(upload: UploadFile, dest_path: Path) -> int:
+    return await _stream_upload(upload, dest_path)
+
+
+async def _stream_upload(
+    upload: UploadFile,
+    dest_path: Path,
+    *,
+    mode: str = "wb",
+    size_limit: int | None = None,
+    digest=None,
+) -> int:
     total = 0
-    with dest_path.open("wb") as out:
+    with dest_path.open(mode) as out:
         while True:
             chunk = await upload.read(UPLOAD_CHUNK_SIZE)
             if not chunk:
                 break
             total += len(chunk)
-            out.write(chunk)
+            if size_limit is not None and total > size_limit:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"game build file exceeds {size_limit // (1024 * 1024)} MB",
+                )
+            if digest is not None:
+                digest.update(chunk)
+            await run_in_threadpool(out.write, chunk)
     return total
 
 
@@ -1769,7 +1824,10 @@ def _game_page_context(slug: str) -> dict:
         encoded_version = quote(build["version"], safe="")
         build["download_url"] = f"/games/{slug}/builds/{encoded_version}/public-download"
         video_path = config.games_dir() / slug / build["version"] / build["video_path"]
-        video_revision = video_path.stat().st_mtime_ns if video_path.is_file() else 0
+        try:
+            video_revision = video_path.stat().st_mtime_ns
+        except OSError:
+            video_revision = 0
         build["video_url"] = f"/games/{slug}/builds/{encoded_version}/public-video?rev={video_revision}"
     return game
 
@@ -1801,84 +1859,70 @@ def web_game_detail(request: Request, slug: str):
     return response
 
 
-def _game_release_file(request: Request, slug: str, version: str, file_spec: tuple[str, bool]):
-    if not web_token_ok(request):
-        return _login_redirect(request)
+def _resolve_game_build_file(slug: str, version: str, field: str | None = None, *, filename: str | None = None) -> Path:
     _validate_game_release_ref(slug, version)
     build = db.get_game_build(slug, version)
     if build is None:
         raise HTTPException(status_code=404, detail="game build not found")
-    field, download = file_spec
+    stored_name = filename
+    if stored_name is None:
+        assert field is not None
+        stored_name = build[field]
+    return _resolve_game_release_path(slug, version, stored_name)
+
+
+def _resolve_game_release_path(slug: str, version: str, stored_name: str) -> Path:
     release_root = (config.games_dir() / slug / version).resolve()
-    path = (release_root / build[field]).resolve()
+    path = (release_root / stored_name).resolve()
     try:
         path.relative_to(release_root)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail="game build file not found") from exc
     if not path.is_file():
         raise HTTPException(status_code=404, detail="game build file not found")
+    return path
+
+
+def _game_file_response(path: Path, *, public: bool, download: bool, fallback_media_type: str):
     return FileResponse(
         path,
-        media_type=mimetypes.guess_type(path.name)[0] or "application/octet-stream",
+        media_type=mimetypes.guess_type(path.name)[0] or fallback_media_type,
         filename=path.name if download else None,
         content_disposition_type="attachment" if download else "inline",
-        headers={"Cache-Control": "private, max-age=31536000, immutable", "Referrer-Policy": "no-referrer"},
+        headers={
+            "Cache-Control": f"{'public' if public else 'private'}, max-age=31536000, immutable",
+            "Referrer-Policy": "no-referrer",
+        },
     )
+
+
+def _private_game_release_file(request: Request, slug: str, version: str, field: str, *, download: bool):
+    if not web_token_ok(request):
+        return _login_redirect(request)
+    path = _resolve_game_build_file(slug, version, field)
+    return _game_file_response(path, public=False, download=download, fallback_media_type="application/octet-stream")
 
 
 @app.get("/games/{slug}/builds/{version}/download")
 def download_game_build(request: Request, slug: str, version: str):
-    return _game_release_file(request, slug, version, GAME_ARTIFACT_FILE)
+    return _private_game_release_file(request, slug, version, GAME_ARTIFACT_FIELD, download=True)
 
 
 @app.get("/games/{slug}/builds/{version}/public-download")
 def public_download_game_build(slug: str, version: str):
-    _validate_game_release_ref(slug, version)
-    build = db.get_game_build(slug, version)
-    if build is None:
-        raise HTTPException(status_code=404, detail="game build not found")
-    release_root = (config.games_dir() / slug / version).resolve()
-    path = (release_root / build["artifact_path"]).resolve()
-    try:
-        path.relative_to(release_root)
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail="game build file not found") from exc
-    if not path.is_file():
-        raise HTTPException(status_code=404, detail="game build file not found")
-    return FileResponse(
-        path,
-        media_type=mimetypes.guess_type(path.name)[0] or "application/octet-stream",
-        filename=path.name,
-        content_disposition_type="attachment",
-        headers={"Cache-Control": "public, max-age=31536000, immutable", "Referrer-Policy": "no-referrer"},
-    )
+    path = _resolve_game_build_file(slug, version, GAME_ARTIFACT_FIELD)
+    return _game_file_response(path, public=True, download=True, fallback_media_type="application/octet-stream")
 
 
 @app.get("/games/{slug}/builds/{version}/video")
 def watch_game_build(request: Request, slug: str, version: str):
-    return _game_release_file(request, slug, version, GAME_VIDEO_FILE)
+    return _private_game_release_file(request, slug, version, GAME_VIDEO_FIELD, download=False)
 
 
 @app.get("/games/{slug}/builds/{version}/public-video")
 def public_watch_game_build(slug: str, version: str):
-    _validate_game_release_ref(slug, version)
-    build = db.get_game_build(slug, version)
-    if build is None:
-        raise HTTPException(status_code=404, detail="game build not found")
-    release_root = (config.games_dir() / slug / version).resolve()
-    path = (release_root / build["video_path"]).resolve()
-    try:
-        path.relative_to(release_root)
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail="game build file not found") from exc
-    if not path.is_file():
-        raise HTTPException(status_code=404, detail="game build file not found")
-    return FileResponse(
-        path,
-        media_type=mimetypes.guess_type(path.name)[0] or "video/mp4",
-        content_disposition_type="inline",
-        headers={"Cache-Control": "public, max-age=31536000, immutable", "Referrer-Policy": "no-referrer"},
-    )
+    path = _resolve_game_build_file(slug, version, GAME_VIDEO_FIELD)
+    return _game_file_response(path, public=True, download=False, fallback_media_type="video/mp4")
 
 
 @app.get("/s/{slug}", response_class=HTMLResponse)
@@ -2037,7 +2081,7 @@ def _game_og_context(request: Request, game: dict) -> dict:
     latest = game["builds"][0] if game.get("builds") else None
     image_path = None
     if latest is not None:
-        image_path = config.games_dir() / game["slug"] / latest["version"] / "preview.jpg"
+        image_path = config.games_dir() / game["slug"] / latest["version"] / latest[GAME_PREVIEW_FIELD]
     return {
         "title": f'{game["title"]} — {latest["version"]}' if latest else game["title"],
         "description": game.get("description") or "",
@@ -2088,24 +2132,24 @@ def _game_crawler_preview_response(request: Request, game: dict) -> HTMLResponse
 def _latest_game_release_path(slug: str, filename: str | None = None) -> tuple[dict, Path]:
     if not STREAM_SLUG_RE.fullmatch(slug):
         raise HTTPException(status_code=404, detail="not found")
-    game = db.get_game(slug)
-    if game is None or not game.get("builds"):
+    build = db.get_latest_game_build(slug)
+    if build is None:
         raise HTTPException(status_code=404, detail="not found")
-    build = game["builds"][0]
-    release_root = (config.games_dir() / slug / build["version"]).resolve()
-    path = (release_root / (filename or build["video_path"])).resolve()
     try:
-        path.relative_to(release_root)
-    except ValueError as exc:
+        path = _resolve_game_release_path(
+            slug,
+            build["version"],
+            filename or build[GAME_VIDEO_FIELD],
+        )
+    except HTTPException as exc:
         raise HTTPException(status_code=404, detail="not found") from exc
-    if not path.is_file():
-        raise HTTPException(status_code=404, detail="not found")
     return build, path
 
 
 @app.get("/og/games/{slug}")
 def get_game_og_image(slug: str):
-    _, path = _latest_game_release_path(slug, "preview.jpg")
+    build, _ = _latest_game_release_path(slug)
+    path = _resolve_game_release_path(slug, build["version"], build[GAME_PREVIEW_FIELD])
     return FileResponse(
         path,
         media_type="image/jpeg",
