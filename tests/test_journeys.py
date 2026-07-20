@@ -470,3 +470,40 @@ def test_seed_script_local_mode_is_idempotent_on_rerun(data_dir):
     seeded_again = module._seed_local("wool-crush-demo")  # fixed p_demoimg id must not crash
     assert seeded_again["slug"] == "wool-crush-demo"
     assert len(seeded_again["doc"]["steps"]) == 2
+
+
+# --- markdown summaries and optional subtitle ---
+
+
+def test_step_summary_renders_markdown_and_strips_unsafe_html(client, token):
+    _put_journey(
+        client, token, "wool-crush", "Wool Crush",
+        [{"title": "Findings", "summary": "**bold** and a list:\n\n- one\n- two\n\n<script>alert(1)</script>"}],
+    )
+
+    page = client.get(f"/g/wool-crush?token={token}")
+
+    assert page.status_code == 200
+    assert "<strong>bold</strong>" in page.text
+    assert "<li>one</li>" in page.text
+    # Raw markdown must not leak through, and the sanitizer must drop scripts.
+    assert "**bold**" not in page.text
+    assert "<script>alert(1)</script>" not in page.text
+
+
+def test_journey_subtitle_overrides_game_lede_and_is_optional(client, token):
+    client.put(
+        "/api/journeys/with-subtitle",
+        headers=auth_headers(token),
+        json={"title": "Research", "subtitle": "Live status for a field investigation",
+              "steps": [{"title": "Step"}]},
+    )
+    _put_journey(client, token, "no-subtitle", "Wool Crush", [{"title": "Step"}])
+
+    with_sub = client.get(f"/g/with-subtitle?token={token}")
+    without = client.get(f"/g/no-subtitle?token={token}")
+
+    assert "Live status for a field investigation" in with_sub.text
+    assert "from first frame to finished game" not in with_sub.text
+    # Journeys that do not set one keep the original copy.
+    assert "from first frame to finished game" in without.text

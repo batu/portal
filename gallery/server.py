@@ -1399,6 +1399,11 @@ def _validate_journey_doc(payload: dict) -> dict:
     if len(steps) > MAX_JOURNEY_STEPS:
         raise HTTPException(status_code=400, detail=f"a journey may have at most {MAX_JOURNEY_STEPS} steps")
     doc = {"steps": [_validate_journey_step(step, step_index) for step_index, step in enumerate(steps)]}
+    # Optional one-line lede. Journeys are no longer only game stories, so a
+    # producer can name what this page is instead of inheriting the game copy.
+    subtitle = _bounded_optional_text(payload.get("subtitle"), "subtitle", MAX_TITLE_LENGTH)
+    if subtitle is not None:
+        doc["subtitle"] = subtitle
     if len(json.dumps(doc).encode("utf-8")) > MAX_BODY_JSON_BYTES:
         raise HTTPException(status_code=400, detail="journey doc is too large")
     _validate_json_response_safe(doc)
@@ -2360,9 +2365,13 @@ def _journey_step_context(step: dict, status_map: dict[str, dict]) -> dict:
     request_ctx = None
     if isinstance(request_id, str) and request_id:
         request_ctx = _journey_request_context(request_id, status_map)
+    summary = step.get("summary") if isinstance(step.get("summary"), str) else None
     return {
         "title": step.get("title") or "Untitled step",
-        "summary": step.get("summary") if isinstance(step.get("summary"), str) else None,
+        "summary": summary,
+        # Summaries are authored as markdown; render them the same way game
+        # changelogs are, so lists and emphasis survive instead of showing raw.
+        "summary_html": _sanitize_context_html(md_lib.markdown(summary)) if summary else None,
         "media": media,
         "request": request_ctx,
     }
@@ -2384,7 +2393,7 @@ def web_journey_detail(request: Request, slug: str):
     response = templates.TemplateResponse(
         request,
         "journey.html",
-        {"journey": journey, "steps": steps},
+        {"journey": journey, "steps": steps, "subtitle": doc.get("subtitle")},
     )
     response.headers["Referrer-Policy"] = "no-referrer"
     _maybe_set_cookie(response, request)

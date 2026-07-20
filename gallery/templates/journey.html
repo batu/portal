@@ -11,7 +11,7 @@
 
   <header class="journey-header">
     <h1>{{ journey.title }}</h1>
-    <p class="journey-lede">A {{ steps|length }}-step journey from first frame to finished game.</p>
+    <p class="journey-lede">{% if subtitle %}{{ subtitle }}{% else %}A {{ steps|length }}-step journey from first frame to finished game.{% endif %}</p>
   </header>
 
   {% if not steps %}
@@ -24,7 +24,8 @@
       <div class="journey-node" aria-hidden="true">{{ loop.index }}</div>
       <div class="journey-step-body">
         <h2 class="journey-step-title">{{ step.title }}</h2>
-        {% if step.summary %}<p class="journey-summary">{{ step.summary }}</p>{% endif %}
+        {% if step.summary_html %}<div class="journey-summary">{{ step.summary_html|safe }}</div>
+        {% elif step.summary %}<p class="journey-summary">{{ step.summary }}</p>{% endif %}
 
         {% if step.media %}
         <div class="journey-media">
