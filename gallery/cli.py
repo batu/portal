@@ -210,7 +210,11 @@ def _load_journey_doc(path: str) -> dict:
     if not isinstance(doc, dict) or not isinstance(doc.get("steps"), list):
         print("error: journey doc must be a JSON object with a 'steps' list", file=sys.stderr)
         sys.exit(1)
-    return {"steps": doc["steps"]}
+    out = {"steps": doc["steps"]}
+    # Forward the optional lede; the server validates and drops anything unknown.
+    if isinstance(doc.get("subtitle"), str):
+        out["subtitle"] = doc["subtitle"]
+    return out
 
 
 def cmd_journey(args):
