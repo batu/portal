@@ -276,9 +276,12 @@ def test_web_bundle_publishes_and_serves_a_sandboxed_playable_preview(client, to
     assert "Marble Run" in entry.text
     assert "sandbox" in entry.headers["content-security-policy"]
     assert entry.headers["x-content-type-options"] == "nosniff"
+    # The opaque-origin iframe makes the bundle's own module scripts cross-origin.
+    assert entry.headers["access-control-allow-origin"] == "*"
 
     asset = client.get("/games/marble-run/builds/1.0.0/play/assets/app.js")
     assert asset.status_code == 200
+    assert asset.headers["access-control-allow-origin"] == "*"
     assert asset.content == b"console.log('marble')"
     assert asset.headers["content-type"].startswith("text/javascript") or "javascript" in asset.headers["content-type"]
 

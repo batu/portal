@@ -2033,6 +2033,11 @@ def public_play_game_build(slug: str, version: str, path: str = ""):
         extra_headers={
             "Content-Security-Policy": GAME_WEB_CSP,
             "X-Content-Type-Options": "nosniff",
+            # The iframe has an opaque origin, so the bundle's own module
+            # scripts and fonts are cross-origin requests to Portal. Without
+            # this the Vite entry module never loads and the game never
+            # starts. Safe: these files are already public and unauthenticated.
+            "Access-Control-Allow-Origin": "*",
         },
     )
 
