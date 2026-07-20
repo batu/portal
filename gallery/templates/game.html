@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}{{ game.title }} — Portal{% endblock %}
+{% block main_class %}wide game-release-page{% endblock %}
+{% block content %}
+<nav class="breadcrumb" aria-label="Breadcrumb"><a href="/">Index</a><span>/</span><a href="/games">Games</a><span>/</span><span aria-current="page">{{ game.title }}</span></nav>
+<header class="game-hero">
+  <div><p class="eyebrow">Game archive</p><h1>{{ game.title }}</h1><p>{{ game.description }}</p></div>
+  <div class="release-count">{{ game.builds|length }}<span>build{{ 's' if game.builds|length != 1 else '' }}</span></div>
+</header>
+<div class="build-tabs" role="tablist" aria-label="Build versions">
+  {% for build in game.builds %}
+  <button
+    type="button"
+    class="build-tab{% if loop.first %} active{% endif %}"
+    role="tab"
+    id="tab-{{ build.version }}"
+    aria-controls="build-{{ build.version }}"
+    aria-selected="{{ 'true' if loop.first else 'false' }}"
+    tabindex="{{ '0' if loop.first else '-1' }}"
+    data-build-tab="{{ build.version }}"
+  >{{ build.version }}{% if loop.first %}<span>Latest</span>{% endif %}</button>
+  {% endfor %}
+</div>
+<div class="release-stack" data-build-panels>
+  {% for build in game.builds %}
+  <article
+    class="release"
+    id="build-{{ build.version }}"
+    role="tabpanel"
+    aria-labelledby="tab-{{ build.version }}"
+    data-build-panel="{{ build.version }}"
+    {% if not loop.first %}hidden{% endif %}
+  >
+    <div class="release-media">
+      <video controls preload="metadata" playsinline data-src="{{ build.video_url }}"{% if loop.first %} src="{{ build.video_url }}"{% endif %}></video>
+    </div>
+    <div class="release-copy">
+      <div class="release-kicker">{% if loop.first %}Latest build{% else %}Build{% endif %} · {{ build.created_at|ago }}</div>
+      <h2>{{ build.version }}</h2>
+      <div class="changelog">{{ build.changelog_html|safe }}</div>
+      <dl class="artifact-meta">
+        <div><dt>Artifact</dt><dd>{{ build.artifact_path }}</dd></div>
+        <div><dt>Size</dt><dd>{{ build.artifact_size|filesize }}</dd></div>
+        <div><dt>SHA-256</dt><dd><code>{{ build.artifact_sha256[:12] }}…</code></dd></div>
+      </dl>
+      <a class="download-btn" href="{{ build.download_url }}">Download {{ build.artifact_label }} · {{ build.version }}</a>
+      <a class="permalink" href="#build-{{ build.version }}">Permalink to build</a>
+    </div>
+  </article>
+  {% endfor %}
+</div>
+{% endblock %}

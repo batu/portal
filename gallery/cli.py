@@ -230,6 +230,34 @@ def cmd_journey(args):
     print(json.dumps(result))
 
 
+def cmd_game(args):
+    base_url, token = config.client_config()
+    try:
+        if args.game_command == "publish":
+            changelog = Path(args.changelog_file).read_text() if args.changelog_file else args.changelog
+            result = client.publish_game_build(
+                base_url, token, args.slug,
+                title=args.title, version=args.version, changelog=changelog,
+                artifact=_resolve_file(args.artifact), video=_resolve_file(args.video),
+                poster=_resolve_file(args.poster), description=args.description,
+            )
+            result["game_url"] = f"{base_url}{result['game_url']}"
+            result["download_url"] = f"{base_url}{result['download_url']}"
+        elif args.game_command == "changelog":
+            changelog = Path(args.changelog_file).read_text() if args.changelog_file else args.changelog
+            result = client.update_game_changelog(base_url, token, args.slug, args.version, changelog)
+        elif args.game_command == "remove":
+            if not args.yes:
+                print("error: pass --yes to remove this release", file=sys.stderr)
+                sys.exit(2)
+            result = client.remove_game_build(base_url, token, args.slug, args.version)
+        else:
+            raise AssertionError(f"unhandled game command: {args.game_command}")
+    except client.GalleryClientError as exc:
+        _exit_client_error(exc)
+    print(json.dumps(result))
+
+
 def cmd_close(args):
     base_url, token = config.client_config()
     try:
@@ -544,6 +572,32 @@ def main():
 
     journey_sub.add_parser("list", help="List journeys")
 
+    p = sub.add_parser("game", help="Publish immutable downloadable game builds with changelogs and video")
+    game_sub = p.add_subparsers(dest="game_command", required=True)
+    gp = game_sub.add_parser("publish", help="Publish one game release at a permanent Portal URL")
+    gp.add_argument("--slug", required=True, type=_stream_slug)
+    gp.add_argument("--title", required=True)
+    gp.add_argument("--description", default="")
+    gp.add_argument("--version", required=True)
+    changelog_group = gp.add_mutually_exclusive_group(required=True)
+    changelog_group.add_argument("--changelog")
+    changelog_group.add_argument("--changelog-file")
+    gp.add_argument("--artifact", required=True)
+    gp.add_argument("--video", required=True)
+    gp.add_argument("--poster", required=True, help="JPEG preview image, ideally 1200x630")
+
+    gp = game_sub.add_parser("changelog", help="Correct a published release changelog")
+    gp.add_argument("--slug", required=True, type=_stream_slug)
+    gp.add_argument("--version", required=True)
+    changelog_group = gp.add_mutually_exclusive_group(required=True)
+    changelog_group.add_argument("--changelog")
+    changelog_group.add_argument("--changelog-file")
+
+    gp = game_sub.add_parser("remove", help="Move a release to recoverable trash and remove it from Portal")
+    gp.add_argument("--slug", required=True, type=_stream_slug)
+    gp.add_argument("--version", required=True)
+    gp.add_argument("--yes", action="store_true", help="Confirm release removal")
+
     p = sub.add_parser("close", help="Close a request with a reason (no fabricated verdict)")
     p.add_argument("id")
     p.add_argument("--reason", required=True, help="Why the request is being closed")
@@ -629,6 +683,7 @@ def main():
         "post": cmd_post,
         "stream": cmd_stream,
         "journey": cmd_journey,
+        "game": cmd_game,
         "close": cmd_close,
         "supersede": cmd_supersede,
         "feedback": cmd_feedback,

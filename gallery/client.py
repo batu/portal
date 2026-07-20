@@ -57,6 +57,10 @@ def put_json(base_url: str, token: str, path: str, obj: dict) -> dict:
     return cast(dict, _request("PUT", base_url + path, headers, json.dumps(obj).encode("utf-8")))
 
 
+def delete_json(base_url: str, token: str, path: str) -> dict:
+    return cast(dict, _request("DELETE", base_url + path, _auth_headers(token)))
+
+
 def post_multipart(base_url: str, token: str, path: str, fields: dict, files: list) -> dict:
     """fields: simple string form fields. files: Path entries, or (field_name, Path) entries."""
     boundary = uuid.uuid4().hex
@@ -203,3 +207,44 @@ def get_journey(base_url: str, token: str, slug: str) -> dict:
 
 def list_journeys(base_url: str, token: str) -> list[dict]:
     return cast(list[dict], get_json(base_url, token, "/api/journeys"))
+
+
+def publish_game_build(
+    base_url: str,
+    token: str,
+    slug: str,
+    *,
+    title: str,
+    version: str,
+    changelog: str,
+    artifact: Path,
+    video: Path,
+    poster: Path,
+    description: str = "",
+) -> dict:
+    slug = urllib.parse.quote(slug, safe="")
+    fields = {
+        "title": title,
+        "version": version,
+        "changelog": changelog,
+        "description": description,
+    }
+    return post_multipart(
+        base_url,
+        token,
+        f"/api/games/{slug}/builds",
+        fields,
+        [("artifact", artifact), ("video", video), ("poster", poster)],
+    )
+
+
+def update_game_changelog(base_url: str, token: str, slug: str, version: str, changelog: str) -> dict:
+    slug = urllib.parse.quote(slug, safe="")
+    version = urllib.parse.quote(version, safe="")
+    return post_json(base_url, token, f"/api/games/{slug}/builds/{version}/changelog", {"changelog": changelog})
+
+
+def remove_game_build(base_url: str, token: str, slug: str, version: str) -> dict:
+    slug = urllib.parse.quote(slug, safe="")
+    version = urllib.parse.quote(version, safe="")
+    return delete_json(base_url, token, f"/api/games/{slug}/builds/{version}")

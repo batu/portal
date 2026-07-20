@@ -475,3 +475,49 @@
     active.scrollIntoView({ inline: "center", block: "nearest" });
   }
 })();
+
+// ── Game builds: one directly-linkable tab per immutable release ─────────
+(function () {
+  var tabs = Array.prototype.slice.call(document.querySelectorAll("[data-build-tab]"));
+  var panels = Array.prototype.slice.call(document.querySelectorAll("[data-build-panel]"));
+  if (!tabs.length || !panels.length) return;
+
+  function select(version, updateHash) {
+    var selected = tabs.find(function (tab) { return tab.dataset.buildTab === version; }) || tabs[0];
+    tabs.forEach(function (tab) {
+      var active = tab === selected;
+      tab.classList.toggle("active", active);
+      tab.setAttribute("aria-selected", String(active));
+      tab.tabIndex = active ? 0 : -1;
+    });
+    panels.forEach(function (panel) {
+      var active = panel.dataset.buildPanel === selected.dataset.buildTab;
+      panel.hidden = !active;
+      panel.querySelectorAll("video").forEach(function (video) {
+        if (active && !video.getAttribute("src")) {
+          video.setAttribute("src", video.dataset.src);
+          video.load();
+        } else if (!active) {
+          video.pause();
+        }
+      });
+    });
+    if (updateHash) history.replaceState(null, "", "#build-" + selected.dataset.buildTab);
+    selected.scrollIntoView({ inline: "center", block: "nearest" });
+  }
+
+  tabs.forEach(function (tab, index) {
+    tab.addEventListener("click", function () { select(tab.dataset.buildTab, true); });
+    tab.addEventListener("keydown", function (event) {
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      event.preventDefault();
+      var offset = event.key === "ArrowRight" ? 1 : -1;
+      var next = tabs[(index + offset + tabs.length) % tabs.length];
+      select(next.dataset.buildTab, true);
+      next.focus();
+    });
+  });
+
+  var hashVersion = decodeURIComponent(window.location.hash.replace(/^#build-/, ""));
+  select(hashVersion, false);
+})();

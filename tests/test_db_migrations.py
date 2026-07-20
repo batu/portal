@@ -128,7 +128,7 @@ def test_fresh_db_has_portal_schema_v3(data_dir):
     conn = db.connect()
 
     assert _user_version(conn) == db.MIGRATIONS[-1][0]
-    assert {"requests", "variants", "verdicts", "streams", "posts", "messages", "journeys"} <= _table_names(conn)
+    assert {"requests", "variants", "verdicts", "streams", "posts", "messages", "journeys", "games", "game_builds"} <= _table_names(conn)
     assert {"slug", "title", "doc_json", "created_at", "updated_at"} == _column_names(conn, "journeys")
     assert {"stream_id", "before_media_path", "before_media_type"} <= _column_names(conn, "requests")
     assert {"superseded_by", "close_reason"} <= _column_names(conn, "requests")
