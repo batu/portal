@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Games — Portal{% endblock %}
+{% block main_class %}wide game-library{% endblock %}
+{% block content %}
+<nav class="breadcrumb" aria-label="Breadcrumb"><a href="/">Index</a><span>/</span><span aria-current="page">Games</span></nav>
+<header class="library-header">
+  <p class="eyebrow">Build archive</p>
+  <h1>Games</h1>
+  <p>Playable work, release notes, and the exact build that produced each capture.</p>
+</header>
+{% if not games %}<p class="empty">No game builds published yet.</p>{% endif %}
+<div class="game-grid">
+  {% for game in games %}
+  <a class="game-tile" href="/games/{{ game.slug }}">
+    <div class="game-tile-copy">
+      <p class="eyebrow">{{ game.build_count }} release{{ 's' if game.build_count != 1 else '' }}</p>
+      <h2>{{ game.title }}</h2>
+      <p>{{ game.description or 'Build history and gameplay captures.' }}</p>
+      {% if game.latest_version %}<span class="version-mark">Latest {{ game.latest_version }}</span>{% endif %}
+    </div>
+  </a>
+  {% endfor %}
+</div>
+{% endblock %}

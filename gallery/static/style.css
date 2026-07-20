@@ -35,12 +35,69 @@ a { color: var(--accent); text-decoration: none; }
   top: 0;
   background: var(--bg);
   z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
 
 .brand {
   font-weight: 700;
   font-size: 1.1rem;
   color: var(--fg);
+}
+
+.topnav { display: flex; gap: 16px; }
+.topnav a { color: var(--muted); font-weight: 700; }
+.topnav a:hover, .topnav a:focus-visible { color: var(--fg); }
+
+.section-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
+.section-heading h1 { margin-bottom: 8px; }
+
+.breadcrumb { display: flex; gap: 8px; color: var(--muted); font-size: .85rem; margin-bottom: 28px; }
+.breadcrumb a { color: var(--muted); }
+
+.game-library, .game-release-page { max-width: 1120px; padding-top: 28px; }
+.library-header { max-width: 640px; margin: 32px 0 42px; }
+.library-header h1, .game-hero h1 { font-size: clamp(2.5rem, 8vw, 5.5rem); letter-spacing: -.06em; line-height: .95; margin: 0 0 18px; }
+.library-header > p:last-child, .game-hero > div > p:last-child { color: var(--muted); font-size: 1.05rem; max-width: 560px; }
+.eyebrow, .release-kicker { color: #ffcc66; font-size: .72rem; font-weight: 900; letter-spacing: .14em; text-transform: uppercase; }
+.game-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+.game-tile { min-height: 260px; display: flex; align-items: flex-end; padding: 28px; color: var(--fg); border: 1px solid var(--border); border-radius: 14px; background: linear-gradient(145deg, #222a31, #15181d 70%); transition: transform .18s ease, border-color .18s ease; }
+.game-tile:hover { transform: translateY(-3px); border-color: #59616e; }
+.game-tile h2 { font-size: 2rem; margin: 8px 0; }
+.game-tile p { color: var(--muted); }
+.version-mark { display: inline-block; margin-top: 12px; color: var(--fg); font-weight: 800; }
+
+.game-hero { display: flex; justify-content: space-between; align-items: end; gap: 32px; margin: 30px 0 46px; }
+.release-count { color: #ffcc66; font-size: 3rem; font-weight: 900; line-height: .8; text-align: right; }
+.release-count span { display: block; color: var(--muted); font-size: .72rem; letter-spacing: .12em; text-transform: uppercase; margin-top: 12px; }
+.release-stack { display: grid; gap: 42px; }
+.build-tabs { display: flex; gap: 8px; overflow-x: auto; margin: 0 0 28px; padding: 0 0 8px; scrollbar-width: thin; }
+.build-tab { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 15px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); color: var(--muted); font: inherit; font-weight: 800; cursor: pointer; }
+.build-tab span { color: #ffcc66; font-size: .65rem; letter-spacing: .1em; text-transform: uppercase; }
+.build-tab.active { border-color: var(--accent); color: var(--fg); box-shadow: inset 0 -2px 0 var(--accent); }
+.build-tab:hover { color: var(--fg); }
+.build-tab:focus-visible { outline: 3px solid #ffd166; outline-offset: 3px; }
+.release { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(280px, .75fr); gap: 28px; padding-top: 34px; border-top: 1px solid var(--border); scroll-margin-top: 76px; }
+.release-media video { width: 100%; aspect-ratio: 9 / 16; max-height: 680px; display: block; object-fit: contain; background: #08090b; border-radius: 12px; }
+.release-copy { padding-top: 8px; }
+.release-copy h2 { font-size: 2.25rem; letter-spacing: -.04em; margin: 8px 0 20px; }
+.changelog { color: var(--fg); opacity: .84; }
+.changelog ul { padding-left: 20px; }
+.artifact-meta { margin: 24px 0; color: var(--muted); font-size: .82rem; }
+.artifact-meta div { display: grid; grid-template-columns: 70px minmax(0, 1fr); gap: 12px; padding: 7px 0; border-bottom: 1px solid var(--border); }
+.artifact-meta dt { font-weight: 800; }
+.artifact-meta dd { margin: 0; overflow-wrap: anywhere; color: var(--fg); }
+.download-btn { display: inline-flex; min-height: 46px; align-items: center; justify-content: center; padding: 0 18px; border-radius: 8px; background: var(--accent); color: white; font-weight: 850; }
+.permalink { display: inline-block; margin: 14px; color: var(--muted); font-size: .85rem; }
+.download-btn:hover { filter: brightness(1.1); }
+.download-btn:focus-visible, .permalink:focus-visible, .game-tile:focus-visible, .topnav a:focus-visible { outline: 3px solid #ffd166; outline-offset: 3px; }
+
+@media (max-width: 760px) {
+  .game-hero { align-items: flex-start; }
+  .release { grid-template-columns: 1fr; }
+  .release-media video { max-height: 74vh; }
+  .release-count { font-size: 2.3rem; }
 }
 
 main {

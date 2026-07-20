@@ -2,7 +2,27 @@
 {% block title %}Portal — Queue{% endblock %}
 {% block content %}
 <section>
-  <h1>Open ({{ open_requests|length }})</h1>
+  <div class="section-heading">
+    <h1>Games ({{ games|length }})</h1>
+    <a href="/games">View library</a>
+  </div>
+  {% if not games %}<p class="empty">No game builds published yet.</p>{% endif %}
+  <ul class="request-list">
+    {% for game in games %}
+    <li><a class="request-card" href="/games/{{ game.slug }}">
+      <div class="request-title">{{ game.title }}</div>
+      <div class="request-meta">
+        <span class="tag">{{ game.build_count }} build{{ 's' if game.build_count != 1 else '' }}</span>
+        {% if game.latest_version %}<span class="tag kind">{{ game.latest_version }}</span>{% endif %}
+        <span class="age">updated {{ game.latest_build_at|ago }}</span>
+      </div>
+    </a></li>
+    {% endfor %}
+  </ul>
+</section>
+
+<section>
+  <h2>Open ({{ open_requests|length }})</h2>
   {% if not open_requests %}
     <p class="empty">Nothing waiting on you.</p>
   {% endif %}

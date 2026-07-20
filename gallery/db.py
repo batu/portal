@@ -191,6 +191,8 @@ def _validate_schema_version(conn: sqlite3.Connection, version: int) -> None:
         _validate_v7_schema(conn)
     if version >= 8:
         _validate_v8_schema(conn)
+    if version >= 9:
+        _validate_v9_schema(conn)
 
 
 def _migrate_v1(conn: sqlite3.Connection) -> None:
@@ -318,6 +320,53 @@ def _validate_v8_schema(conn: sqlite3.Connection) -> None:
         raise RuntimeError("schema v8 missing requests column: author")
 
 
+def _migrate_v9(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS games (
+            slug TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS game_builds (
+            id TEXT PRIMARY KEY,
+            game_slug TEXT NOT NULL REFERENCES games(slug),
+            version TEXT NOT NULL,
+            changelog_md TEXT NOT NULL,
+            artifact_path TEXT NOT NULL,
+            artifact_size INTEGER NOT NULL,
+            artifact_sha256 TEXT NOT NULL,
+            video_path TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(game_slug, version)
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_game_builds_game_created ON game_builds(game_slug, created_at DESC)")
+
+
+def _validate_v9_schema(conn: sqlite3.Connection) -> None:
+    required = {
+        "games": {"slug", "title", "description", "created_at", "updated_at"},
+        "game_builds": {
+            "id", "game_slug", "version", "changelog_md", "artifact_path",
+            "artifact_size", "artifact_sha256", "video_path", "created_at",
+        },
+    }
+    for table, columns in required.items():
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)).fetchone() is None:
+            raise RuntimeError(f"schema v9 missing {table} table")
+        missing = columns - _column_names(conn, table)
+        if missing:
+            raise RuntimeError(f"schema v9 missing {table} columns: {', '.join(sorted(missing))}")
+
+
 MIGRATIONS = [
     (1, _migrate_v1),
     (2, _migrate_v2),
@@ -327,6 +376,7 @@ MIGRATIONS = [
     (6, _migrate_v6),
     (7, _migrate_v7),
     (8, _migrate_v8),
+    (9, _migrate_v9),
 ]
 
 
@@ -385,6 +435,110 @@ def reset_connection() -> None:
         if _conn is not None:
             _conn.close()
             _conn = None
+
+
+def create_game_build(
+    slug: str,
+    *,
+    title: str,
+    description: str,
+    version: str,
+    changelog_md: str,
+    artifact_path: str,
+    artifact_size: int,
+    artifact_sha256: str,
+    video_path: str,
+    build_id: str | None = None,
+    created_at: str | None = None,
+) -> dict:
+    """Create an immutable release and upsert its parent game's metadata."""
+    conn = connect()
+    timestamp = created_at or now_iso()
+    build_id = build_id or "gb_" + secrets.token_hex(5)
+    with _lock:
+        try:
+            conn.execute(
+                """
+                INSERT INTO games (slug, title, description, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(slug) DO UPDATE SET
+                    title = excluded.title,
+                    description = excluded.description,
+                    updated_at = excluded.updated_at
+                """,
+                (slug, title, description, timestamp, timestamp),
+            )
+            row = conn.execute(
+                """
+                INSERT INTO game_builds (
+                    id, game_slug, version, changelog_md, artifact_path,
+                    artifact_size, artifact_sha256, video_path, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                RETURNING *
+                """,
+                (
+                    build_id, slug, version, changelog_md, artifact_path,
+                    artifact_size, artifact_sha256, video_path, timestamp,
+                ),
+            ).fetchone()
+            conn.commit()
+            assert row is not None
+            return dict(row)
+        except Exception:
+            conn.rollback()
+            raise
+
+
+def get_game_build(slug: str, version: str) -> dict | None:
+    conn = connect()
+    with _lock:
+        row = conn.execute(
+            "SELECT * FROM game_builds WHERE game_slug = ? AND version = ?",
+            (slug, version),
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+
+def get_game(slug: str) -> dict | None:
+    conn = connect()
+    with _lock:
+        row = conn.execute("SELECT * FROM games WHERE slug = ?", (slug,)).fetchone()
+        if row is None:
+            return None
+        game = dict(row)
+        game["builds"] = [
+            dict(build)
+            for build in conn.execute(
+                "SELECT * FROM game_builds WHERE game_slug = ? ORDER BY created_at DESC, rowid DESC",
+                (slug,),
+            ).fetchall()
+        ]
+        return game
+
+
+def list_games() -> list[dict]:
+    conn = connect()
+    with _lock:
+        rows = conn.execute(
+            """
+            SELECT
+                g.*,
+                COUNT(b.id) AS build_count,
+                MAX(b.created_at) AS latest_build_at,
+                (
+                    SELECT latest.version
+                    FROM game_builds latest
+                    WHERE latest.game_slug = g.slug
+                    ORDER BY latest.created_at DESC, latest.rowid DESC
+                    LIMIT 1
+                ) AS latest_version
+            FROM games g
+            LEFT JOIN game_builds b ON b.game_slug = g.slug
+            GROUP BY g.slug
+            ORDER BY latest_build_at DESC, g.title COLLATE NOCASE
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
 
 
 def _stream_from_row(row: sqlite3.Row | None) -> dict | None:

@@ -34,6 +34,10 @@ def media_dir() -> Path:
     return data_dir() / "media"
 
 
+def games_dir() -> Path:
+    return data_dir() / "games"
+
+
 def config_path() -> Path:
     return data_dir() / "config.json"
 
@@ -75,6 +79,7 @@ def init_config(force: bool = False) -> dict:
     """Create ~/.gallery/ layout and config.json with a fresh token. Idempotent."""
     data_dir().mkdir(parents=True, exist_ok=True)
     media_dir().mkdir(parents=True, exist_ok=True)
+    games_dir().mkdir(parents=True, exist_ok=True)
     (data_dir() / "logs").mkdir(parents=True, exist_ok=True)
 
     path = config_path()

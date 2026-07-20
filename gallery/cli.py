@@ -230,6 +230,30 @@ def cmd_journey(args):
     print(json.dumps(result))
 
 
+def cmd_game(args):
+    base_url, token = config.client_config()
+    artifact = _resolve_file(args.artifact)
+    video = _resolve_file(args.video)
+    changelog = Path(args.changelog_file).read_text() if args.changelog_file else args.changelog
+    try:
+        result = client.publish_game_build(
+            base_url,
+            token,
+            args.slug,
+            title=args.title,
+            version=args.version,
+            changelog=changelog,
+            artifact=artifact,
+            video=video,
+            description=args.description,
+        )
+    except client.GalleryClientError as exc:
+        _exit_client_error(exc)
+    result["game_url"] = f"{base_url}{result['game_url']}"
+    result["download_url"] = f"{base_url}{result['download_url']}"
+    print(json.dumps(result))
+
+
 def cmd_close(args):
     base_url, token = config.client_config()
     try:
@@ -544,6 +568,19 @@ def main():
 
     journey_sub.add_parser("list", help="List journeys")
 
+    p = sub.add_parser("game", help="Publish immutable downloadable game builds with changelogs and video")
+    game_sub = p.add_subparsers(dest="game_command", required=True)
+    gp = game_sub.add_parser("publish", help="Publish one game release at a permanent Portal URL")
+    gp.add_argument("--slug", required=True, type=_stream_slug)
+    gp.add_argument("--title", required=True)
+    gp.add_argument("--description", default="")
+    gp.add_argument("--version", required=True)
+    changelog_group = gp.add_mutually_exclusive_group(required=True)
+    changelog_group.add_argument("--changelog")
+    changelog_group.add_argument("--changelog-file")
+    gp.add_argument("--artifact", required=True)
+    gp.add_argument("--video", required=True)
+
     p = sub.add_parser("close", help="Close a request with a reason (no fabricated verdict)")
     p.add_argument("id")
     p.add_argument("--reason", required=True, help="Why the request is being closed")
@@ -629,6 +666,7 @@ def main():
         "post": cmd_post,
         "stream": cmd_stream,
         "journey": cmd_journey,
+        "game": cmd_game,
         "close": cmd_close,
         "supersede": cmd_supersede,
         "feedback": cmd_feedback,

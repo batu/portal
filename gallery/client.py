@@ -203,3 +203,31 @@ def get_journey(base_url: str, token: str, slug: str) -> dict:
 
 def list_journeys(base_url: str, token: str) -> list[dict]:
     return cast(list[dict], get_json(base_url, token, "/api/journeys"))
+
+
+def publish_game_build(
+    base_url: str,
+    token: str,
+    slug: str,
+    *,
+    title: str,
+    version: str,
+    changelog: str,
+    artifact: Path,
+    video: Path,
+    description: str = "",
+) -> dict:
+    slug = urllib.parse.quote(slug, safe="")
+    fields = {
+        "title": title,
+        "version": version,
+        "changelog": changelog,
+        "description": description,
+    }
+    return post_multipart(
+        base_url,
+        token,
+        f"/api/games/{slug}/builds",
+        fields,
+        [("artifact", artifact), ("video", video)],
+    )
