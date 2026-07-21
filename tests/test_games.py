@@ -276,17 +276,19 @@ def test_web_bundle_publishes_and_serves_a_sandboxed_playable_preview(client, to
     assert "Marble Run" in entry.text
     assert "sandbox" in entry.headers["content-security-policy"]
     assert entry.headers["x-content-type-options"] == "nosniff"
+    assert entry.headers["cache-control"] == "public, max-age=0, must-revalidate"
     # The opaque-origin iframe makes the bundle's own module scripts cross-origin.
     assert entry.headers["access-control-allow-origin"] == "*"
 
     asset = client.get("/games/marble-run/builds/1.0.0/play/assets/app.js")
     assert asset.status_code == 200
     assert asset.headers["access-control-allow-origin"] == "*"
+    assert asset.headers["cache-control"] == "public, max-age=31536000, immutable"
     assert asset.content == b"console.log('marble')"
     assert asset.headers["content-type"].startswith("text/javascript") or "javascript" in asset.headers["content-type"]
 
     page = client.get("/games/marble-run")
-    assert 'data-src="/games/marble-run/builds/1.0.0/play/"' in page.text
+    assert 'data-src="/games/marble-run/builds/1.0.0/play/?rev=' in page.text
     assert 'sandbox="allow-scripts"' in page.text
     assert "allow-same-origin" not in page.text
     assert "data-device-preset" in page.text
