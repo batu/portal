@@ -291,7 +291,19 @@ def test_web_bundle_publishes_and_serves_a_sandboxed_playable_preview(client, to
     assert 'data-src="/games/marble-run/builds/1.0.0/play/?rev=' in page.text
     assert 'sandbox="allow-scripts"' in page.text
     assert "allow-same-origin" not in page.text
-    assert "data-device-preset" in page.text
+    assert 'class="device-lab" data-play-surface' in page.text
+    assert 'data-device-preset="iphone-se"' in page.text
+    assert 'data-device-preset="iphone-13-pro"' in page.text
+    assert 'data-device-preset="iphone-16-pro-max"' in page.text
+    assert 'value="pixel-9-pro-xl" data-device-preset="pixel-9-pro-xl"' in page.text
+    assert 'value="galaxy-s24-ultra" data-device-preset="galaxy-s24-ultra"' in page.text
+    assert 'data-device-select="iphone"' in page.text
+    assert 'data-device-select="android"' in page.text
+    assert "data-orientation-toggle" in page.text
+    assert "data-device-fullscreen" in page.text
+    assert "Start session" not in page.text
+    assert "Compare screens" not in page.text
+    assert "Report an issue" not in page.text
 
 
 def test_web_bundle_accepts_a_single_top_level_dist_directory(client, token):

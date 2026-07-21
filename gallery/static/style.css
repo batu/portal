@@ -78,17 +78,33 @@ a { color: var(--accent); text-decoration: none; }
 .build-tab.active { border-color: var(--accent); color: var(--fg); box-shadow: inset 0 -2px 0 var(--accent); }
 .build-tab:hover { color: var(--fg); }
 .build-tab:focus-visible { outline: 3px solid #ffd166; outline-offset: 3px; }
-.release { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(280px, .75fr); gap: 28px; padding-top: 34px; border-top: 1px solid var(--border); scroll-margin-top: 76px; }
-.release-media video { width: min(100%, 393px); aspect-ratio: 9 / 16; margin: 24px auto 0; display: block; object-fit: contain; background: #08090b; border-radius: 12px; }
-.play-surface { margin: 0 0 24px; }
-.play-controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 12px; width: min(100%, var(--device-w, 393px)); margin: 0 auto 12px; color: var(--muted); font-size: .82rem; font-weight: 800; }
-.play-controls label { display: inline-flex; align-items: center; gap: 8px; }
-.play-controls select, .orientation-toggle { min-height: 44px; padding: 0 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); color: var(--fg); font: inherit; font-weight: 800; cursor: pointer; }
-.play-controls select:focus-visible, .orientation-toggle:focus-visible { outline: 3px solid #ffd166; outline-offset: 3px; }
-.play-dims { font-variant-numeric: tabular-nums; }
+.release { padding-top: 34px; border-top: 1px solid var(--border); scroll-margin-top: 76px; }
+.device-lab { margin: 0 0 46px; overflow: hidden; border: 1px solid var(--border); border-radius: 16px; background: var(--card); }
+.device-lab-heading { display: flex; align-items: end; justify-content: space-between; gap: 28px; padding: 20px 22px; border-bottom: 1px solid var(--border); }
+.device-lab-heading h2, .gameplay-capture h2 { margin: 3px 0 0; font-size: 1.35rem; letter-spacing: -.02em; }
+.device-lab-heading > p { max-width: 430px; margin: 0; color: var(--muted); font-size: .8rem; text-align: right; }
+.device-lab-workspace { display: grid; grid-template-columns: 166px minmax(0, 1fr) 156px; min-height: 620px; }
+.device-rail, .device-actions { padding: 18px 12px; }
+.device-rail { border-right: 1px solid var(--border); }
+.device-actions { border-left: 1px solid var(--border); }
+.device-lab-label { margin: 0 8px 10px; color: var(--muted); font-size: .66rem; font-weight: 900; letter-spacing: .14em; text-transform: uppercase; }
+.device-select-group { display: block; margin: 0 0 14px; }
+.device-select-group > span { display: block; margin: 0 2px 6px; color: var(--fg); font-size: .74rem; font-weight: 800; }
+.device-select-group select { width: 100%; min-height: 42px; padding: 0 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--fg); font: inherit; font-size: .72rem; cursor: pointer; }
+.selected-device { margin: 18px 2px 0; color: #ffcc66; font-size: .75rem; font-weight: 850; }
+.device-actions button { width: 100%; min-height: 54px; margin: 0 0 7px; padding: 9px 10px; border: 1px solid transparent; border-radius: 9px; background: transparent; color: var(--muted); font: inherit; text-align: left; cursor: pointer; transition: background .16s ease, color .16s ease; }
+.device-actions button strong { display: block; color: inherit; font-size: .78rem; }
+.device-actions button:hover { color: var(--fg); background: color-mix(in srgb, var(--fg) 5%, transparent); }
+.device-select-group select:focus-visible, .device-actions button:focus-visible { outline: 3px solid #ffd166; outline-offset: 2px; }
+.device-actions button { display: grid; grid-template-columns: 22px 1fr; align-items: center; min-height: 46px; }
+.device-actions button span { color: #ffcc66; font-size: 1.05rem; }
+.play-dims { display: block; margin: 12px 10px 0; color: var(--muted); font-size: .72rem; font-weight: 800; font-variant-numeric: tabular-nums; }
+.device-stage { display: flex; align-items: flex-start; justify-content: center; min-width: 0; padding: 28px 18px 38px; overflow: auto; background: color-mix(in srgb, var(--bg) 64%, var(--card)); }
+.device-shell { position: relative; flex: 0 0 auto; padding: 8px; border: 1px solid #3b4049; border-radius: 45px; background: #111318; box-shadow: 0 22px 55px rgba(0, 0, 0, .28); transition: border-radius .18s ease; }
+.device-speaker { position: absolute; z-index: 4; top: 15px; left: 50%; width: 84px; height: 22px; transform: translateX(-50%); border-radius: 16px; background: #111318; pointer-events: none; }
 /* The frame is the real viewport: presets write device-independent pixels here
    so the game's own media queries and innerWidth react for real. */
-.device-frame { position: relative; width: var(--device-w, 393px); height: var(--device-h, 852px); max-width: 100%; margin: 0 auto; overflow: auto; background: #08090b; border: 1px solid var(--border); border-radius: 12px; }
+.device-frame { position: relative; width: var(--device-w, 393px); height: var(--device-h, 852px); overflow: hidden; background: #08090b; border-radius: 37px; transition: width .18s ease, height .18s ease, border-radius .18s ease; }
 .device-frame iframe { display: block; width: 100%; height: 100%; border: 0; }
 /* Guides show what the OS chrome will cover. Never intercept the pointer —
    mouse click/drag has to reach the game. */
@@ -98,8 +114,12 @@ a { color: var(--accent); text-decoration: none; }
 .play-state { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 20px; text-align: center; background: #08090b; color: var(--muted); font-weight: 800; }
 .play-state[hidden] { display: none; }
 .play-error a { color: var(--accent); }
-.play-disclaimer { width: min(100%, var(--device-w, 393px)); margin: 0 auto 10px; color: var(--muted); font-size: .78rem; text-align: center; }
 .play-absent { margin: 0 0 20px; color: var(--muted); font-size: .82rem; font-weight: 800; }
+.device-shell:fullscreen { display: grid; width: 100%; height: 100%; place-items: center; padding: 0; border: 0; border-radius: 0; background: #08090b; }
+.device-shell:fullscreen .device-speaker { display: none; }
+.device-shell:fullscreen .device-frame { border-radius: 0; }
+.release-evidence { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(280px, .85fr); gap: 36px; }
+.gameplay-capture video { display: block; width: min(100%, 393px); max-height: 74vh; aspect-ratio: 9 / 16; margin: 18px auto 0; object-fit: contain; background: #08090b; border-radius: 12px; }
 .release-copy { padding-top: 8px; }
 .release-copy h2 { font-size: 2.25rem; letter-spacing: -.04em; margin: 8px 0 20px; }
 .changelog { color: var(--fg); opacity: .84; }
@@ -115,8 +135,20 @@ a { color: var(--accent); text-decoration: none; }
 
 @media (max-width: 760px) {
   .game-hero { align-items: flex-start; }
-  .release { grid-template-columns: 1fr; }
-  .release-media video { max-height: 74vh; }
+  .device-lab-heading { align-items: flex-start; }
+  .device-lab-heading > p { display: none; }
+  .device-lab-workspace { grid-template-columns: 1fr; min-height: 0; }
+  .device-rail { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; padding: 12px; border: 0; border-bottom: 1px solid var(--border); }
+  .device-rail .device-lab-label { display: none; }
+  .device-select-group { margin: 0; min-width: 0; }
+  .selected-device { grid-column: 1 / -1; margin: 2px 2px 0; }
+  .device-stage { order: 3; justify-content: flex-start; padding: 16px 0 24px; }
+  .device-shell { margin: 0 auto; }
+  .device-actions { order: 2; display: flex; align-items: center; gap: 7px; padding: 12px; border: 0; border-bottom: 1px solid var(--border); }
+  .device-actions .device-lab-label { display: none; }
+  .device-actions button { width: auto; flex: 1 1 0; margin: 0; }
+  .play-dims { flex: 0 0 auto; margin: 0 4px; }
+  .release-evidence { grid-template-columns: 1fr; }
   .release-count { font-size: 2.3rem; }
 }
 

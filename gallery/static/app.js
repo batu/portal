@@ -529,13 +529,6 @@
   });
 
   // ── Play surface: device presets drive the iframe's real CSS pixel box ──
-  var PRESETS = {
-    "iphone-se": { w: 375, h: 667, top: 20, bottom: 0 },
-    "iphone-15-pro": { w: 393, h: 852, top: 59, bottom: 34 },
-    "iphone-15-pro-max": { w: 430, h: 932, top: 59, bottom: 34 },
-    "pixel-8": { w: 412, h: 915, top: 24, bottom: 24 },
-    "ipad": { w: 820, h: 1180, top: 24, bottom: 20 },
-  };
   var PLAY_TIMEOUT_MS = 15000;
   var STORAGE_KEY = "portal.play-surface";
 
@@ -584,25 +577,41 @@
   }
 
   function initPlaySurface(surface) {
-    var presetSelect = surface.querySelector("[data-device-preset]");
+    var presetOptions = Array.prototype.slice.call(surface.querySelectorAll("option[data-device-preset]"));
+    var deviceSelects = Array.prototype.slice.call(surface.querySelectorAll("[data-device-select]"));
     var orientationToggle = surface.querySelector("[data-orientation-toggle]");
     var deviceFrame = surface.querySelector("[data-device-frame]");
+    var deviceShell = surface.querySelector("[data-device-shell]");
+    var fullscreenButton = surface.querySelector("[data-device-fullscreen]");
     var dims = surface.querySelector("[data-play-dims]");
+    var deviceName = surface.querySelector("[data-play-device]");
     var frame = surface.querySelector("[data-play-frame]");
     var saved = readPreference();
-    if (saved.preset && PRESETS[saved.preset]) presetSelect.value = saved.preset;
+    function findPreset(id) {
+      return presetOptions.find(function (option) { return option.dataset.devicePreset === id; });
+    }
+    var selectedPreset = saved.preset && findPreset(saved.preset) ? saved.preset : "iphone-15-pro";
     var landscape = saved.landscape === true;
 
     function apply() {
-      var preset = PRESETS[presetSelect.value];
-      var width = landscape ? preset.h : preset.w;
-      var height = landscape ? preset.w : preset.h;
+      var preset = findPreset(selectedPreset);
+      var presetWidth = Number(preset.dataset.deviceWidth);
+      var presetHeight = Number(preset.dataset.deviceHeight);
+      var width = landscape ? presetHeight : presetWidth;
+      var height = landscape ? presetWidth : presetHeight;
       deviceFrame.style.setProperty("--device-w", width + "px");
       deviceFrame.style.setProperty("--device-h", height + "px");
-      surface.querySelector("[data-safe-top]").style.height = (landscape ? 0 : preset.top) + "px";
-      surface.querySelector("[data-safe-bottom]").style.height = preset.bottom + "px";
-      orientationToggle.textContent = landscape ? "Landscape" : "Portrait";
+      deviceSelects.forEach(function (select) {
+        var matchingOption = Array.prototype.slice.call(select.options).find(function (option) {
+          return option.dataset.devicePreset === selectedPreset;
+        });
+        select.value = matchingOption ? selectedPreset : "";
+      });
+      surface.querySelector("[data-safe-top]").style.height = (landscape ? 0 : Number(preset.dataset.safeTop)) + "px";
+      surface.querySelector("[data-safe-bottom]").style.height = Number(preset.dataset.safeBottom) + "px";
+      orientationToggle.querySelector("strong").textContent = landscape ? "Landscape" : "Portrait";
       orientationToggle.setAttribute("aria-pressed", String(landscape));
+      deviceName.textContent = preset.dataset.deviceName;
       dims.textContent = width + " × " + height;
     }
 
@@ -610,20 +619,31 @@
     // chosen device survives tab switches and reloads.
     function sync() {
       var pref = readPreference();
-      if (pref.preset && PRESETS[pref.preset]) presetSelect.value = pref.preset;
+      if (pref.preset && findPreset(pref.preset)) selectedPreset = pref.preset;
       landscape = pref.landscape === true;
       apply();
     }
     playSurfaces.push(sync);
 
-    presetSelect.addEventListener("change", function () {
-      writePreference({ preset: presetSelect.value, landscape: landscape });
-      syncPlaySurfaces();
+    deviceSelects.forEach(function (select) {
+      select.addEventListener("change", function () {
+        if (!select.value || select.value === selectedPreset) return;
+        selectedPreset = select.value;
+        writePreference({ preset: selectedPreset, landscape: landscape });
+        syncPlaySurfaces();
+      });
     });
     orientationToggle.addEventListener("click", function () {
       landscape = !landscape;
-      writePreference({ preset: presetSelect.value, landscape: landscape });
+      writePreference({ preset: selectedPreset, landscape: landscape });
       syncPlaySurfaces();
+    });
+    fullscreenButton.addEventListener("click", function () {
+      if (document.fullscreenElement) {
+        document.exitFullscreen().then(syncFullscreenLabels);
+      } else if (deviceShell.requestFullscreen) {
+        deviceShell.requestFullscreen().then(syncFullscreenLabels);
+      }
     });
     frame.addEventListener("load", function () {
       if (!frame.getAttribute("src")) return;
@@ -637,7 +657,15 @@
     apply();
   }
 
+  function syncFullscreenLabels() {
+    document.querySelectorAll("[data-device-fullscreen]").forEach(function (button) {
+      var shell = button.closest("[data-play-surface]").querySelector("[data-device-shell]");
+      button.querySelector("strong").textContent = document.fullscreenElement === shell ? "Exit fullscreen" : "Fullscreen";
+    });
+  }
+
   document.querySelectorAll("[data-play-surface]").forEach(initPlaySurface);
+  document.addEventListener("fullscreenchange", syncFullscreenLabels);
 
   var hashVersion = decodeURIComponent(window.location.hash.replace(/^#build-/, ""));
   select(hashVersion, false);
