@@ -79,16 +79,16 @@ a { color: var(--accent); text-decoration: none; }
 .build-tab:hover { color: var(--fg); }
 .build-tab:focus-visible { outline: 3px solid #ffd166; outline-offset: 3px; }
 .release { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(280px, .75fr); gap: 28px; padding-top: 34px; border-top: 1px solid var(--border); scroll-margin-top: 76px; }
-.release-media video { width: 100%; aspect-ratio: 9 / 16; max-height: 680px; display: block; object-fit: contain; background: #08090b; border-radius: 12px; }
+.release-media video { width: min(100%, 393px); aspect-ratio: 9 / 16; margin: 24px auto 0; display: block; object-fit: contain; background: #08090b; border-radius: 12px; }
 .play-surface { margin: 0 0 24px; }
-.play-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 0 0 12px; color: var(--muted); font-size: .82rem; font-weight: 800; }
+.play-controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 12px; width: min(100%, var(--device-w, 393px)); margin: 0 auto 12px; color: var(--muted); font-size: .82rem; font-weight: 800; }
 .play-controls label { display: inline-flex; align-items: center; gap: 8px; }
 .play-controls select, .orientation-toggle { min-height: 44px; padding: 0 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); color: var(--fg); font: inherit; font-weight: 800; cursor: pointer; }
 .play-controls select:focus-visible, .orientation-toggle:focus-visible { outline: 3px solid #ffd166; outline-offset: 3px; }
 .play-dims { font-variant-numeric: tabular-nums; }
 /* The frame is the real viewport: presets write device-independent pixels here
    so the game's own media queries and innerWidth react for real. */
-.device-frame { position: relative; width: var(--device-w, 393px); height: var(--device-h, 852px); max-width: 100%; overflow: auto; background: #08090b; border: 1px solid var(--border); border-radius: 12px; }
+.device-frame { position: relative; width: var(--device-w, 393px); height: var(--device-h, 852px); max-width: 100%; margin: 0 auto; overflow: auto; background: #08090b; border: 1px solid var(--border); border-radius: 12px; }
 .device-frame iframe { display: block; width: 100%; height: 100%; border: 0; }
 /* Guides show what the OS chrome will cover. Never intercept the pointer —
    mouse click/drag has to reach the game. */
@@ -98,7 +98,7 @@ a { color: var(--accent); text-decoration: none; }
 .play-state { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 20px; text-align: center; background: #08090b; color: var(--muted); font-weight: 800; }
 .play-state[hidden] { display: none; }
 .play-error a { color: var(--accent); }
-.play-disclaimer { margin: 0 0 10px; color: var(--muted); font-size: .78rem; }
+.play-disclaimer { width: min(100%, var(--device-w, 393px)); margin: 0 auto 10px; color: var(--muted); font-size: .78rem; text-align: center; }
 .play-absent { margin: 0 0 20px; color: var(--muted); font-size: .82rem; font-weight: 800; }
 .release-copy { padding-top: 8px; }
 .release-copy h2 { font-size: 2.25rem; letter-spacing: -.04em; margin: 8px 0 20px; }
