@@ -1911,9 +1911,17 @@ def _game_page_context(slug: str) -> dict:
         except OSError:
             video_revision = 0
         build["video_url"] = f"/games/{slug}/builds/{encoded_version}/public-video?rev={video_revision}"
-        build["preview_url"] = (
-            f"/games/{slug}/builds/{encoded_version}/play/" if build[GAME_WEB_FIELD] else None
-        )
+        if build[GAME_WEB_FIELD]:
+            preview_path = config.games_dir() / slug / build["version"] / build[GAME_WEB_FIELD]
+            try:
+                preview_revision = preview_path.stat().st_mtime_ns
+            except OSError:
+                preview_revision = 0
+            build["preview_url"] = (
+                f"/games/{slug}/builds/{encoded_version}/play/?rev={preview_revision}"
+            )
+        else:
+            build["preview_url"] = None
     return game
 
 
@@ -2031,6 +2039,11 @@ def public_play_game_build(slug: str, version: str, path: str = ""):
         download=False,
         fallback_media_type="application/octet-stream",
         extra_headers={
+            "Cache-Control": (
+                "public, max-age=0, must-revalidate"
+                if resolved.suffix.lower() == ".html"
+                else "public, max-age=31536000, immutable"
+            ),
             "Content-Security-Policy": GAME_WEB_CSP,
             "X-Content-Type-Options": "nosniff",
             # The iframe has an opaque origin, so the bundle's own module
