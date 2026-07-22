@@ -501,6 +501,16 @@
           video.pause();
         }
       });
+      // One focused playable device at a time: the inactive tab's game is
+      // unloaded, not merely hidden, so it stops running.
+      panel.querySelectorAll("[data-play-frame]").forEach(function (frame) {
+        if (active && !frame.getAttribute("src")) {
+          startPlayFrame(frame);
+        } else if (!active && frame.getAttribute("src")) {
+          frame.removeAttribute("src");
+          resetPlayFrameState(frame);
+        }
+      });
     });
     if (updateHash) history.replaceState(null, "", "#build-" + selected.dataset.buildTab);
     selected.scrollIntoView({ inline: "center", block: "nearest" });
@@ -517,6 +527,145 @@
       next.focus();
     });
   });
+
+  // ── Play surface: device presets drive the iframe's real CSS pixel box ──
+  var PLAY_TIMEOUT_MS = 15000;
+  var STORAGE_KEY = "portal.play-surface";
+
+  function readPreference() {
+    try {
+      return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {};
+    } catch (err) {
+      return {};
+    }
+  }
+
+  function writePreference(value) {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(value));
+    } catch (err) {
+      /* private mode: the preset still applies for this page view */
+    }
+  }
+
+  function resetPlayFrameState(frame) {
+    var surface = frame.closest("[data-play-surface]");
+    if (!surface) return;
+    if (frame.dataset.playTimer) {
+      clearTimeout(Number(frame.dataset.playTimer));
+      delete frame.dataset.playTimer;
+    }
+    surface.querySelector("[data-play-loading]").hidden = false;
+    surface.querySelector("[data-play-error]").hidden = true;
+  }
+
+  function startPlayFrame(frame) {
+    resetPlayFrameState(frame);
+    frame.setAttribute("src", frame.dataset.src);
+    frame.dataset.playTimer = String(setTimeout(function () {
+      var surface = frame.closest("[data-play-surface]");
+      if (!surface) return;
+      surface.querySelector("[data-play-loading]").hidden = true;
+      surface.querySelector("[data-play-error]").hidden = false;
+    }, PLAY_TIMEOUT_MS));
+  }
+
+  var playSurfaces = [];
+
+  function syncPlaySurfaces() {
+    playSurfaces.forEach(function (apply) { apply(); });
+  }
+
+  function initPlaySurface(surface) {
+    var presetOptions = Array.prototype.slice.call(surface.querySelectorAll("option[data-device-preset]"));
+    var deviceSelects = Array.prototype.slice.call(surface.querySelectorAll("[data-device-select]"));
+    var orientationToggle = surface.querySelector("[data-orientation-toggle]");
+    var deviceFrame = surface.querySelector("[data-device-frame]");
+    var deviceShell = surface.querySelector("[data-device-shell]");
+    var fullscreenButton = surface.querySelector("[data-device-fullscreen]");
+    var dims = surface.querySelector("[data-play-dims]");
+    var deviceName = surface.querySelector("[data-play-device]");
+    var frame = surface.querySelector("[data-play-frame]");
+    var saved = readPreference();
+    function findPreset(id) {
+      return presetOptions.find(function (option) { return option.dataset.devicePreset === id; });
+    }
+    var selectedPreset = saved.preset && findPreset(saved.preset) ? saved.preset : "iphone-15-pro";
+    var landscape = saved.landscape === true;
+
+    function apply() {
+      var preset = findPreset(selectedPreset);
+      var presetWidth = Number(preset.dataset.deviceWidth);
+      var presetHeight = Number(preset.dataset.deviceHeight);
+      var width = landscape ? presetHeight : presetWidth;
+      var height = landscape ? presetWidth : presetHeight;
+      deviceFrame.style.setProperty("--device-w", width + "px");
+      deviceFrame.style.setProperty("--device-h", height + "px");
+      deviceSelects.forEach(function (select) {
+        var matchingOption = Array.prototype.slice.call(select.options).find(function (option) {
+          return option.dataset.devicePreset === selectedPreset;
+        });
+        select.value = matchingOption ? selectedPreset : "";
+      });
+      surface.querySelector("[data-safe-top]").style.height = (landscape ? 0 : Number(preset.dataset.safeTop)) + "px";
+      surface.querySelector("[data-safe-bottom]").style.height = Number(preset.dataset.safeBottom) + "px";
+      orientationToggle.querySelector("strong").textContent = landscape ? "Landscape" : "Portrait";
+      orientationToggle.setAttribute("aria-pressed", String(landscape));
+      deviceName.textContent = preset.dataset.deviceName;
+      dims.textContent = width + " × " + height;
+    }
+
+    // Every surface on the page follows the one stored preference, so the
+    // chosen device survives tab switches and reloads.
+    function sync() {
+      var pref = readPreference();
+      if (pref.preset && findPreset(pref.preset)) selectedPreset = pref.preset;
+      landscape = pref.landscape === true;
+      apply();
+    }
+    playSurfaces.push(sync);
+
+    deviceSelects.forEach(function (select) {
+      select.addEventListener("change", function () {
+        if (!select.value || select.value === selectedPreset) return;
+        selectedPreset = select.value;
+        writePreference({ preset: selectedPreset, landscape: landscape });
+        syncPlaySurfaces();
+      });
+    });
+    orientationToggle.addEventListener("click", function () {
+      landscape = !landscape;
+      writePreference({ preset: selectedPreset, landscape: landscape });
+      syncPlaySurfaces();
+    });
+    fullscreenButton.addEventListener("click", function () {
+      if (document.fullscreenElement) {
+        document.exitFullscreen().then(syncFullscreenLabels);
+      } else if (deviceShell.requestFullscreen) {
+        deviceShell.requestFullscreen().then(syncFullscreenLabels);
+      }
+    });
+    frame.addEventListener("load", function () {
+      if (!frame.getAttribute("src")) return;
+      if (frame.dataset.playTimer) {
+        clearTimeout(Number(frame.dataset.playTimer));
+        delete frame.dataset.playTimer;
+      }
+      surface.querySelector("[data-play-loading]").hidden = true;
+      surface.querySelector("[data-play-error]").hidden = true;
+    });
+    apply();
+  }
+
+  function syncFullscreenLabels() {
+    document.querySelectorAll("[data-device-fullscreen]").forEach(function (button) {
+      var shell = button.closest("[data-play-surface]").querySelector("[data-device-shell]");
+      button.querySelector("strong").textContent = document.fullscreenElement === shell ? "Exit fullscreen" : "Fullscreen";
+    });
+  }
+
+  document.querySelectorAll("[data-play-surface]").forEach(initPlaySurface);
+  document.addEventListener("fullscreenchange", syncFullscreenLabels);
 
   var hashVersion = decodeURIComponent(window.location.hash.replace(/^#build-/, ""));
   select(hashVersion, false);

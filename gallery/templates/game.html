@@ -31,10 +31,84 @@
     data-build-panel="{{ build.version }}"
     {% if not loop.first %}hidden{% endif %}
   >
-    <div class="release-media">
-      <video controls preload="metadata" playsinline data-src="{{ build.video_url }}"{% if loop.first %} src="{{ build.video_url }}"{% endif %}></video>
-    </div>
-    <div class="release-copy">
+    {% if build.preview_url %}
+    <section class="device-lab" data-play-surface aria-label="Device Lab for {{ build.version }}">
+      <header class="device-lab-heading">
+        <div><p class="eyebrow">Playable build</p><h2>Device Lab</h2></div>
+        <p>Browser preview for rapid design review. Verify performance on a real device before release.</p>
+      </header>
+      <div class="device-lab-workspace">
+        <aside class="device-rail" aria-label="Choose a device">
+          <p class="device-lab-label">Device</p>
+          <label class="device-select-group"><span>iPhone</span>
+            <select data-device-select="iphone" aria-label="Choose an iPhone">
+              <option value="">Choose iPhone</option>
+              <option value="iphone-se" data-device-preset="iphone-se" data-device-name="iPhone SE" data-device-width="375" data-device-height="667" data-safe-top="20" data-safe-bottom="0">iPhone SE · 375 × 667</option>
+              <option value="iphone-13-mini" data-device-preset="iphone-13-mini" data-device-name="iPhone 13 mini" data-device-width="375" data-device-height="812" data-safe-top="47" data-safe-bottom="34">iPhone 13 mini · 375 × 812</option>
+              <option value="iphone-13-pro" data-device-preset="iphone-13-pro" data-device-name="iPhone 13 Pro" data-device-width="390" data-device-height="844" data-safe-top="47" data-safe-bottom="34">iPhone 13 Pro · 390 × 844</option>
+              <option value="iphone-14-pro" data-device-preset="iphone-14-pro" data-device-name="iPhone 14 Pro" data-device-width="393" data-device-height="852" data-safe-top="59" data-safe-bottom="34">iPhone 14 Pro · 393 × 852</option>
+              <option value="iphone-14-pro-max" data-device-preset="iphone-14-pro-max" data-device-name="iPhone 14 Pro Max" data-device-width="430" data-device-height="932" data-safe-top="59" data-safe-bottom="34">iPhone 14 Pro Max · 430 × 932</option>
+              <option value="iphone-15-pro" data-device-preset="iphone-15-pro" data-device-name="iPhone 15 Pro" data-device-width="393" data-device-height="852" data-safe-top="59" data-safe-bottom="34" selected>iPhone 15 Pro · 393 × 852</option>
+              <option value="iphone-15-pro-max" data-device-preset="iphone-15-pro-max" data-device-name="iPhone 15 Pro Max" data-device-width="430" data-device-height="932" data-safe-top="59" data-safe-bottom="34">iPhone 15 Pro Max · 430 × 932</option>
+              <option value="iphone-16-pro" data-device-preset="iphone-16-pro" data-device-name="iPhone 16 Pro" data-device-width="402" data-device-height="874" data-safe-top="62" data-safe-bottom="34">iPhone 16 Pro · 402 × 874</option>
+              <option value="iphone-16-pro-max" data-device-preset="iphone-16-pro-max" data-device-name="iPhone 16 Pro Max" data-device-width="440" data-device-height="956" data-safe-top="62" data-safe-bottom="34">iPhone 16 Pro Max · 440 × 956</option>
+            </select>
+          </label>
+          <label class="device-select-group"><span>Android</span>
+            <select data-device-select="android" aria-label="Choose an Android phone">
+              <option value="" selected>Choose Android</option>
+              <option value="pixel-7" data-device-preset="pixel-7" data-device-name="Pixel 7" data-device-width="412" data-device-height="915" data-safe-top="24" data-safe-bottom="24">Pixel 7 · 412 × 915</option>
+              <option value="pixel-8" data-device-preset="pixel-8" data-device-name="Pixel 8" data-device-width="412" data-device-height="915" data-safe-top="24" data-safe-bottom="24">Pixel 8 · 412 × 915</option>
+              <option value="pixel-8-pro" data-device-preset="pixel-8-pro" data-device-name="Pixel 8 Pro" data-device-width="448" data-device-height="998" data-safe-top="24" data-safe-bottom="24">Pixel 8 Pro · 448 × 998</option>
+              <option value="pixel-9-pro-xl" data-device-preset="pixel-9-pro-xl" data-device-name="Pixel 9 Pro XL" data-device-width="448" data-device-height="998" data-safe-top="24" data-safe-bottom="24">Pixel 9 Pro XL · 448 × 998</option>
+              <option value="galaxy-s22" data-device-preset="galaxy-s22" data-device-name="Galaxy S22" data-device-width="360" data-device-height="780" data-safe-top="24" data-safe-bottom="24">Galaxy S22 · 360 × 780</option>
+              <option value="galaxy-s23" data-device-preset="galaxy-s23" data-device-name="Galaxy S23" data-device-width="360" data-device-height="780" data-safe-top="24" data-safe-bottom="24">Galaxy S23 · 360 × 780</option>
+              <option value="galaxy-s23-ultra" data-device-preset="galaxy-s23-ultra" data-device-name="Galaxy S23 Ultra" data-device-width="412" data-device-height="915" data-safe-top="24" data-safe-bottom="24">Galaxy S23 Ultra · 412 × 915</option>
+              <option value="galaxy-s24" data-device-preset="galaxy-s24" data-device-name="Galaxy S24" data-device-width="360" data-device-height="780" data-safe-top="24" data-safe-bottom="24">Galaxy S24 · 360 × 780</option>
+              <option value="galaxy-s24-ultra" data-device-preset="galaxy-s24-ultra" data-device-name="Galaxy S24 Ultra" data-device-width="412" data-device-height="915" data-safe-top="24" data-safe-bottom="24">Galaxy S24 Ultra · 412 × 915</option>
+              <option value="galaxy-a54" data-device-preset="galaxy-a54" data-device-name="Galaxy A54" data-device-width="360" data-device-height="800" data-safe-top="24" data-safe-bottom="24">Galaxy A54 · 360 × 800</option>
+            </select>
+          </label>
+          <p class="selected-device" data-play-device>iPhone 15 Pro</p>
+        </aside>
+        <div class="device-stage">
+          <div class="device-shell" data-device-shell>
+            <div class="device-speaker" aria-hidden="true"></div>
+            <div class="device-frame" data-device-frame>
+              <iframe
+                data-play-frame
+                data-src="{{ build.preview_url }}"
+                sandbox="allow-scripts"
+                allow="autoplay; gamepad; fullscreen"
+                title="Browser preview of {{ game.title }} {{ build.version }}"
+              ></iframe>
+              <div class="safe-area-guide safe-area-top" data-safe-top aria-hidden="true"></div>
+              <div class="safe-area-guide safe-area-bottom" data-safe-bottom aria-hidden="true"></div>
+              <div class="play-state play-loading" data-play-loading>Starting build…</div>
+              <div class="play-state play-error" data-play-error hidden>
+                Preview failed to load for {{ build.version }}. <a href="{{ build.download_url }}">Download the build</a> instead.
+              </div>
+            </div>
+          </div>
+        </div>
+        <aside class="device-actions" aria-label="Preview controls">
+          <p class="device-lab-label">View</p>
+          <button type="button" data-orientation-toggle aria-pressed="false"><span aria-hidden="true">↻</span><strong>Portrait</strong></button>
+          <button type="button" data-device-fullscreen><span aria-hidden="true">⛶</span><strong>Fullscreen</strong></button>
+          <span class="play-dims" data-play-dims></span>
+        </aside>
+      </div>
+    </section>
+    {% else %}
+    <p class="play-absent">No browser preview for this build — download the native build below.</p>
+    {% endif %}
+    <div class="release-evidence">
+      <section class="gameplay-capture" aria-labelledby="gameplay-{{ build.version }}">
+        <p class="eyebrow">Build capture</p>
+        <h2 id="gameplay-{{ build.version }}">Gameplay video</h2>
+        <video controls preload="metadata" playsinline data-src="{{ build.video_url }}"{% if loop.first %} src="{{ build.video_url }}"{% endif %}></video>
+      </section>
+      <div class="release-copy">
       <div class="release-kicker">{% if loop.first %}Latest build{% else %}Build{% endif %} · {{ build.created_at|ago }}</div>
       <h2>{{ build.version }}</h2>
       <div class="changelog">{{ build.changelog_html|safe }}</div>
@@ -45,6 +119,7 @@
       </dl>
       <a class="download-btn" href="{{ build.download_url }}">Download {{ build.artifact_label }} · {{ build.version }}</a>
       <a class="permalink" href="#build-{{ build.version }}">Permalink to build</a>
+      </div>
     </div>
   </article>
   {% endfor %}
