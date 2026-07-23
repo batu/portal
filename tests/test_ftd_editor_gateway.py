@@ -92,3 +92,33 @@ def test_ftd_editor_proxy_rewrites_authority_without_forwarding_portal_cookie(
     assert observed["query"] == "x=1"
     assert observed["headers"]["x-ftd-launch-credential"] == "launch"
     assert "cookie" not in observed["headers"]
+
+
+def test_copied_v1_editor_root_api_is_scoped_to_authenticated_editor_referrer(
+    client, data_dir, token, tmp_path, monkeypatch
+):
+    ui = tmp_path / "ui"
+    ui.mkdir()
+    (ui / "index.html").write_text("editor")
+    _configure(data_dir, ui)
+    observed = {}
+
+    def proxy(backend_url, method, path, query, body, headers):
+        observed["path"] = path
+        return 200, {"Content-Type": "application/json"}, b'{"styles":[]}'
+
+    monkeypatch.setattr(server, "_proxy_ftd_editor", proxy)
+    allowed = client.get(
+        "/api/config",
+        cookies={"gallery_token": token},
+        headers={"referer": "http://testserver/tools/ftd-editor/"},
+    )
+    unrelated = client.get(
+        "/api/config",
+        cookies={"gallery_token": token},
+        headers={"referer": "http://testserver/"},
+    )
+
+    assert allowed.status_code == 200
+    assert observed["path"] == "api/config"
+    assert unrelated.status_code == 404
