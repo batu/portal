@@ -43,7 +43,8 @@ systemd user unit for a future Linux move lives at `deploy/gallery.service`
   "url": "http://bases-mac-mini:8787",
   "ftd_editor": {
     "backend_url": "http://127.0.0.1:5192",
-    "ui_root": "/absolute/path/to/fabrikav2/tools/ftd-level-editor/dist"
+    "ui_root": "/absolute/path/to/fabrikav2/tools/ftd-level-editor/dist",
+    "command": ["/absolute/path/to/ftd-editor-rehearsal"]
   },
   "telegram_bot_token": null,
   "telegram_chat_id": null
@@ -57,7 +58,9 @@ systemd user unit for a future Linux move lives at `deploy/gallery.service`
 - `ftd_editor` is optional. When configured, authenticated users get a
   `/tools/ftd-editor/` navigation entry. Portal serves the compiled UI and
   proxies only `bootstrap` and `api/*` to the loopback-only editor. Portal
-  cookies and tokens are never forwarded to the editor service.
+  cookies and tokens are never forwarded to the editor service. When
+  `command` is present, Portal starts that loopback process on service startup
+  and terminates it during a clean shutdown.
 
 ### Doorbell notifications (optional)
 
