@@ -13,15 +13,17 @@ import shutil
 import sqlite3
 import subprocess
 import threading
+import urllib.error
+import urllib.request
 import zipfile
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path, PurePosixPath
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import markdown as md_lib
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
@@ -230,6 +232,17 @@ def static_url(name: str) -> str:
 
 templates.env.globals["static_url"] = static_url
 
+
+def ftd_editor_enabled() -> bool:
+    try:
+        value = config.load_config().get("ftd_editor")
+    except (FileNotFoundError, ValueError):
+        return False
+    return isinstance(value, dict) and bool(value.get("backend_url")) and bool(value.get("ui_root"))
+
+
+templates.env.globals["ftd_editor_enabled"] = ftd_editor_enabled
+
 COOKIE_NAME = "gallery_token"
 
 
@@ -307,6 +320,136 @@ def _safe_next_path(value: str | None) -> str:
 
 def _login_redirect(request: Request) -> RedirectResponse:
     return RedirectResponse(url=f"/login?next={quote(request.url.path, safe='/')}", status_code=303)
+
+
+# --- authenticated FTD editor gateway ---
+
+
+def _ftd_editor_config() -> tuple[str, Path]:
+    value = config.load_config().get("ftd_editor")
+    if not isinstance(value, dict):
+        raise HTTPException(status_code=503, detail="FTD editor is not configured")
+    backend_url = value.get("backend_url")
+    ui_root = value.get("ui_root")
+    if not isinstance(backend_url, str) or not isinstance(ui_root, str):
+        raise HTTPException(status_code=503, detail="FTD editor configuration is incomplete")
+    parsed = urlsplit(backend_url)
+    if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost", "::1"}:
+        raise HTTPException(status_code=503, detail="FTD editor backend must be loopback HTTP")
+    root = Path(ui_root).expanduser().resolve()
+    if not root.is_absolute():
+        raise HTTPException(status_code=503, detail="FTD editor UI root must be absolute")
+    return backend_url.rstrip("/"), root
+
+
+def _ftd_static_file(ui_root: Path, relative: str) -> Path:
+    candidate = (ui_root / relative).resolve(strict=False)
+    if candidate != ui_root and ui_root not in candidate.parents:
+        raise HTTPException(status_code=404, detail="editor asset not found")
+    if not candidate.is_file():
+        raise HTTPException(status_code=404, detail="editor asset not found")
+    return candidate
+
+
+def _proxy_ftd_editor(
+    backend_url: str,
+    method: str,
+    path: str,
+    query: str,
+    body: bytes,
+    headers: dict[str, str],
+) -> tuple[int, dict[str, str], bytes]:
+    target = f"{backend_url}/{path.lstrip('/')}"
+    if query:
+        target = f"{target}?{query}"
+    parsed = urlsplit(backend_url)
+    forwarded = {
+        "Host": parsed.netloc,
+        "Origin": backend_url,
+        **headers,
+    }
+    request = urllib.request.Request(
+        target,
+        data=body if method != "GET" else None,
+        headers=forwarded,
+        method=method,
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=330) as response:
+            return response.status, dict(response.headers.items()), response.read()
+    except urllib.error.HTTPError as error:
+        return error.code, dict(error.headers.items()), error.read()
+    except urllib.error.URLError as error:
+        raise HTTPException(status_code=503, detail="FTD editor backend is unavailable") from error
+
+
+@app.get("/tools/ftd-editor")
+def ftd_editor_slash(request: Request):
+    if not web_token_ok(request):
+        return _login_redirect(request)
+    return RedirectResponse(url="/tools/ftd-editor/", status_code=307)
+
+
+@app.get("/tools/ftd-editor/")
+def ftd_editor_index(request: Request):
+    if not web_token_ok(request):
+        return _login_redirect(request)
+    _, ui_root = _ftd_editor_config()
+    response = FileResponse(_ftd_static_file(ui_root, "index.html"))
+    _maybe_set_cookie(response, request)
+    return response
+
+
+@app.get("/tools/ftd-editor/assets/{asset_path:path}")
+def ftd_editor_asset(request: Request, asset_path: str):
+    if not web_token_ok(request):
+        return _login_redirect(request)
+    _, ui_root = _ftd_editor_config()
+    return FileResponse(_ftd_static_file(ui_root, f"assets/{asset_path}"))
+
+
+@app.api_route(
+    "/tools/ftd-editor/{editor_path:path}",
+    methods=["GET", "POST"],
+)
+async def ftd_editor_proxy(request: Request, editor_path: str):
+    if not web_token_ok(request):
+        return _login_redirect(request)
+    if not (editor_path == "bootstrap" or editor_path.startswith("api/")):
+        raise HTTPException(status_code=404, detail="editor route not found")
+    backend_url, _ = _ftd_editor_config()
+    forwarded = {}
+    for name in ("content-type", "x-ftd-launch-credential"):
+        value = request.headers.get(name)
+        if value:
+            forwarded[name] = value
+    status, response_headers, payload = await run_in_threadpool(
+        _proxy_ftd_editor,
+        backend_url,
+        request.method,
+        editor_path,
+        request.url.query,
+        await request.body(),
+        forwarded,
+    )
+    safe_headers = {
+        name: value
+        for name, value in response_headers.items()
+        if name.lower() in {
+            "content-disposition",
+            "x-content-type-options",
+            "x-ftd-session-id",
+            "x-ftd-session-revision",
+            "x-ftd-image-source",
+            "x-ftd-image-sha256",
+        }
+    }
+    return Response(
+        payload,
+        status_code=status,
+        media_type=response_headers.get("Content-Type"),
+        headers=safe_headers,
+    )
 
 
 @app.get("/login", response_class=HTMLResponse)
