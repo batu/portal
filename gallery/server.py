@@ -2828,3 +2828,53 @@ def web_journey_detail(request: Request, slug: str):
     response.headers["Referrer-Policy"] = "no-referrer"
     _maybe_set_cookie(response, request)
     return response
+
+
+def _is_ftd_editor_referrer(request: Request) -> bool:
+    referrer = request.headers.get("referer")
+    if not referrer:
+        return False
+    parsed = urlsplit(referrer)
+    return parsed.path.startswith("/tools/ftd-editor/")
+
+
+async def _proxy_legacy_ftd_request(request: Request, editor_path: str) -> Response:
+    if not web_token_ok(request) or not _is_ftd_editor_referrer(request):
+        raise HTTPException(status_code=404, detail="route not found")
+    backend_url, _ = _ftd_editor_config()
+    forwarded = {}
+    content_type = request.headers.get("content-type")
+    if content_type:
+        forwarded["content-type"] = content_type
+    status, response_headers, payload = await run_in_threadpool(
+        _proxy_ftd_editor,
+        backend_url,
+        request.method,
+        editor_path,
+        request.url.query,
+        await request.body(),
+        forwarded,
+    )
+    return Response(
+        payload,
+        status_code=status,
+        media_type=response_headers.get("Content-Type"),
+    )
+
+
+@app.api_route(
+    "/api/{editor_path:path}",
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+)
+async def legacy_ftd_api_proxy(request: Request, editor_path: str):
+    return await _proxy_legacy_ftd_request(request, f"api/{editor_path}")
+
+
+@app.get("/levels/{asset_path:path}")
+async def legacy_ftd_level_asset(request: Request, asset_path: str):
+    return await _proxy_legacy_ftd_request(request, f"levels/{asset_path}")
+
+
+@app.get("/public-levels/{asset_path:path}")
+async def legacy_ftd_public_level_asset(request: Request, asset_path: str):
+    return await _proxy_legacy_ftd_request(request, f"public-levels/{asset_path}")
