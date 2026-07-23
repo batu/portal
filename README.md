@@ -41,6 +41,10 @@ systemd user unit for a future Linux move lives at `deploy/gallery.service`
   "host": "0.0.0.0",
   "port": 8787,
   "url": "http://bases-mac-mini:8787",
+  "ftd_editor": {
+    "backend_url": "http://127.0.0.1:5192",
+    "ui_root": "/absolute/path/to/fabrikav2/tools/ftd-level-editor/dist"
+  },
   "telegram_bot_token": null,
   "telegram_chat_id": null
 }
@@ -50,6 +54,10 @@ systemd user unit for a future Linux move lives at `deploy/gallery.service`
   media dir, config, logs).
 - `GALLERY_URL` / `GALLERY_TOKEN` override the CLI's server URL/token without
   touching config.json (handy for pointing the CLI at a scratch/test server).
+- `ftd_editor` is optional. When configured, authenticated users get a
+  `/tools/ftd-editor/` navigation entry. Portal serves the compiled UI and
+  proxies only `bootstrap` and `api/*` to the loopback-only editor. Portal
+  cookies and tokens are never forwarded to the editor service.
 
 ### Doorbell notifications (optional)
 

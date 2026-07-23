@@ -29,7 +29,10 @@
 <body>
   <header class="topbar">
     <a href="/" class="brand">Portal</a>
-    <nav class="topnav" aria-label="Primary"><a href="/games">Games</a></nav>
+    <nav class="topnav" aria-label="Primary">
+      <a href="/games">Games</a>
+      {% if ftd_editor_enabled() %}<a href="/tools/ftd-editor/">FTD Editor</a>{% endif %}
+    </nav>
   </header>
   <main class="{% block main_class %}{% endblock %}">
     {% block content %}{% endblock %}
