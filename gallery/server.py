@@ -244,6 +244,46 @@ def ftd_editor_enabled() -> bool:
 templates.env.globals["ftd_editor_enabled"] = ftd_editor_enabled
 
 COOKIE_NAME = "gallery_token"
+_ftd_editor_process: subprocess.Popen | None = None
+
+
+def _ftd_editor_command() -> tuple[str, ...] | None:
+    value = config.load_config().get("ftd_editor")
+    if not isinstance(value, dict):
+        return None
+    command = value.get("command")
+    if not isinstance(command, list) or not command:
+        return None
+    if not all(isinstance(part, str) and part for part in command):
+        raise RuntimeError("ftd_editor.command must be a non-empty string list")
+    executable = Path(command[0])
+    if not executable.is_absolute() or not executable.is_file():
+        raise RuntimeError("ftd_editor.command executable must be an absolute file")
+    return tuple(command)
+
+
+@app.on_event("startup")
+def start_ftd_editor() -> None:
+    global _ftd_editor_process
+    command = _ftd_editor_command()
+    if command is None:
+        return
+    _ftd_editor_process = subprocess.Popen(command, start_new_session=True)
+
+
+@app.on_event("shutdown")
+def stop_ftd_editor() -> None:
+    global _ftd_editor_process
+    process = _ftd_editor_process
+    _ftd_editor_process = None
+    if process is None or process.poll() is not None:
+        return
+    process.terminate()
+    try:
+        process.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=5)
 
 
 def _ago(ts: str) -> str:
