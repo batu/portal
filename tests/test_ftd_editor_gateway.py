@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import io
+
 from gallery import config
 from gallery import server
 
@@ -122,3 +124,44 @@ def test_copied_v1_editor_root_api_is_scoped_to_authenticated_editor_referrer(
     assert allowed.status_code == 200
     assert observed["path"] == "api/config"
     assert unrelated.status_code == 404
+
+
+def test_ftd_editor_sse_proxy_yields_upstream_events_without_buffering(monkeypatch):
+    class Upstream:
+        status = 200
+        headers = {"Content-Type": "text/event-stream", "Cache-Control": "no-cache"}
+
+        def __init__(self):
+            self._body = io.BytesIO(
+                b"event: bg_ready\ndata: {\"index\":0}\n\n"
+                b"event: generate_complete\ndata: {\"failed\":0}\n\n"
+            )
+            self.closed = False
+
+        def __iter__(self):
+            return iter(self._body)
+
+        def close(self):
+            self.closed = True
+
+        def read(self, *_args, **_kwargs):
+            raise AssertionError("SSE responses must not be buffered with read()")
+
+    upstream = Upstream()
+    monkeypatch.setattr(server.urllib.request, "urlopen", lambda *_args, **_kwargs: upstream)
+
+    response, headers = server._open_ftd_editor_stream(
+        "http://127.0.0.1:5192",
+        "GET",
+        "api/sessions/example/generate",
+        "",
+        b"",
+        {},
+    )
+
+    assert headers["Content-Type"] == "text/event-stream"
+    assert b"".join(server._iter_ftd_editor_stream(response)) == (
+        b"event: bg_ready\ndata: {\"index\":0}\n\n"
+        b"event: generate_complete\ndata: {\"failed\":0}\n\n"
+    )
+    assert upstream.closed is True
