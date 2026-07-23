@@ -23,7 +23,7 @@ from urllib.parse import quote, urlsplit
 
 import markdown as md_lib
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
@@ -423,6 +423,70 @@ def _proxy_ftd_editor(
         raise HTTPException(status_code=503, detail="FTD editor backend is unavailable") from error
 
 
+def _open_ftd_editor_stream(
+    backend_url: str,
+    method: str,
+    path: str,
+    query: str,
+    body: bytes,
+    headers: dict[str, str],
+):
+    target = f"{backend_url}/{path.lstrip('/')}"
+    if query:
+        target = f"{target}?{query}"
+    parsed = urlsplit(backend_url)
+    request = urllib.request.Request(
+        target,
+        data=body if method != "GET" else None,
+        headers={"Host": parsed.netloc, "Origin": backend_url, **headers},
+        method=method,
+    )
+    try:
+        response = urllib.request.urlopen(request, timeout=330)
+    except urllib.error.HTTPError as error:
+        response = error
+    except urllib.error.URLError as error:
+        raise HTTPException(status_code=503, detail="FTD editor backend is unavailable") from error
+    return response, dict(response.headers.items())
+
+
+def _iter_ftd_editor_stream(response):
+    try:
+        yield from response
+    finally:
+        response.close()
+
+
+def _is_ftd_editor_sse_path(editor_path: str) -> bool:
+    return editor_path.startswith("api/sessions/") and editor_path.endswith("/generate")
+
+
+async def _stream_ftd_editor_response(
+    request: Request,
+    backend_url: str,
+    editor_path: str,
+    forwarded: dict[str, str],
+) -> StreamingResponse:
+    upstream, response_headers = await run_in_threadpool(
+        _open_ftd_editor_stream,
+        backend_url,
+        request.method,
+        editor_path,
+        request.url.query,
+        await request.body(),
+        forwarded,
+    )
+    return StreamingResponse(
+        _iter_ftd_editor_stream(upstream),
+        status_code=upstream.status,
+        media_type=response_headers.get("Content-Type"),
+        headers={
+            "Cache-Control": response_headers.get("Cache-Control", "no-cache"),
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @app.get("/tools/ftd-editor")
 def ftd_editor_slash(request: Request):
     if not web_token_ok(request):
@@ -463,6 +527,8 @@ async def ftd_editor_proxy(request: Request, editor_path: str):
         value = request.headers.get(name)
         if value:
             forwarded[name] = value
+    if _is_ftd_editor_sse_path(editor_path):
+        return await _stream_ftd_editor_response(request, backend_url, editor_path, forwarded)
     status, response_headers, payload = await run_in_threadpool(
         _proxy_ftd_editor,
         backend_url,
@@ -2726,6 +2792,8 @@ async def _proxy_legacy_ftd_request(request: Request, editor_path: str) -> Respo
     content_type = request.headers.get("content-type")
     if content_type:
         forwarded["content-type"] = content_type
+    if _is_ftd_editor_sse_path(editor_path):
+        return await _stream_ftd_editor_response(request, backend_url, editor_path, forwarded)
     status, response_headers, payload = await run_in_threadpool(
         _proxy_ftd_editor,
         backend_url,
