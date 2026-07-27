@@ -7,6 +7,9 @@
   <div><p class="eyebrow">Game archive</p><h1>{{ game.title }}</h1><p>{{ game.description }}</p></div>
   <div class="release-count">{{ game.builds|length }}<span>build{{ 's' if game.builds|length != 1 else '' }}</span></div>
 </header>
+{% if has_remote_config %}
+<p class="rc-entry"><a href="/games/{{ game.slug }}/remote-config">Remote config →</a> <span>Retune live values without a rebuild.</span></p>
+{% endif %}
 <div class="build-tabs" role="tablist" aria-label="Build versions">
   {% for build in game.builds %}
   <button

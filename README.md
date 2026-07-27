@@ -184,6 +184,37 @@ removing its database record. Public game pages, videos, preview images, and
 downloads are read-only; publishing and release management require the API
 token.
 
+### Remote config (live value tuning)
+
+A game can expose its Firebase Remote Config parameters at
+`/games/<slug>/remote-config`, so shipped values (ad gating, economy knobs) can
+be retuned from the phone without a rebuild or a store update. The page reads
+the live template on every load and publishes back to it, so it never serves or
+overwrites a stale copy. A no-op edit does not publish.
+
+Wire a game up in `~/.gallery/config.json`:
+
+```json
+"remote_config": {
+  "marble-run": {
+    "project": "marble-run-basegamelab",
+    "firebase_bin": "/opt/homebrew/bin/firebase",
+    "groups": ["Ads"]
+  }
+}
+```
+
+`groups` is optional and limits which parameter groups are editable — worth
+setting, since it keeps product IDs and other footguns off the page. Games with
+no entry have no route and no link (404).
+
+Auth and transport come from the `firebase` CLI installed and logged in on this
+host, so no service-account key is stored here. That also means the page can
+only publish to projects that CLI account can reach; a permissions failure is
+surfaced on the page rather than swallowed. Editing is behind the usual portal
+token/passphrase — treat it as a production control surface, because the values
+reach players on their next config fetch.
+
 ## Portal streams
 
 Portal is the current agent-facing surface of this service. Use the `portal`

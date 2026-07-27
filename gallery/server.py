@@ -26,7 +26,7 @@ from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
-from . import config, db, notify
+from . import config, db, notify, remote_config
 
 log = logging.getLogger("gallery.server")
 
@@ -231,6 +231,9 @@ def static_url(name: str) -> str:
 templates.env.globals["static_url"] = static_url
 
 COOKIE_NAME = "gallery_token"
+# Remote-config form fields are namespaced so a stray form field can never be
+# mistaken for a Remote Config parameter name.
+_RC_FIELD_PREFIX = "rc__"
 
 
 def _ago(ts: str) -> str:
@@ -1951,8 +1954,69 @@ def web_game_detail(request: Request, slug: str):
     response = templates.TemplateResponse(
         request,
         "game.html",
-        {"game": game, "og": _game_og_context(request, game)},
+        {
+            "game": game,
+            "og": _game_og_context(request, game),
+            "has_remote_config": remote_config.game_settings(slug) is not None,
+        },
     )
+    _maybe_set_cookie(response, request)
+    return response
+
+
+def _remote_config_context(slug: str, settings: dict) -> dict:
+    game = db.get_game(slug)
+    if game is None:
+        raise HTTPException(status_code=404, detail="game not found")
+    template = remote_config.read_template(settings)
+    return {
+        "game": game,
+        "project": settings["project"],
+        "params": remote_config.editable_params(template, settings),
+    }
+
+
+@app.get("/games/{slug}/remote-config", response_class=HTMLResponse)
+def web_game_remote_config(request: Request, slug: str):
+    if not web_token_ok(request):
+        return _login_redirect(request)
+    settings = remote_config.game_settings(slug)
+    if settings is None:
+        raise HTTPException(status_code=404, detail="game has no remote config")
+    try:
+        context = _remote_config_context(slug, settings)
+    except remote_config.RemoteConfigError as exc:
+        game = db.get_game(slug)
+        if game is None:
+            raise HTTPException(status_code=404, detail="game not found") from exc
+        context = {"game": game, "project": settings["project"], "params": [], "error": str(exc)}
+    response = templates.TemplateResponse(request, "remote_config.html", context)
+    _maybe_set_cookie(response, request)
+    return response
+
+
+@app.post("/games/{slug}/remote-config")
+async def web_game_remote_config_publish(request: Request, slug: str):
+    if not web_token_ok(request):
+        return _login_redirect(request)
+    settings = remote_config.game_settings(slug)
+    if settings is None:
+        raise HTTPException(status_code=404, detail="game has no remote config")
+    form = await request.form()
+    updates = {key[len(_RC_FIELD_PREFIX):]: str(value) for key, value in form.items() if key.startswith(_RC_FIELD_PREFIX)}
+    try:
+        changed = remote_config.publish(settings, updates)
+        message = (
+            f"Published {len(changed)} change{'s' if len(changed) != 1 else ''}: {', '.join(changed)}"
+            if changed
+            else "No changes to publish."
+        )
+        status = "ok"
+    except remote_config.RemoteConfigError as exc:
+        message, status = str(exc), "error"
+    context = _remote_config_context(slug, settings)
+    context.update({"message": message, "status": status})
+    response = templates.TemplateResponse(request, "remote_config.html", context)
     _maybe_set_cookie(response, request)
     return response
 
