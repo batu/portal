@@ -51,6 +51,8 @@ GAME_ARTIFACT_FIELD = "artifact_path"
 GAME_VIDEO_FIELD = "video_path"
 GAME_PREVIEW_FIELD = "preview_path"
 GAME_WEB_FIELD = "web_preview_path"
+# Text files whose absolute asset URLs are repointed at the build directory.
+GAME_WEB_REWRITE_EXTS = {".html", ".js", ".css", ".json"}
 GAME_WEB_DIR = "web"
 GAME_WEB_ENTRY = "index.html"
 MAX_GAME_WEB_FILES = 2000
@@ -416,6 +418,47 @@ def _extract_game_web_bundle(zip_path: Path, release_dir: Path) -> str:
     return f"{GAME_WEB_DIR}/{entry}"
 
 
+def _rewrite_web_bundle_absolute_paths(web_root: Path, url_prefix: str) -> int:
+    """Repoint root-absolute asset URLs at the build's own directory.
+
+    A game's web build is authored to run at the root of its own origin (in a
+    Capacitor shell it is), so it references `/assets/...`, `/fonts/...` and
+    friends absolutely. Served from `/games/<slug>/builds/<version>/play/`, every
+    one of those requests goes to the SITE root instead and 404s — and because
+    the preview iframe is sandboxed without `allow-same-origin`, the failures
+    surface as opaque CORS errors. The page then renders as a blank background.
+
+    Rewriting here (rather than asking each game to build with a relative base)
+    keeps the fix in one place and costs the games nothing. Only leading-slash
+    references to directories that actually exist in this bundle are touched, and
+    only when preceded by a quote, `(` or `=`, so absolute URLs belonging to
+    other origins are left alone.
+    """
+    directories = sorted(
+        entry.name for entry in web_root.iterdir() if entry.is_dir() and entry.name
+    )
+    if not directories:
+        return 0
+    pattern = re.compile(
+        r"""(?P<lead>["'(=])/(?P<dir>""" + "|".join(re.escape(name) for name in directories) + r""")/"""
+    )
+    rewritten = 0
+    for path in web_root.rglob("*"):
+        if not path.is_file() or path.suffix.lower() not in GAME_WEB_REWRITE_EXTS:
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        updated = pattern.sub(
+            lambda match: f"{match.group('lead')}{url_prefix}/{match.group('dir')}/", text
+        )
+        if updated != text:
+            path.write_text(updated, encoding="utf-8")
+            rewritten += 1
+    return rewritten
+
+
 def _validate_game_release_ref(slug: str, version: str) -> None:
     if not STREAM_SLUG_RE.fullmatch(slug):
         raise HTTPException(status_code=400, detail="invalid game slug")
@@ -466,6 +509,10 @@ async def publish_game_build(
             await _write_game_upload(web, bundle_zip)
             web_preview_path = await run_in_threadpool(_extract_game_web_bundle, bundle_zip, release_dir)
             bundle_zip.unlink()
+            play_prefix = f"/games/{slug}/builds/{quote(version, safe='')}/play"
+            await run_in_threadpool(
+                _rewrite_web_bundle_absolute_paths, release_dir / GAME_WEB_DIR, play_prefix
+            )
         build = db.create_game_build(
             slug,
             title=title.strip(),
