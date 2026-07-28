@@ -7,6 +7,9 @@
   <div><p class="eyebrow">Game archive</p><h1>{{ game.title }}</h1><p>{{ game.description }}</p></div>
   <div class="release-count">{{ game.builds|length }}<span>build{{ 's' if game.builds|length != 1 else '' }}</span></div>
 </header>
+{% if has_remote_config %}
+<p class="rc-entry"><a href="/games/{{ game.slug }}/remote-config">Remote config →</a> <span>Retune live values without a rebuild.</span></p>
+{% endif %}
 <div class="build-tabs" role="tablist" aria-label="Build versions">
   {% for build in game.builds %}
   <button
@@ -35,7 +38,7 @@
     <section class="device-lab" data-play-surface aria-label="Device Lab for {{ build.version }}">
       <header class="device-lab-heading">
         <div><p class="eyebrow">Playable build</p><h2>Device Lab</h2></div>
-        <p>Browser preview for rapid design review. Verify performance on a real device before release.</p>
+        <p>Browser preview for rapid design review. Verify performance on a real device before release.{% if has_remote_config %} <a href="/games/{{ game.slug }}/remote-config">Remote config →</a>{% endif %}</p>
       </header>
       <div class="device-lab-workspace">
         <aside class="device-rail" aria-label="Choose a device">

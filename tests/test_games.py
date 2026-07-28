@@ -252,7 +252,7 @@ WEB_BUNDLE = {
 
 def publish_with_web(client, token, bundle, *, version="1.0.0"):
     return client.post(
-        f"/api/games/marble-run/builds",
+        "/api/games/marble-run/builds",
         headers=auth_headers(token),
         data={"title": "Marble Run", "version": version, "changelog": "- Playable in the browser"},
         files={
@@ -395,3 +395,72 @@ def test_v10_database_migrates_to_an_empty_web_preview_path(data_dir):
         video_path="v.mp4", preview_path="p.jpg",
     )
     assert build["web_preview_path"] == ""
+
+
+def test_web_bundle_absolute_asset_paths_are_repointed_at_the_build(client, token, tmp_path):
+    # A game build is authored to run at its own origin root, so it references
+    # /assets/... absolutely. Served under /games/<slug>/builds/<v>/play/ those
+    # would hit the SITE root and 404, leaving the Device Lab blank.
+    import io
+    import zipfile
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("index.html", '<script src="/assets/app.js"></script><link href="/fonts/x.css">')
+        z.writestr("assets/app.js", 'fetch("/levels/index.json");const a="/ui/logo.png";')
+        z.writestr("assets/app.css", 'a{background:url("/ui/bg.png")}')
+        z.writestr("levels/index.json", '{"art":"/ui/tile.png"}')
+        z.writestr("ui/logo.png", "x")
+        z.writestr("fonts/x.css", "@font-face{src:url('/fonts/f.woff2')}")
+    buf.seek(0)
+
+    resp = client.post(
+        "/api/games/marble-run/builds",
+        headers=auth_headers(token),
+        data={"title": "Marble Run", "description": "d", "version": "9.9.9", "changelog": "- c"},
+        files={
+            "artifact": ("g.apk", b"a", "application/vnd.android.package-archive"),
+            "video": ("g.mp4", b"v", "video/mp4"),
+            "poster": ("p.jpg", b"p", "image/jpeg"),
+            "web": ("web.zip", buf.read(), "application/zip"),
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["preview_url"] == "/games/marble-run/builds/9.9.9/play/"
+
+    web = config.games_dir() / "marble-run" / "9.9.9" / "web"
+    prefix = "/games/marble-run/builds/9.9.9/play"
+    assert f'src="{prefix}/assets/app.js"' in (web / "index.html").read_text()
+    assert f'href="{prefix}/fonts/x.css"' in (web / "index.html").read_text()
+    js = (web / "assets" / "app.js").read_text()
+    assert f'fetch("{prefix}/levels/index.json")' in js
+    assert f'"{prefix}/ui/logo.png"' in js
+    assert f'url("{prefix}/ui/bg.png")' in (web / "assets" / "app.css").read_text()
+    assert f'"{prefix}/ui/tile.png"' in (web / "levels" / "index.json").read_text()
+
+
+def test_web_bundle_rewrite_leaves_foreign_absolute_urls_alone(client, token):
+    import io
+    import zipfile
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        # "assets" exists in the bundle, so a naive rewrite would also mangle a
+        # third-party URL that happens to contain /assets/.
+        z.writestr("index.html", '<script src="https://cdn.example.com/assets/x.js"></script>')
+        z.writestr("assets/app.js", "export const a = 1;")
+    buf.seek(0)
+    resp = client.post(
+        "/api/games/marble-run/builds",
+        headers=auth_headers(token),
+        data={"title": "Marble Run", "description": "d", "version": "9.9.8", "changelog": "- c"},
+        files={
+            "artifact": ("g.apk", b"a", "application/vnd.android.package-archive"),
+            "video": ("g.mp4", b"v", "video/mp4"),
+            "poster": ("p.jpg", b"p", "image/jpeg"),
+            "web": ("web.zip", buf.read(), "application/zip"),
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    html = (config.games_dir() / "marble-run" / "9.9.8" / "web" / "index.html").read_text()
+    assert 'src="https://cdn.example.com/assets/x.js"' in html

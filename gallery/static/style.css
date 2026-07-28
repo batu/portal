@@ -1303,3 +1303,47 @@ h2 { font-size: 1.05rem; }
   font-weight: 600;
   text-decoration: none;
 }
+
+/* Remote config editor (/games/<slug>/remote-config) */
+.rc-banner {
+  padding: 12px 16px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  margin: 0 0 18px;
+}
+.rc-banner.rc-ok { border-color: var(--ok); color: var(--ok); }
+.rc-banner.rc-error { border-color: var(--danger); color: var(--danger); }
+.rc-form { display: flex; flex-direction: column; gap: 14px; }
+.rc-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+}
+.rc-row label { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.rc-key { font-weight: 700; word-break: break-word; }
+.rc-desc { color: var(--muted); font-size: 0.85rem; }
+.rc-row input,
+.rc-row select {
+  flex: 0 0 auto;
+  width: 140px;
+  min-height: 48px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg);
+  font-family: inherit;
+  font-size: 1rem;
+}
+@media (max-width: 560px) {
+  .rc-row { flex-direction: column; align-items: stretch; }
+  .rc-row input, .rc-row select { width: 100%; }
+}
+.rc-entry { margin: 0 0 20px; }
+.rc-entry span { color: var(--muted); margin-left: 8px; }

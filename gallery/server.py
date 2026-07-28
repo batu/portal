@@ -26,7 +26,7 @@ from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
-from . import config, db, notify
+from . import config, db, notify, remote_config
 
 log = logging.getLogger("gallery.server")
 
@@ -51,6 +51,8 @@ GAME_ARTIFACT_FIELD = "artifact_path"
 GAME_VIDEO_FIELD = "video_path"
 GAME_PREVIEW_FIELD = "preview_path"
 GAME_WEB_FIELD = "web_preview_path"
+# Text files whose absolute asset URLs are repointed at the build directory.
+GAME_WEB_REWRITE_EXTS = {".html", ".js", ".css", ".json"}
 GAME_WEB_DIR = "web"
 GAME_WEB_ENTRY = "index.html"
 MAX_GAME_WEB_FILES = 2000
@@ -231,6 +233,9 @@ def static_url(name: str) -> str:
 templates.env.globals["static_url"] = static_url
 
 COOKIE_NAME = "gallery_token"
+# Remote-config form fields are namespaced so a stray form field can never be
+# mistaken for a Remote Config parameter name.
+_RC_FIELD_PREFIX = "rc__"
 
 
 def _ago(ts: str) -> str:
@@ -413,6 +418,47 @@ def _extract_game_web_bundle(zip_path: Path, release_dir: Path) -> str:
     return f"{GAME_WEB_DIR}/{entry}"
 
 
+def _rewrite_web_bundle_absolute_paths(web_root: Path, url_prefix: str) -> int:
+    """Repoint root-absolute asset URLs at the build's own directory.
+
+    A game's web build is authored to run at the root of its own origin (in a
+    Capacitor shell it is), so it references `/assets/...`, `/fonts/...` and
+    friends absolutely. Served from `/games/<slug>/builds/<version>/play/`, every
+    one of those requests goes to the SITE root instead and 404s — and because
+    the preview iframe is sandboxed without `allow-same-origin`, the failures
+    surface as opaque CORS errors. The page then renders as a blank background.
+
+    Rewriting here (rather than asking each game to build with a relative base)
+    keeps the fix in one place and costs the games nothing. Only leading-slash
+    references to directories that actually exist in this bundle are touched, and
+    only when preceded by a quote, `(` or `=`, so absolute URLs belonging to
+    other origins are left alone.
+    """
+    directories = sorted(
+        entry.name for entry in web_root.iterdir() if entry.is_dir() and entry.name
+    )
+    if not directories:
+        return 0
+    pattern = re.compile(
+        r"""(?P<lead>["'(=])/(?P<dir>""" + "|".join(re.escape(name) for name in directories) + r""")/"""
+    )
+    rewritten = 0
+    for path in web_root.rglob("*"):
+        if not path.is_file() or path.suffix.lower() not in GAME_WEB_REWRITE_EXTS:
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        updated = pattern.sub(
+            lambda match: f"{match.group('lead')}{url_prefix}/{match.group('dir')}/", text
+        )
+        if updated != text:
+            path.write_text(updated, encoding="utf-8")
+            rewritten += 1
+    return rewritten
+
+
 def _validate_game_release_ref(slug: str, version: str) -> None:
     if not STREAM_SLUG_RE.fullmatch(slug):
         raise HTTPException(status_code=400, detail="invalid game slug")
@@ -463,6 +509,10 @@ async def publish_game_build(
             await _write_game_upload(web, bundle_zip)
             web_preview_path = await run_in_threadpool(_extract_game_web_bundle, bundle_zip, release_dir)
             bundle_zip.unlink()
+            play_prefix = f"/games/{slug}/builds/{quote(version, safe='')}/play"
+            await run_in_threadpool(
+                _rewrite_web_bundle_absolute_paths, release_dir / GAME_WEB_DIR, play_prefix
+            )
         build = db.create_game_build(
             slug,
             title=title.strip(),
@@ -1951,8 +2001,69 @@ def web_game_detail(request: Request, slug: str):
     response = templates.TemplateResponse(
         request,
         "game.html",
-        {"game": game, "og": _game_og_context(request, game)},
+        {
+            "game": game,
+            "og": _game_og_context(request, game),
+            "has_remote_config": remote_config.game_settings(slug) is not None,
+        },
     )
+    _maybe_set_cookie(response, request)
+    return response
+
+
+def _remote_config_context(slug: str, settings: dict) -> dict:
+    game = db.get_game(slug)
+    if game is None:
+        raise HTTPException(status_code=404, detail="game not found")
+    template = remote_config.read_template(settings)
+    return {
+        "game": game,
+        "project": settings["project"],
+        "params": remote_config.editable_params(template, settings),
+    }
+
+
+@app.get("/games/{slug}/remote-config", response_class=HTMLResponse)
+def web_game_remote_config(request: Request, slug: str):
+    if not web_token_ok(request):
+        return _login_redirect(request)
+    settings = remote_config.game_settings(slug)
+    if settings is None:
+        raise HTTPException(status_code=404, detail="game has no remote config")
+    try:
+        context = _remote_config_context(slug, settings)
+    except remote_config.RemoteConfigError as exc:
+        game = db.get_game(slug)
+        if game is None:
+            raise HTTPException(status_code=404, detail="game not found") from exc
+        context = {"game": game, "project": settings["project"], "params": [], "error": str(exc)}
+    response = templates.TemplateResponse(request, "remote_config.html", context)
+    _maybe_set_cookie(response, request)
+    return response
+
+
+@app.post("/games/{slug}/remote-config")
+async def web_game_remote_config_publish(request: Request, slug: str):
+    if not web_token_ok(request):
+        return _login_redirect(request)
+    settings = remote_config.game_settings(slug)
+    if settings is None:
+        raise HTTPException(status_code=404, detail="game has no remote config")
+    form = await request.form()
+    updates = {key[len(_RC_FIELD_PREFIX):]: str(value) for key, value in form.items() if key.startswith(_RC_FIELD_PREFIX)}
+    try:
+        changed = remote_config.publish(settings, updates)
+        message = (
+            f"Published {len(changed)} change{'s' if len(changed) != 1 else ''}: {', '.join(changed)}"
+            if changed
+            else "No changes to publish."
+        )
+        status = "ok"
+    except remote_config.RemoteConfigError as exc:
+        message, status = str(exc), "error"
+    context = _remote_config_context(slug, settings)
+    context.update({"message": message, "status": status})
+    response = templates.TemplateResponse(request, "remote_config.html", context)
     _maybe_set_cookie(response, request)
     return response
 

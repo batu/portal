@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}{{ game.title }} remote config — Portal{% endblock %}
+{% block main_class %}wide{% endblock %}
+{% block content %}
+<nav class="breadcrumb" aria-label="Breadcrumb"><a href="/">Index</a><span>/</span><a href="/games">Games</a><span>/</span><a href="/games/{{ game.slug }}">{{ game.title }}</a><span>/</span><span aria-current="page">Remote config</span></nav>
+<header class="game-hero">
+  <div>
+    <p class="eyebrow">Live remote config</p>
+    <h1>{{ game.title }}</h1>
+    <p>Values are read from and published to the live Firebase template. Changes reach players on their next config fetch — no rebuild, no store update.</p>
+  </div>
+</header>
+
+{% if message %}
+<p class="rc-banner {{ 'rc-error' if status == 'error' else 'rc-ok' }}">{{ message }}</p>
+{% endif %}
+{% if error %}
+<p class="rc-banner rc-error">{{ error }}</p>
+{% endif %}
+
+{% if params %}
+<form method="post" class="rc-form">
+  {% for param in params %}
+  <div class="rc-row">
+    <label for="rc-{{ param.key }}">
+      <span class="rc-key">{{ param.key }}</span>
+      {% if param.description %}<span class="rc-desc">{{ param.description }}</span>{% endif %}
+    </label>
+    {% if param.type == 'BOOLEAN' %}
+    <select id="rc-{{ param.key }}" name="rc__{{ param.key }}">
+      <option value="true"{% if param.value == 'true' %} selected{% endif %}>true</option>
+      <option value="false"{% if param.value != 'true' %} selected{% endif %}>false</option>
+    </select>
+    {% elif param.type == 'NUMBER' %}
+    <input id="rc-{{ param.key }}" name="rc__{{ param.key }}" type="number" step="any" value="{{ param.value }}" inputmode="decimal">
+    {% else %}
+    <input id="rc-{{ param.key }}" name="rc__{{ param.key }}" type="text" value="{{ param.value }}">
+    {% endif %}
+  </div>
+  {% endfor %}
+  <button type="submit" class="btn decide">Publish to {{ project }}</button>
+</form>
+{% elif not error %}
+<p class="empty">No editable parameters in this template.</p>
+{% endif %}
+{% endblock %}
