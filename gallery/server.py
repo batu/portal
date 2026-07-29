@@ -505,6 +505,9 @@ def ftd_editor_index(request: Request):
         return _login_redirect(request)
     _, ui_root = _ftd_editor_config()
     response = FileResponse(_ftd_static_file(ui_root, "index.html"))
+    # The index references hashed asset filenames; if a browser caches it, the
+    # whole old app survives redeploys (observed twice on 2026-07-29).
+    response.headers["Cache-Control"] = "no-cache"
     _maybe_set_cookie(response, request)
     return response
 
