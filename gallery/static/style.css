@@ -523,6 +523,9 @@ h2 { font-size: 1.05rem; }
 }
 
 .before-side-by-side {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr));
+  gap: 10px;
   margin: 0 0 10px;
 }
 
@@ -558,6 +561,12 @@ h2 { font-size: 1.05rem; }
   border: 2px solid var(--border);
   border-radius: 10px;
   background: #07090e;
+  cursor: pointer;
+}
+
+.toggle-frame:focus-visible {
+  outline: 3px solid #ffd166;
+  outline-offset: 3px;
 }
 
 .toggle-layer {

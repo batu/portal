@@ -61,21 +61,37 @@
       <button type="button" class="view-switcher-option" data-before-view="toggle" aria-pressed="{{ 'true' if before_media.default_view == 'toggle' else 'false' }}">Toggle</button>
     </div>
 
-    <div class="before-card before-side-by-side" data-before-block data-side-by-side{% if before_media.default_view != "side-by-side" %} hidden{% endif %}>
-      <div class="before-label">BEFORE</div>
-      <div class="before-media">
-        {% if before_media.media_type == "video" %}
-        <video controls playsinline preload="metadata" src="{{ before_media.url }}?token={{ request.query_params.get('token', '') }}"></video>
-        {% else %}
-        <a href="{{ before_media.url }}?token={{ request.query_params.get('token', '') }}" target="_blank" rel="noopener">
-          <img loading="lazy" src="{{ before_media.url }}?token={{ request.query_params.get('token', '') }}" alt="before image">
-        </a>
-        {% endif %}
+    <div class="before-side-by-side" data-before-block data-side-by-side{% if before_media.default_view != "side-by-side" %} hidden{% endif %}>
+      <div class="before-card">
+        <div class="before-label">BEFORE</div>
+        <div class="before-media">
+          {% if before_media.media_type == "video" %}
+          <video controls playsinline preload="metadata" src="{{ before_media.url }}?token={{ request.query_params.get('token', '') }}"></video>
+          {% else %}
+          <a href="{{ before_media.url }}?token={{ request.query_params.get('token', '') }}" target="_blank" rel="noopener">
+            <img loading="lazy" src="{{ before_media.url }}?token={{ request.query_params.get('token', '') }}" alt="before image">
+          </a>
+          {% endif %}
+        </div>
       </div>
+      {% for v in r.variants %}
+      <div class="before-card after-card">
+        <div class="before-label">AFTER{% if r.variants|length > 1 %} {{ v.idx }}{% endif %}</div>
+        <div class="before-media">
+          {% if v.media_type == "video" %}
+          <video controls playsinline preload="metadata" src="/media/{{ r.id }}/{{ v.media_path }}?token={{ request.query_params.get('token', '') }}"></video>
+          {% else %}
+          <a href="/media/{{ r.id }}/{{ v.media_path }}?token={{ request.query_params.get('token', '') }}" target="_blank" rel="noopener">
+            <img loading="lazy" src="/media/{{ r.id }}/{{ v.media_path }}?token={{ request.query_params.get('token', '') }}" alt="after image {{ v.idx }}">
+          </a>
+          {% endif %}
+        </div>
+      </div>
+      {% endfor %}
     </div>
 
     <div class="toggle-view" data-before-toggle{% if before_media.default_view != "toggle" %} hidden{% endif %}>
-      <div class="toggle-frame" data-toggle-frame>
+      <div class="toggle-frame" data-toggle-frame tabindex="0" role="button" aria-pressed="false" aria-label="Showing after. Activate to show before">
         <div class="toggle-layer toggle-before-layer" data-toggle-layer="before">
           <div class="before-label">BEFORE</div>
           <div class="before-media">
