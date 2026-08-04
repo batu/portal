@@ -47,22 +47,27 @@ def test_before_request_renders_before_block_switcher_and_non_selectable_baselin
     assert page.status_code == 200
     assert 'data-before-default-view="side-by-side"' in page.text
     assert 'class="before-after-review" data-before-review data-mode="side-by-side"' in page.text
-    assert 'class="before-card before-side-by-side" data-before-block data-side-by-side' in page.text
+    assert 'class="before-side-by-side" data-before-block data-side-by-side' in page.text
+    assert '<div class="before-card">' in page.text
+    assert '<div class="before-card after-card">' in page.text
+    assert "AFTER 1" in page.text
+    assert "AFTER 2" in page.text
     assert "BEFORE" in page.text
     assert f'/media/{req_id}/__before.png?token=' in page.text
     assert 'role="group" aria-label="Before after view"' in page.text
     assert 'data-before-view="side-by-side" aria-pressed="true"' in page.text
     assert 'data-before-view="toggle" aria-pressed="false"' in page.text
     assert 'class="toggle-view" data-before-toggle hidden' in page.text
-    assert 'class="toggle-frame" data-toggle-frame' in page.text
+    assert 'class="toggle-frame" data-toggle-frame tabindex="0" role="button" aria-pressed="false"' in page.text
     assert 'data-toggle-candidate="1"' in page.text
     assert 'data-toggle-candidate="2"' in page.text
 
     before_region = page.text[page.text.index("data-before-block") : page.text.index("data-candidate-grid")]
+    side_by_side_region = page.text[page.text.index("data-before-block") : page.text.index('class="toggle-view"')]
     assert 'class="variant"' not in before_region
     assert "data-idx=" not in before_region
-    assert "tabindex=" not in before_region
-    assert 'role="button"' not in before_region
+    assert "tabindex=" not in side_by_side_region
+    assert 'role="button"' not in side_by_side_region
     assert page.text.index("data-before-block") < page.text.index('class="variant" data-idx="1"')
     assert _selectable_variant_indices(page.text) == ["1", "2"]
     assert 'class="variant" data-idx="1" tabindex="0" role="button" aria-pressed="false"' in page.text
@@ -82,7 +87,7 @@ def test_before_after_kind_defaults_to_toggle_and_uses_variant_verdicts(client, 
     assert 'data-before-default-view="toggle"' in page.text
     assert 'data-before-view="side-by-side" aria-pressed="false"' in page.text
     assert 'data-before-view="toggle" aria-pressed="true"' in page.text
-    assert 'class="before-card before-side-by-side" data-before-block data-side-by-side hidden' in page.text
+    assert 'class="before-side-by-side" data-before-block data-side-by-side hidden' in page.text
     assert 'class="toggle-view" data-before-toggle>' in page.text
     assert _selectable_variant_indices(page.text) == ["1", "2"]
 
@@ -159,7 +164,7 @@ def test_before_request_in_closed_stream_is_not_selectable(client, token):
     assert '<div class="decision-panel">' not in page.text
 
 
-def test_static_js_keeps_before_after_pick_one_and_space_blink_hooks(client):
+def test_static_js_keeps_before_after_pick_one_and_persistent_toggle_hooks(client):
     script = client.get("/static/app.js")
 
     assert script.status_code == 200
@@ -170,7 +175,15 @@ def test_static_js_keeps_before_after_pick_one_and_space_blink_hooks(client):
     assert "keydown" in script.text
     assert "event.key !== \" \"" in script.text
     assert "activeToggleIdx" in script.text
-    assert "clearBlink()" in script.text
+    assert "toggleBeforeFrame" in script.text
+    assert 'event.target.closest("video")' in script.text
+    assert "event.target !== toggleFrame" in script.text
+    assert 'event.key !== "Enter"' in script.text
+    assert 'toggleFrame.setAttribute("aria-pressed", showBefore ? "true" : "false")' in script.text
+    assert '"Showing after. Activate to show before"' in script.text
+    assert "setToggleShowingBefore(false)" in script.text
+    assert "blinkToggleFrame" not in script.text
+    assert "blinkTimer" not in script.text
     assert "pauseVideos(root)" in script.text
     assert "syncActiveToggleIdx(idxOf(el))" in script.text
     assert "isToggleMode() && pickOneKinds[kind] && pos !== -1" in script.text

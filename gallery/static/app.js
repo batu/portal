@@ -21,7 +21,6 @@
   // For pick-one/approve this is at most one element; for rank, order matters.
   var order = [];
   var pickOneKinds = { "pick-one": true, "before-after": true };
-  var blinkTimer = null;
   var activeToggleIdx = null;
 
   function idxOf(el) {
@@ -55,10 +54,13 @@
   }
 
   function activeToggleCandidate() {
-    if (activeToggleIdx !== null && order.indexOf(activeToggleIdx) !== -1) {
+    var candidateIndices = toggleCandidates.map(function (el) {
+      return parseInt(el.dataset.toggleCandidate, 10);
+    });
+    if (activeToggleIdx !== null && candidateIndices.indexOf(activeToggleIdx) !== -1) {
       return activeToggleIdx;
     }
-    return order.length ? order[order.length - 1] : null;
+    return candidateIndices.length ? candidateIndices[candidateIndices.length - 1] : null;
   }
 
   function pauseVideos(root) {
@@ -68,19 +70,24 @@
     });
   }
 
-  function clearBlink() {
-    window.clearTimeout(blinkTimer);
-    blinkTimer = null;
-    if (toggleFrame) {
-      toggleFrame.classList.remove("show-before");
-    }
+  function setToggleShowingBefore(showBefore) {
+    if (!toggleFrame) return;
+    toggleFrame.classList.toggle("show-before", showBefore);
+    toggleFrame.setAttribute("aria-pressed", showBefore ? "true" : "false");
+    toggleFrame.setAttribute(
+      "aria-label",
+      showBefore ? "Showing before. Activate to show after" : "Showing after. Activate to show before"
+    );
   }
 
   function syncActiveToggleIdx(preferred) {
-    if (preferred !== null && order.indexOf(preferred) !== -1) {
+    var candidateIndices = toggleCandidates.map(function (el) {
+      return parseInt(el.dataset.toggleCandidate, 10);
+    });
+    if (preferred !== null && candidateIndices.indexOf(preferred) !== -1) {
       activeToggleIdx = preferred;
     } else {
-      activeToggleIdx = order.length ? order[order.length - 1] : null;
+      activeToggleIdx = candidateIndices.length ? candidateIndices[candidateIndices.length - 1] : null;
     }
   }
 
@@ -89,7 +96,7 @@
     var selected = activeToggleCandidate();
     toggleFrame.classList.toggle("has-candidate", selected !== null);
     if (selected === null) {
-      clearBlink();
+      setToggleShowingBefore(true);
     }
     toggleCandidates.forEach(function (el) {
       var shouldHide = parseInt(el.dataset.toggleCandidate, 10) !== selected;
@@ -100,14 +107,9 @@
     });
   }
 
-  function blinkToggleFrame() {
+  function toggleBeforeFrame() {
     if (!toggleFrame || !isToggleMode() || activeToggleCandidate() === null) return;
-    clearBlink();
-    syncToggleFrame();
-    toggleFrame.classList.add("show-before");
-    blinkTimer = window.setTimeout(function () {
-      toggleFrame.classList.remove("show-before");
-    }, 360);
+    setToggleShowingBefore(!toggleFrame.classList.contains("show-before"));
   }
 
   function setBeforeView(view) {
@@ -116,7 +118,7 @@
     beforeReview.dataset.mode = normalized;
     if (sideBySideView && normalized !== "side-by-side") pauseVideos(sideBySideView);
     if (toggleView && normalized !== "toggle") pauseVideos(toggleView);
-    if (normalized !== "toggle") clearBlink();
+    if (normalized === "toggle") setToggleShowingBefore(false);
     if (sideBySideView) sideBySideView.hidden = normalized !== "side-by-side";
     if (toggleView) toggleView.hidden = normalized !== "toggle";
     beforeButtons.forEach(function (btn) {
@@ -130,10 +132,10 @@
     var pos = order.indexOf(i);
     if (isToggleMode() && pickOneKinds[kind] && pos !== -1) {
       syncActiveToggleIdx(i);
-      blinkToggleFrame();
+      setToggleShowingBefore(false);
       return;
     }
-    if (isToggleMode()) clearBlink();
+    if (isToggleMode()) setToggleShowingBefore(false);
     if (pickOneKinds[kind]) {
       order = pos === -1 ? [i] : [];
     } else if (kind === "pick-many" || kind === "rank") {
@@ -154,6 +156,18 @@
         setBeforeView(btn.dataset.beforeView);
       });
     });
+    if (toggleFrame) {
+      toggleFrame.addEventListener("click", function (event) {
+        if (event.target.closest && event.target.closest("video")) return;
+        toggleBeforeFrame();
+      });
+      toggleFrame.addEventListener("keydown", function (event) {
+        if (event.target !== toggleFrame) return;
+        if (event.key !== " " && event.code !== "Space" && event.key !== "Enter") return;
+        event.preventDefault();
+        toggleBeforeFrame();
+      });
+    }
     setBeforeView(section.dataset.beforeDefaultView || beforeReview.dataset.mode);
   }
 
@@ -174,7 +188,7 @@
           event.preventDefault();
           if (isToggleMode() && order.indexOf(idxOf(el)) !== -1) {
             syncActiveToggleIdx(idxOf(el));
-            blinkToggleFrame();
+            setToggleShowingBefore(false);
             return;
           }
           toggleVariant(el);
