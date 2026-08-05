@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Portal Agent Conversations and Game Release - Plan</title>
+  <style>
+    :root { color-scheme:dark; --bg:#0d0f14; --panel:#171a22; --panel2:#20242e; --line:#343a49; --fg:#f3f5f7; --muted:#a9b0bd; --blue:#86b7ff; --blue2:#183357; --green:#8bd49c; --green2:#14271b; --amber:#ffd580; --amber2:#2b2517; --red:#ff9b9b; --red2:#2a181b; }
+    *{box-sizing:border-box} html{scroll-behavior:smooth} body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.58 Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif} a{color:var(--blue)} code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#d5e6ff} main{width:min(980px,calc(100% - 32px));margin:0 auto;padding:46px 0 72px} header{padding:28px;background:linear-gradient(145deg,#171a22,#11141b);border:1px solid var(--line);border-radius:18px}.eyebrow{margin:0 0 7px;color:var(--blue);font-size:.77rem;font-weight:800;letter-spacing:.12em;text-transform:uppercase}h1{margin:0;font-size:clamp(2rem,6vw,3.5rem);line-height:1.04;letter-spacing:-.04em}h2{margin:46px 0 14px;font-size:1.5rem}h3{font-size:1.05rem}p{max-width:75ch}.meta,.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px;margin:22px 0 0}.meta div,.stat{padding:11px 13px;background:var(--panel2);border-radius:10px}dt{color:var(--muted);font-size:.72rem;font-weight:800;letter-spacing:.08em;text-transform:uppercase}dd{margin:3px 0 0}.stat strong{display:block;font-size:1.45rem}.toc,.unit-nav{display:flex;flex-wrap:wrap;gap:8px;margin:18px 0 0}.toc a,.unit-nav a,.chip{display:inline-flex;padding:5px 10px;border:1px solid var(--line);border-radius:999px;background:var(--panel);text-decoration:none;font-size:.84rem}section{scroll-margin-top:22px}.callout,.ktd,.risk{padding:16px;border:1px solid var(--line);border-radius:12px;background:var(--panel)}.callout.info{background:#142037}.callout.warn{background:var(--amber2)}.callout.danger{background:var(--red2)}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.id{display:inline-flex;padding:3px 8px;border-radius:999px;background:var(--blue2);color:#bbd7ff;font:800 .78rem/1.4 ui-monospace,monospace}.req-group{margin-top:24px}table{width:100%;border-collapse:separate;border-spacing:0;overflow:hidden;border:1px solid var(--line);border-radius:12px}th,td{padding:11px 13px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line)}th{background:var(--panel2);color:var(--muted);font-size:.73rem;letter-spacing:.08em;text-transform:uppercase}tr:last-child td{border-bottom:0}td:first-child{width:64px;color:var(--blue);font-family:ui-monospace,monospace;font-weight:800}.diagram{width:100%;height:auto;margin-top:12px;border:1px solid var(--line);border-radius:14px;background:#11141b}.units{display:grid;gap:12px;margin-top:16px}.unit{padding:16px;border:1px solid var(--line);border-radius:12px;background:var(--panel);scroll-margin-top:22px}.unit h3{display:flex;gap:9px;align-items:center;margin:0 0 12px}.unit dl{display:grid;grid-template-columns:110px 1fr;gap:6px 12px;margin:0}.unit dt{padding-top:2px}.unit details{margin-top:12px;border-top:1px solid var(--line);padding-top:10px}.unit summary{cursor:pointer;color:var(--blue);font-weight:750}.unit ul{margin-bottom:0}.advisory{margin-top:12px;padding:12px;border-radius:10px;background:var(--amber2)}.advisory .eyebrow{color:var(--amber)}.ktds,.risks{display:grid;gap:10px}.ktd h3,.risk h3{margin:5px 0}.status-good{color:var(--green)}.status-warn{color:var(--amber)}.status-bad{color:var(--red)}footer{margin-top:48px;padding-top:18px;border-top:1px solid var(--line);color:var(--muted);font-size:.84rem}@media(max-width:720px){main{width:min(100% - 20px,980px);padding-top:18px}.meta,.stats,.grid{grid-template-columns:1fr}.unit dl{grid-template-columns:1fr}.unit dd{margin-bottom:7px}th:nth-child(3),td:nth-child(3){display:none}}
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <p class="eyebrow">Implementation-ready unified plan</p>
+    <h1>Portal Agent Conversations and Game Release - Plan</h1>
+    <p>Build a truthful exact-session steering surface in Portal, formalize the reusable game-release contract in Agency, and attempt a Find the Bird release through the same evidence lane already used by Marble Run. This work spans the Portal and Agency repositories; game artifacts come from Fabrikav2 without modifying its dirty shared checkout.</p>
+    <dl class="meta">
+      <div><dt>title</dt><dd>Portal Agent Conversations and Game Release - Plan</dd></div>
+      <div><dt>type</dt><dd>feat</dd></div>
+      <div><dt>date</dt><dd><time datetime="2026-08-05">2026-08-05</time></dd></div>
+      <div><dt>origin</dt><dd><code>docs/plans/2026-08-05-portal-operator-experience-requirements.html</code></dd></div>
+      <div><dt>artifact_contract</dt><dd>unified-plan</dd></div>
+      <div><dt>artifact_readiness</dt><dd>implementation-ready</dd></div>
+      <div><dt>product_contract_source</dt><dd>origin</dd></div>
+      <div><dt>execution</dt><dd>code</dd></div>
+      <div><dt>deepened</dt><dd><time datetime="2026-08-05">2026-08-05</time></dd></div>
+    </dl>
+    <div class="stats" aria-label="Plan statistics">
+      <div class="stat"><strong>6</strong><span>implementation units</span></div><div class="stat"><strong>11</strong><span>requirements</span></div><div class="stat"><strong>2</strong><span>code repositories</span></div><div class="stat"><strong>0</strong><span>automatic store actions</span></div>
+    </div>
+    <nav class="toc" aria-label="Plan navigation">
+      <a href="#goal-capsule">Goal Capsule</a><a href="#product-contract">Product Contract</a><a href="#planning-contract">Planning Contract</a><a href="#implementation-units">Implementation Units</a><a href="#verification-contract">Verification Contract</a><a href="#definition-of-done">Definition of Done</a><a href="#appendix">Appendix</a>
+    </nav>
+  </header>
+
+  <section id="goal-capsule">
+    <h2>Goal Capsule</h2>
+    <p>When the operator comments in Portal, the exact chosen live agent receives ordered terminal input or Portal preserves a diagnosable retryable record. When a game appears in Portal, the page proves which source produced which artifact and matching media, while store and tester availability remain separate gates.</p>
+  </section>
+
+  <section id="product-contract">
+    <h2>Product Contract</h2>
+    <div class="callout info"><p class="eyebrow">Scope decision</p><p>The first Agents tab is outbound steering plus durable delivery history, not terminal transcript ingestion. Calling it fully bidirectional chat before an agent-response protocol exists would be decorative dishonesty.</p></div>
+    <div class="req-group">
+      <h3>Agent steering</h3>
+      <table><thead><tr><th>ID</th><th>Requirement</th><th>Covered by</th></tr></thead><tbody>
+        <tr id="r1"><td>R1.</td><td>Agency must accept one exact provider and top-level, non-zombie Fleet session ID, then send one bounded single-paragraph message through its current stable tmux pane ID.</td><td>U1</td></tr>
+        <tr id="r2"><td>R2.</td><td>Agency must return structured submitted-to-terminal, failed, or unknown outcomes without exposing message text, pane, TTY, PID, path, or transcript data.</td><td>U1</td></tr>
+        <tr id="r3"><td>R3.</td><td>Portal must list a curated set of replyable Fleet sessions under a primary Agents tab and remain usable when Agency is absent or times out.</td><td>U2, U3</td></tr>
+        <tr id="r4"><td>R4.</td><td>Portal must preserve targeted comments and append every delivery attempt; only confirmed terminal submission may mark the message consumed by transport.</td><td>U2</td></tr>
+        <tr id="r5"><td>R5.</td><td>Failed messages must be retryable against the same provider and stable session while unknown attempts require explicit inspection before any retry.</td><td>U2, U3</td></tr>
+        <tr id="r6"><td>R6.</td><td>Stream notes may target a live agent without allowing generic <code>portal pull</code> consumers to race or steal targeted messages.</td><td>U2, U3</td></tr>
+        <tr id="r7"><td>R7.</td><td>Browser GETs must use the existing cookie-login redirect and mutation routes must return authenticated JSON errors.</td><td>U2, U3</td></tr>
+      </tbody></table>
+    </div>
+    <div class="req-group">
+      <h3>Game releases</h3>
+      <table><thead><tr><th>ID</th><th>Requirement</th><th>Covered by</th></tr></thead><tbody>
+        <tr id="r8"><td>R8.</td><td>An always-on Agency skill must define the source, build, artifact, media, changelog, publication, live-readback, and distribution gates for every Portal game release.</td><td>U4</td></tr>
+        <tr id="r9"><td>R9.</td><td>The skill must reuse <code>game-device-verification</code>, distinguish browser/simulator/physical evidence, and require measured hashes and provider/store state rather than inferred success.</td><td>U4</td></tr>
+        <tr id="r10"><td>R10.</td><td>Marble Run’s current Portal release must be documented as the reference implementation without changing or republishing it.</td><td>U4, U5</td></tr>
+        <tr id="r11"><td>R11.</td><td>Find the Bird must use the same artifact, gameplay video, poster, playable web, factual changelog, and live-readback contract; if current native or capture evidence is unavailable, publication remains visibly blocked.</td><td>U5</td></tr>
+      </tbody></table>
+    </div>
+  </section>
+
+  <section id="planning-contract">
+    <h2>Planning Contract</h2>
+    <h3>High-Level Design</h3>
+    <p>Agency remains authoritative for live session identity. Portal stores the human message and an append-only attempt ledger. A targeted message is excluded from the generic pull queue, claimed synchronously for submission, and consumed by transport only after Agency confirms that both literal text and Enter reached the same stable pane. This does not prove the agent has read or acted on it.</p>
+    <svg class="diagram" viewBox="0 0 920 300" role="img" aria-label="Portal exact-session delivery and game release architecture">
+      <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#86b7ff"/></marker></defs>
+      <g font-family="Inter,system-ui,sans-serif" font-size="14" fill="#f3f5f7">
+        <rect x="30" y="42" width="170" height="78" rx="12" fill="#20242e" stroke="#343a49"/><text x="115" y="72" text-anchor="middle" font-weight="700">Portal browser</text><text x="115" y="95" text-anchor="middle" fill="#a9b0bd">cookie-auth Agents tab</text>
+        <rect x="280" y="30" width="190" height="102" rx="12" fill="#183357" stroke="#86b7ff"/><text x="375" y="61" text-anchor="middle" font-weight="700">Portal service</text><text x="375" y="84" text-anchor="middle">message + attempts</text><text x="375" y="107" text-anchor="middle" fill="#bbd7ff">curated Fleet bridge</text>
+        <rect x="550" y="42" width="155" height="78" rx="12" fill="#20242e" stroke="#343a49"/><text x="627" y="72" text-anchor="middle" font-weight="700">Agency Fleet</text><text x="627" y="95" text-anchor="middle" fill="#a9b0bd">stable SID authority</text>
+        <rect x="755" y="42" width="135" height="78" rx="12" fill="#14271b" stroke="#8bd49c"/><text x="822" y="72" text-anchor="middle" font-weight="700">Agent pane</text><text x="822" y="95" text-anchor="middle" fill="#8bd49c">live %pane_id</text>
+        <line x1="200" y1="81" x2="279" y2="81" stroke="#86b7ff" stroke-width="2" marker-end="url(#arrow)"/><text x="239" y="69" text-anchor="middle" fill="#a9b0bd">send</text>
+        <line x1="470" y1="81" x2="549" y2="81" stroke="#86b7ff" stroke-width="2" marker-end="url(#arrow)"/><text x="509" y="69" text-anchor="middle" fill="#a9b0bd">SID + stdin</text>
+        <line x1="705" y1="81" x2="754" y2="81" stroke="#86b7ff" stroke-width="2" marker-end="url(#arrow)"/>
+        <rect x="95" y="190" width="190" height="72" rx="12" fill="#20242e" stroke="#343a49"/><text x="190" y="218" text-anchor="middle" font-weight="700">Fabrikav2 release inputs</text><text x="190" y="241" text-anchor="middle" fill="#a9b0bd">artifact · capture · web</text>
+        <rect x="365" y="178" width="190" height="96" rx="12" fill="#2b2517" stroke="#ffd580"/><text x="460" y="207" text-anchor="middle" font-weight="700">Agency release skill</text><text x="460" y="230" text-anchor="middle">deterministic gates</text><text x="460" y="253" text-anchor="middle" fill="#ffd580">external actions gated</text>
+        <rect x="635" y="190" width="190" height="72" rx="12" fill="#14271b" stroke="#8bd49c"/><text x="730" y="218" text-anchor="middle" font-weight="700">Portal game release</text><text x="730" y="241" text-anchor="middle" fill="#8bd49c">publish + live readback</text>
+        <line x1="285" y1="226" x2="364" y2="226" stroke="#86b7ff" stroke-width="2" marker-end="url(#arrow)"/><line x1="555" y1="226" x2="634" y2="226" stroke="#86b7ff" stroke-width="2" marker-end="url(#arrow)"/>
+      </g>
+    </svg>
+
+    <h3>Key Technical Decisions</h3>
+    <div class="ktds">
+      <article class="ktd" id="ktd1"><span class="id">KTD1.</span><h3>Reuse Fleet; do not mirror it</h3><p>Portal invokes a small Agency JSON surface at request time. The DTO contains provider, SID, display label, project, task, state, freshness, and replyability only.</p></article>
+      <article class="ktd" id="ktd2"><span class="id">KTD2.</span><h3>Model delivery separately from message content</h3><p>Portal schema v12 adds target/current delivery fields plus append-only delivery attempts. Generic pull excludes explicitly targeted messages, preventing a background poller from consuming someone else’s comment.</p></article>
+      <article class="ktd" id="ktd3"><span class="id">KTD3.</span><h3>Single-paragraph literal input in v1</h3><p>The Agency primitive rejects line breaks, NUL, control characters, blank input, and oversized payloads. This avoids terminal submission ambiguity until bracketed-paste transport is implemented and tested.</p></article>
+      <article class="ktd" id="ktd4"><span class="id">KTD4.</span><h3>Three outcomes, not a boolean fiction</h3><p>If literal text fails, the attempt is failed. If text succeeds but Enter fails, the outcome is unknown and is never automatically retried. Only two successful tmux calls produce submitted-to-terminal; agent acknowledgement remains future work.</p></article>
+      <article class="ktd" id="ktd5"><span class="id">KTD5.</span><h3>One reusable release contract</h3><p>The Agency skill carries global policy and delegates game-specific build commands to each game. Portal remains game-agnostic and Store/TestFlight mutations remain separately authorized.</p></article>
+    </div>
+  </section>
+
+  <section id="implementation-units">
+    <h2>Implementation Units</h2>
+    <nav class="unit-nav" aria-label="Implementation unit navigation"><a href="#u1">U1 Agency reply</a><a href="#u2">U2 Portal delivery model</a><a href="#u3">U3 Agents UI</a><a href="#u4">U4 Release skill</a><a href="#u5">U5 FTB release</a><a href="#u6">U6 Review and evidence</a></nav>
+    <div class="units">
+      <article class="unit" id="u1"><h3><span class="id">U1.</span> Exact-session Agency reply primitive</h3><dl><dt>Goal</dt><dd>Expose a safe machine-callable Fleet action.</dd><dt>Repository</dt><dd>Agency</dd><dt>Files</dt><dd><code>src/agency/cli.py</code>, <code>src/agency/fleet/hud.py</code>, <code>src/agency/fleet/tmux.py</code>, <code>tests/test_fleet_hud.py</code>, CLI tests</dd><dt>Covers</dt><dd>R1, R2</dd><dt>Depends on</dt><dd>None</dd></dl><div class="advisory"><p class="eyebrow">Execution note</p><p>Start with failing tests for exact SID selection, subagent/zombie rejection, live <code>%pane_id</code> resolution after pane movement, stdin privacy, and the three outcomes.</p></div><details><summary>Approach and verification</summary><ul><li>Add <code>agency fleet --reply SID --json</code>; read text from stdin only.</li><li>Recollect Fleet state at send time and require exactly one replyable top-level match.</li><li>Change tmux reply to inspect both return codes and return structured state.</li><li>Run focused Fleet tests and a disposable two-pane tmux integration.</li></ul></details></article>
+
+      <article class="unit" id="u2"><h3><span class="id">U2.</span> Portal delivery model and Agency bridge</h3><dl><dt>Goal</dt><dd>Persist intent, target, attempt history, and truthful delivery state.</dd><dt>Repository</dt><dd>Portal</dd><dt>Files</dt><dd><code>gallery/agents.py</code>, <code>gallery/db.py</code>, <code>gallery/server.py</code>, migration/API tests</dd><dt>Covers</dt><dd>R3–R7</dd><dt>Depends on</dt><dd>U1 JSON contract</dd></dl><div class="advisory"><p class="eyebrow">Execution note</p><p>Write migration and race tests first. Do not let a targeted comment appear in the generic unconsumed pull query.</p></div><details><summary>Approach and verification</summary><ul><li>Add schema v12 current delivery fields and append-only attempt rows.</li><li>Implement bounded no-shell subprocess calls using argv, stdin, timeout, and curated JSON parsing.</li><li>Add claim/complete helpers; delivered consumes, failed remains retryable, ambiguous requires inspection.</li><li>Test missing Agency, timeout, malformed JSON, stale SID, auth, race, and closed-stream behavior.</li></ul></details></article>
+
+      <article class="unit" id="u3"><h3><span class="id">U3.</span> Agents tab and stream delivery UX</h3><dl><dt>Goal</dt><dd>Let the operator steer exact sessions and understand failures on desktop and phone.</dd><dt>Repository</dt><dd>Portal</dd><dt>Files</dt><dd><code>gallery/templates/base.html</code>, <code>gallery/templates/agents.html</code>, <code>gallery/templates/stream.html</code>, <code>gallery/static/app.js</code>, <code>gallery/static/style.css</code>, web tests</dd><dt>Covers</dt><dd>R3–R7</dd><dt>Depends on</dt><dd>U2</dd></dl><div class="advisory"><p class="eyebrow">Execution note</p><p>Use “submitted to terminal,” “failed,” and “submission unknown.” Do not label outbound-only steering as bidirectional chat.</p></div><details><summary>Approach and verification</summary><ul><li>Add Agents to primary navigation with cards for exact sessions and recent outbound history.</li><li>Add an explicit agent selector to stream comments and retry controls for failed attempts.</li><li>Render Agency unavailable as a calm empty/error state without losing queued comments.</li><li>Inspect realistic desktop and phone screenshots; exercise keyboard focus and failure/retry flows.</li></ul></details></article>
+
+      <article class="unit" id="u4"><h3><span class="id">U4.</span> Always-on Portal game-release skill</h3><dl><dt>Goal</dt><dd>Make the release evidence contract available to every Agency-managed agent.</dd><dt>Repository</dt><dd>Agency</dd><dt>Files</dt><dd><code>src/agency/catalog/skills/game/portal-game-release/SKILL.md</code>, generated <code>src/agency/catalog/skills/INDEX.md</code>, sync/index tests if required</dd><dt>Covers</dt><dd>R8–R10</dd><dt>Depends on</dt><dd>Existing Portal CLI and game-device-verification</dd></dl><details><summary>Approach and verification</summary><ul><li>Use <code>scope: always</code> and an exact trigger description.</li><li>Define source cleanliness, version uniqueness, build-env validation, artifact/capture/poster/web checks, factual changelog, publish, live hash/readback, visual inspection, and distribution gates.</li><li>Reference rather than duplicate <code>game-device-verification</code> and App Store Connect release guidance.</li><li>Regenerate the catalog index, validate the skill, and test global sync in a temporary home only.</li></ul></details></article>
+
+      <article class="unit" id="u5"><h3><span class="id">U5.</span> Marble Run baseline and Find the Bird release attempt</h3><dl><dt>Goal</dt><dd>Prove the workflow against the current Marble release and either publish a truthful FTB entry or expose the exact missing gates.</dd><dt>Repository</dt><dd>Fabrikav2 inputs; Portal external state</dd><dt>Files</dt><dd>Read existing Marble evidence; create isolated FTB release output/evidence only if source and device lanes are safe.</dd><dt>Covers</dt><dd>R10, R11</dd><dt>Depends on</dt><dd>U4 contract</dd></dl><div class="advisory"><p class="eyebrow">Execution note</p><p>Portal publication creates a public durable release record. Do not publish a development bundle, stale capture, harness-enabled native build, or evidence assembled from different revisions.</p></div><details><summary>Approach and verification</summary><ul><li>Re-query Marble Run live page/build metadata and document its artifact/video/poster/web contract.</li><li>Build FTB from an isolated clean revision with all harness and dev-shell variables unset.</li><li>Use the selective native public bundle; capture fresh matching gameplay and poster.</li><li>Publish only when every required input is present, then re-query page/media/download/web and compare hashes. Device, TestFlight, and store states remain separate.</li></ul></details></article>
+
+      <article class="unit" id="u6"><h3><span class="id">U6.</span> CE review, compound learning, and UX report</h3><dl><dt>Goal</dt><dd>Review the diff, record durable lessons, and deliver inspected blue-sky recommendations.</dd><dt>Repository</dt><dd>Portal and Agency</dd><dt>Files</dt><dd><code>docs/reports/2026-08-06-portal-review-and-blue-sky.html</code>, <code>docs/solutions/…</code> where novel learning survives grounding</dd><dt>Covers</dt><dd>All</dd><dt>Depends on</dt><dd>U1–U5</dd></dl><details><summary>Approach and verification</summary><ul><li>Run CE review personas against base-branch diffs and resolve high-confidence findings.</li><li>Run the compound workflow; update the solution index only for novel grounded learnings.</li><li>Capture actual Portal UI and report screenshots at desktop and phone widths.</li><li>Report implemented, verified, blocked, and external-gate state separately.</li></ul></details></article>
+    </div>
+  </section>
+
+  <section id="verification-contract">
+    <h2>Verification Contract</h2>
+    <table><thead><tr><th>Layer</th><th>Required proof</th><th>Claim it supports</th></tr></thead><tbody>
+      <tr><td>Agency unit</td><td>Exact provider and SID, top-level/replyable validation, stable pane resolution, literal-input guard, structured outcome tests.</td><td>The right live terminal is targeted safely.</td></tr>
+      <tr><td>Agency integration</td><td>Disposable tmux panes receive a marker after a pane move; neighboring pane remains unchanged.</td><td>Cached positions cannot redirect the comment.</td></tr>
+      <tr><td>Portal data/API</td><td>Schema upgrade, target isolation from pull, attempt history, failure/ambiguous handling, auth, timeout, and closed-stream tests.</td><td>Queued comments have a truthful lifecycle.</td></tr>
+      <tr><td>Portal browser</td><td>Desktop and phone screenshots plus successful-send and failed-retry interaction checks.</td><td>The tab is usable and the state language is honest.</td></tr>
+      <tr><td>Game release</td><td>Source revision, clean build inputs, artifact/media hashes, matching capture provenance, live page/media/download/web readback.</td><td>The Portal entry represents one coherent release.</td></tr>
+      <tr><td>Distribution</td><td>Physical-device observation and live App Store Connect/TestFlight state when those claims are made.</td><td>Portal publication is not confused with tester/store availability.</td></tr>
+    </tbody></table>
+    <h3>Acceptance Examples</h3>
+    <div class="grid">
+      <article id="ae1" class="callout"><span class="id">AE1.</span><p>Given two Fleet sessions and panes have moved, when the operator addresses provider and SID B, only B receives the comment and Portal records submitted to terminal.</p></article>
+      <article id="ae2" class="callout"><span class="id">AE2.</span><p>Given text reaches the pane but Enter fails, Portal records submission unknown, leaves the message unconsumed, and does not offer automatic retry.</p></article>
+      <article id="ae3" class="callout"><span class="id">AE3.</span><p>Given Agency is unavailable, the Agents tab loads with a diagnosable state and the operator’s failed comment remains visible for later retry.</p></article>
+      <article id="ae4" class="callout"><span class="id">AE4.</span><p>Given FTB lacks a fresh matching native artifact or capture, no public release is created and the report names the exact missing gate.</p></article>
+    </div>
+  </section>
+
+  <section id="definition-of-done">
+    <h2>Definition of Done</h2>
+    <ol>
+      <li>Agency exact-session reply tests and disposable tmux integration pass.</li>
+      <li>Portal tests pass, and targeted stream comments no longer remain silently queued.</li>
+      <li>The Agents tab and stream targeting are inspected at desktop and phone sizes.</li>
+      <li>The always-on release skill validates, indexes, and syncs in a temporary home.</li>
+      <li>Marble Run is documented from live evidence; Find the Bird is either live with matching evidence or explicitly blocked without a false release record.</li>
+      <li>CE review findings are resolved or reported, and the compound/UX artifacts are grounded and visually inspected.</li>
+    </ol>
+  </section>
+
+  <section id="appendix">
+    <h2>Appendix</h2>
+    <h3>Risks and Dependencies</h3>
+    <div class="risks">
+      <article class="risk"><p class="eyebrow status-warn">Risk · controlled</p><h3>Terminal partial delivery</h3><p>Two tmux calls can partially succeed; structured ambiguous state and no automatic retry contain duplication.</p></article>
+      <article class="risk"><p class="eyebrow status-warn">Risk · controlled</p><h3>Fleet inventory sensitivity</h3><p>Portal sanitizes Agency output and never renders pane, TTY, PID, transcript, raw path, or prompt fields.</p></article>
+      <article class="risk"><p class="eyebrow status-bad">External dependency</p><h3>Find the Bird capture lane</h3><p>The registered iPhone is currently unavailable and no Android device is attached. Publication depends on a fresh coherent artifact/capture pair, not on Portal code.</p></article>
+      <article class="risk"><p class="eyebrow status-good">Boundary</p><h3>External release authority</h3><p>No production deploy, merge to main, TestFlight upload, tester change, review submission, or store release occurs without its separate authorization.</p></article>
+    </div>
+    <h3>Sources and References</h3>
+    <ul>
+      <li><a href="https://github.com/batu/portal/blob/main/gallery/server.py"><code>gallery/server.py</code></a> — auth twins, message routes, and game publication.</li>
+      <li><a href="https://github.com/batu/portal/blob/main/gallery/db.py"><code>gallery/db.py</code></a> — SQLite migrations and message/game persistence.</li>
+      <li><a href="https://github.com/batu/agency/blob/main/src/agency/fleet/tmux.py"><code>src/agency/fleet/tmux.py</code></a> — stable pane-ID resolution and terminal transport.</li>
+      <li><a href="https://linear.app/docs/linear-agent">Linear Agent</a> — persistent multi-tab agent conversation pattern.</li>
+      <li><a href="https://docs.github.com/en/enterprise-cloud@latest/copilot/how-tos/copilot-cli/use-copilot-cli-agents/steer-agents">GitHub agent steering</a> — ordered steering during active work.</li>
+      <li><a href="https://vercel.com/docs/comments/managing-comments">Vercel preview comments</a> — contextual threads, filters, activity, and session metadata.</li>
+      <li><a href="https://developer.apple.com/help/app-store-connect/manage-builds/view-builds-and-metadata/">App Store Connect build metadata</a> — processing state and build identity as separate facts.</li>
+    </ul>
+  </section>
+  <footer class="composition-signal">Composed 2026-08-05T20:02:40Z by ce-plan from <code>docs/plans/2026-08-05-portal-operator-experience-requirements.html</code>.</footer>
+</main>
+</body>
+</html>

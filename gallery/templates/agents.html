@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% block title %}Agents — Portal{% endblock %}
+{% block main_class %}wide agents-page{% endblock %}
+{% block content %}
+<section class="agents-hero">
+  <p class="eyebrow">Exact-session delivery</p>
+  <h1>Terminal steering</h1>
+  <p>Send one comment to one live top-level agent. “Submitted to terminal” means Portal delivered the text and Enter to that terminal; it does not mean the agent has read or acted on it.</p>
+</section>
+
+{% if agency_error %}
+<section class="agent-directory-state is-error" role="status">
+  <strong>Live sessions unavailable.</strong>
+  <span>{{ agency_error }} Saved delivery history remains below.</span>
+</section>
+{% endif %}
+
+<section aria-labelledby="live-agents-title">
+  <div class="section-heading agents-section-heading">
+    <div>
+      <p class="eyebrow">Fleet now</p>
+      <h2 id="live-agents-title">Replyable agents ({{ sessions|length }})</h2>
+    </div>
+  </div>
+  {% if not sessions and not agency_error %}
+  <p class="empty">No top-level Fleet session currently has a live terminal target.</p>
+  {% endif %}
+  <div class="agent-grid">
+    {% for agent in sessions %}
+    <article class="agent-card">
+      <header class="agent-card-heading">
+        <div>
+          <h3>{{ agent.label }}</h3>
+          <div class="request-meta">
+            <span class="tag kind">{{ agent.provider }}</span>
+            {% if agent.project %}<span class="tag">{{ agent.project }}</span>{% endif %}
+            {% if agent.task %}<span class="tag">{{ agent.task }}</span>{% endif %}
+          </div>
+        </div>
+        <span class="agent-state">{{ agent.state }}</span>
+      </header>
+      <form class="message-form agent-message-form" method="post" action="/agents/{{ agent.provider }}/{{ agent.sid }}/messages" data-agent-message-form>
+        <label for="agent-message-{{ loop.index }}">Comment</label>
+        <textarea id="agent-message-{{ loop.index }}" name="text" class="comment-box" rows="2" maxlength="4000" autocomplete="off" data-single-paragraph required></textarea>
+        <button class="btn message-send" type="submit">Submit to terminal</button>
+        <p class="message-status" data-form-status role="status" aria-live="polite"></p>
+      </form>
+      {% if agent.messages %}
+      <div class="agent-card-recent">
+        <span>Recent to this session</span>
+        <strong>{{ agent.messages|length }}</strong>
+      </div>
+      {% endif %}
+    </article>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="agent-history" aria-labelledby="agent-history-title">
+  <div class="section-heading agents-section-heading">
+    <div>
+      <p class="eyebrow">Durable record</p>
+      <h2 id="agent-history-title">Outbound history ({{ history|length }})</h2>
+    </div>
+  </div>
+  {% if not history %}<p class="empty">No exact-session comments yet.</p>{% endif %}
+  <ul class="message-list agent-history-list">
+    {% for message in history %}
+    <li>
+      <article class="stream-message targeted-message delivery-{{ message.delivery_state }}">
+        <div class="message-heading">
+          <div>
+            <span class="message-label">{{ message.target_label }}</span>
+            <span class="target-provider">{{ message.target_provider }}</span>
+          </div>
+          {% if message.delivery_state == 'submitted_to_terminal' %}
+          <span class="status-badge submitted">submitted to terminal</span>
+          {% elif message.delivery_state == 'failed' %}
+          <span class="status-badge delivery-failed">failed</span>
+          {% elif message.delivery_state == 'unknown' %}
+          <span class="status-badge delivery-unknown">submission unknown</span>
+          {% elif message.delivery_state == 'submitting' %}
+          <span class="status-badge submitting">submitting</span>
+          {% else %}
+          <span class="status-badge pending">waiting to submit</span>
+          {% endif %}
+        </div>
+        <p class="message-text">{{ message.text }}</p>
+        <div class="delivery-meta">
+          <span>{{ message.created_at|ago }}</span>
+          <span>{{ message.delivery_attempt_count }} attempt{{ 's' if message.delivery_attempt_count != 1 else '' }}</span>
+          {% if message.latest_delivery_detail %}<code>{{ message.latest_delivery_detail }}</code>{% endif %}
+        </div>
+        {% if message.retryable %}
+        <form class="message-form agent-retry-form" method="post" action="/agents/messages/{{ message.id }}/retry" data-agent-retry-form>
+          <button class="btn retry-delivery" type="submit">Retry same session</button>
+          <p class="message-status" data-form-status role="status" aria-live="polite"></p>
+        </form>
+        {% elif message.confirmable %}
+        <p class="unknown-guidance">Inspect the target terminal before deciding whether to send this again.</p>
+        <form class="message-form agent-retry-form" method="post" action="/agents/messages/{{ message.id }}/retry" data-agent-retry-form data-confirm-unknown>
+          <button class="btn retry-delivery" type="submit">I inspected the terminal — retry</button>
+          <p class="message-status" data-form-status role="status" aria-live="polite"></p>
+        </form>
+        {% endif %}
+      </article>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endblock %}

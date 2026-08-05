@@ -46,7 +46,7 @@ a { color: var(--accent); text-decoration: none; }
   color: var(--fg);
 }
 
-.topnav { display: flex; gap: 16px; }
+.topnav { display: flex; gap: 16px; overflow-x: auto; }
 .topnav a { color: var(--muted); font-weight: 700; }
 .topnav a:hover, .topnav a:focus-visible { color: var(--fg); }
 
@@ -357,10 +357,130 @@ h2 { font-size: 1.05rem; }
 }
 
 .message-form textarea:focus-visible,
+.message-form select:focus-visible,
 .message-form .btn:focus-visible,
 .message-history summary:focus-visible {
   outline: 3px solid #ffd166;
   outline-offset: 3px;
+}
+
+.agent-target-label {
+  margin-top: 2px;
+  font-size: .82rem;
+}
+
+.message-form select {
+  width: 100%;
+  min-height: 46px;
+  margin: 0 0 8px;
+  padding: 0 11px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+}
+
+.agent-target-status {
+  min-height: 18px;
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: .82rem;
+}
+
+.agent-target-status.is-error { color: #ff9b9b; }
+.message-delivery-note { margin: 0 0 10px; color: var(--muted); font-size: .8rem; }
+
+.status-badge.submitted {
+  background: #16301e;
+  color: #71d083;
+}
+
+.status-badge.delivery-failed {
+  background: #351b1e;
+  color: #ff9b9b;
+}
+
+.status-badge.delivery-unknown,
+.status-badge.submitting {
+  background: #2f2818;
+  color: #ffd580;
+}
+
+.targeted-message { border-left: 3px solid #4f8cff; }
+.targeted-message.delivery-failed { border-left-color: #e0554f; }
+.targeted-message.delivery-unknown { border-left-color: #ffd580; }
+
+.agent-retry-form { margin-top: 12px; }
+.btn.retry-delivery {
+  width: auto;
+  min-height: 42px;
+  padding: 9px 14px;
+  border: 1px solid var(--border);
+  background: #262a33;
+  color: #f7f8fa;
+  font-size: .88rem;
+}
+
+.unknown-guidance {
+  margin: 10px 0 0;
+  color: #ffd580;
+  font-size: .86rem;
+}
+
+main.agents-page { max-width: 1120px; padding-top: 30px; }
+.agents-hero { max-width: 760px; margin: 24px 0 42px; }
+.agents-hero h1 { margin: 5px 0 14px; font-size: clamp(2.3rem, 7vw, 4.7rem); line-height: .95; letter-spacing: -.055em; }
+.agents-hero > p:last-child { color: var(--muted); font-size: 1.05rem; }
+.agents-section-heading { margin: 0 0 14px; }
+.agents-section-heading h2 { margin: 3px 0 0; font-size: 1.35rem; }
+
+.agent-directory-state {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin: 0 0 28px;
+  padding: 13px 15px;
+  border: 1px solid #70383e;
+  border-radius: 10px;
+  background: #2a181b;
+  color: #ffb4b4;
+}
+
+.agent-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(310px, 1fr));
+  gap: 14px;
+}
+
+.agent-card {
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 13px;
+  background: var(--card);
+}
+
+.agent-card-heading { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; }
+.agent-card-heading h3 { margin: 0 0 9px; font-size: 1.18rem; }
+.agent-state { flex: 0 0 auto; color: #71d083; font-size: .75rem; font-weight: 850; text-transform: uppercase; letter-spacing: .08em; }
+.agent-message-form { margin-top: 20px; }
+.agent-message-form .comment-box { min-height: 58px; background: var(--bg); }
+.agent-card-recent { display: flex; justify-content: space-between; margin-top: 14px; color: var(--muted); font-size: .78rem; }
+.agent-history { margin-top: 48px; }
+.agent-history-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(310px, 1fr)); }
+.agent-history-list .stream-message { height: 100%; }
+.target-provider { margin-left: 7px; color: var(--muted); font-size: .78rem; }
+.delivery-meta { display: flex; flex-wrap: wrap; gap: 8px 14px; color: var(--muted); font-size: .8rem; }
+.delivery-meta code { color: #a9c8ff; overflow-wrap: anywhere; }
+
+@media (max-width: 560px) {
+  .topbar { align-items: flex-start; gap: 14px; }
+  .topnav { max-width: calc(100vw - 94px); gap: 13px; padding-bottom: 3px; }
+  main.agents-page { padding-top: 12px; }
+  .agents-hero { margin-top: 18px; margin-bottom: 32px; }
+  .agent-grid, .agent-history-list { grid-template-columns: 1fr; }
+  .agent-card-heading { display: block; }
+  .agent-state { display: inline-block; margin-top: 10px; }
 }
 
 .post-list {
@@ -896,6 +1016,7 @@ h2 { font-size: 1.05rem; }
   .message-status.is-error { color: #a32424; }
   .status-badge.queued { background: #fff3cf; color: #7a4c00; }
   .status-badge.picked-up { background: #eafaf0; color: #1f7a3a; }
+  .unknown-guidance { color: #8a5a00; }
 }
 
 .back-link,

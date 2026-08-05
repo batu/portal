@@ -27,6 +27,12 @@
     {% if not stream.closed_at %}
     <form class="message-form note-form" method="post" action="/s/{{ stream.slug }}/note" data-stream-note-form>
       <label for="stream-note">Note to agent</label>
+      <label class="agent-target-label" for="stream-agent-target">Choose delivery target</label>
+      <select id="stream-agent-target" name="agent_target" data-agent-target required>
+        <option value="" selected disabled>Loading live agents…</option>
+      </select>
+      <p class="agent-target-status" data-agent-directory-status role="status" aria-live="polite"></p>
+      <p class="message-delivery-note">Exact delivery reports “submitted to terminal”; the pull queue waits for an agent poll.</p>
       <textarea id="stream-note" name="text" class="comment-box" rows="3" autocomplete="off"></textarea>
       <button class="btn message-send" type="submit">Send</button>
       <p class="message-status" data-form-status role="status" aria-live="polite"></p>
@@ -87,10 +93,20 @@
       <ul class="message-list">
         {% for message in messages.to_agent %}
         <li>
-          <article class="stream-message to-agent {% if message.consumed_at %}is-consumed{% else %}is-queued{% endif %}">
+          <article class="stream-message to-agent {% if message.target_session_id %}targeted-message delivery-{{ message.delivery_state }}{% elif message.consumed_at %}is-consumed{% else %}is-queued{% endif %}">
             <div class="message-heading">
               <span class="message-label">Human note</span>
-              {% if message.consumed_at %}
+              {% if message.target_session_id and message.delivery_state == 'submitted_to_terminal' %}
+              <span class="status-badge submitted">submitted to terminal</span>
+              {% elif message.target_session_id and message.delivery_state == 'failed' %}
+              <span class="status-badge delivery-failed">failed</span>
+              {% elif message.target_session_id and message.delivery_state == 'unknown' %}
+              <span class="status-badge delivery-unknown">submission unknown</span>
+              {% elif message.target_session_id and message.delivery_state == 'submitting' %}
+              <span class="status-badge submitting">submitting</span>
+              {% elif message.target_session_id %}
+              <span class="status-badge pending">waiting to submit</span>
+              {% elif message.consumed_at %}
               <span class="status-badge picked-up">picked up</span>
               {% else %}
               <span class="status-badge queued">queued</span>
@@ -98,8 +114,22 @@
             </div>
             <p class="message-text">{{ message.text }}</p>
             <div class="message-time">
-              {% if message.consumed_at %}picked up {{ message.consumed_at|ago }}{% else %}queued {{ message.created_at|ago }}{% endif %}
+              {% if message.target_session_id %}
+              {{ message.target_provider }} · {{ message.target_session_id[:12] }} · created {{ message.created_at|ago }}
+              {% elif message.consumed_at %}picked up {{ message.consumed_at|ago }}{% else %}queued {{ message.created_at|ago }}{% endif %}
             </div>
+            {% if not stream.closed_at and message.target_session_id and message.delivery_state == 'failed' %}
+            <form class="message-form agent-retry-form" method="post" action="/agents/messages/{{ message.id }}/retry" data-agent-retry-form>
+              <button class="btn retry-delivery" type="submit">Retry same session</button>
+              <p class="message-status" data-form-status role="status" aria-live="polite"></p>
+            </form>
+            {% elif not stream.closed_at and message.target_session_id and message.delivery_state == 'unknown' %}
+            <p class="unknown-guidance">Inspect the target terminal before deciding whether to send this again.</p>
+            <form class="message-form agent-retry-form" method="post" action="/agents/messages/{{ message.id }}/retry" data-agent-retry-form data-confirm-unknown>
+              <button class="btn retry-delivery" type="submit">I inspected the terminal — retry</button>
+              <p class="message-status" data-form-status role="status" aria-live="polite"></p>
+            </form>
+            {% endif %}
           </article>
         </li>
         {% endfor %}

@@ -1,4 +1,164 @@
 // Gallery web UI — vanilla JS, no build step, no dependencies.
+function setFormStatus(form, message, isError) {
+  var status = form.querySelector("[data-form-status]");
+  if (!status) return;
+  status.textContent = message;
+  status.classList.toggle("is-error", Boolean(isError));
+}
+
+function clientSubmissionStorageKey(form, url) {
+  return "portal.agentSubmission.v1:" + window.location.pathname + ":" + url;
+}
+
+function createClientSubmissionKey() {
+  var cryptoApi = window.crypto;
+  if (!cryptoApi || !cryptoApi.getRandomValues) {
+    throw new Error("Secure browser randomness is unavailable; the comment was not submitted.");
+  }
+  if (cryptoApi.randomUUID) return cryptoApi.randomUUID();
+  var bytes = new Uint8Array(24);
+  cryptoApi.getRandomValues(bytes);
+  return Array.prototype.map.call(bytes, function (byte) {
+    return byte.toString(16).padStart(2, "0");
+  }).join("");
+}
+
+function targetedSubmissionIdentity(url, payload) {
+  return JSON.stringify([
+    url,
+    payload.text || "",
+    payload.target_provider || "",
+    payload.target_session_id || "",
+  ]);
+}
+
+function readStoredSubmission(form, storageKey) {
+  function validRecord(record) {
+    return record &&
+      typeof record.key === "string" &&
+      /^[A-Za-z0-9_-]{16,128}$/.test(record.key) &&
+      typeof record.identity === "string";
+  }
+  var raw = null;
+  try {
+    raw = window.sessionStorage.getItem(storageKey);
+  } catch (_err) {
+    // The in-DOM record still preserves the retry while this page is open.
+  }
+  if (!raw && form.dataset.clientSubmissionKey && form.dataset.clientSubmissionIdentity) {
+    var domRecord = {
+      key: form.dataset.clientSubmissionKey,
+      identity: form.dataset.clientSubmissionIdentity,
+    };
+    return validRecord(domRecord) ? domRecord : null;
+  }
+  if (!raw) return null;
+  try {
+    var record = JSON.parse(raw);
+    if (validRecord(record)) return record;
+  } catch (_err) {
+    // A corrupt browser record is replaced before any request is made.
+  }
+  return null;
+}
+
+function persistClientSubmission(form, url, payload) {
+  var storageKey = clientSubmissionStorageKey(form, url);
+  var identity = targetedSubmissionIdentity(url, payload);
+  var record = readStoredSubmission(form, storageKey);
+  if (!record || record.identity !== identity) {
+    record = { key: createClientSubmissionKey(), identity: identity };
+  }
+  form.dataset.clientSubmissionKey = record.key;
+  form.dataset.clientSubmissionIdentity = record.identity;
+  try {
+    window.sessionStorage.setItem(storageKey, JSON.stringify(record));
+  } catch (_err) {
+    // DOM persistence is sufficient for a no-navigation transport retry.
+  }
+  return { key: record.key, storageKey: storageKey };
+}
+
+function clearClientSubmission(form, storageKey) {
+  delete form.dataset.clientSubmissionKey;
+  delete form.dataset.clientSubmissionIdentity;
+  try {
+    window.sessionStorage.removeItem(storageKey);
+  } catch (_err) {
+    // A stale key can only reconcile the same immutable intent server-side.
+  }
+}
+
+function setIdempotentFormLocked(form, locked) {
+  Array.prototype.slice.call(form.querySelectorAll("textarea, select, input")).forEach(function (control) {
+    if (control.tagName === "TEXTAREA") control.readOnly = locked;
+    else control.disabled = locked;
+  });
+}
+
+function submitJsonForm(form, url, payload, pendingMessage, defaultErrorMessage, options) {
+  options = options || {};
+  var button = form.querySelector("button[type='submit']");
+  if (button) button.disabled = true;
+  var clientSubmission = null;
+  if (options.idempotent) {
+    try {
+      clientSubmission = persistClientSubmission(form, url, payload);
+      payload.idempotency_key = clientSubmission.key;
+      setIdempotentFormLocked(form, true);
+    } catch (err) {
+      setFormStatus(form, err.message, true);
+      if (button) button.disabled = false;
+      return;
+    }
+  }
+  setFormStatus(form, pendingMessage, false);
+  fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "same-origin",
+    body: JSON.stringify(payload),
+  })
+    .then(function (resp) {
+      return resp.json().catch(function () {
+        var parseError = new Error("Submission response could not be read.");
+        parseError.submissionStatusUnknown = true;
+        throw parseError;
+      }).then(function (body) {
+        if (!resp.ok) {
+          var responseError = new Error(body.detail || defaultErrorMessage);
+          responseError.portalResponseReceived = true;
+          throw responseError;
+        }
+        return body;
+      });
+    })
+    .then(function (body) {
+      if (options.idempotent && body.delivery_state === "submitting") {
+        setFormStatus(form, "Submission is still being reconciled. Submit again to refresh its status.", false);
+        if (button) button.disabled = false;
+        return;
+      }
+      if (clientSubmission) clearClientSubmission(form, clientSubmission.storageKey);
+      window.location.reload();
+    })
+    .catch(function (err) {
+      var statusUnknown = options.idempotent &&
+        (err.submissionStatusUnknown || !err.portalResponseReceived);
+      if (statusUnknown) {
+        setFormStatus(
+          form,
+          "Submission status unknown. Submit again to reconcile; Portal will not duplicate terminal input.",
+          true
+        );
+      } else {
+        setFormStatus(form, err.message, true);
+        if (options.idempotent) setIdempotentFormLocked(form, false);
+      }
+      if (button) button.disabled = false;
+    });
+}
+
 (function () {
   var section = document.querySelector(".request-detail");
   if (!section) return; // not a request detail page
@@ -274,51 +434,15 @@
     return "/s/" + encodeURIComponent(slug) + "/" + action;
   }
 
-  function statusFor(form) {
-    return form.querySelector("[data-form-status]");
-  }
-
-  function setStatus(form, message, isError) {
-    var status = statusFor(form);
-    if (!status) return;
-    status.textContent = message;
-    status.classList.toggle("is-error", Boolean(isError));
-  }
-
-  function submitJson(form, action, payload) {
-    var button = form.querySelector("button[type='submit']");
-    if (button) button.disabled = true;
-    setStatus(form, "Sending...", false);
-    fetch(endpoint(action), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "same-origin",
-      body: JSON.stringify(payload),
-    })
-      .then(function (resp) {
-        if (!resp.ok) {
-          return resp.json().catch(function () {
-            return {};
-          }).then(function (err) {
-            throw new Error(err.detail || "failed to send message");
-          });
-        }
-        return resp.json();
-      })
-      .then(function () {
-        window.location.reload();
-      })
-      .catch(function (err) {
-        setStatus(form, err.message, true);
-        if (button) button.disabled = false;
-      });
+  function submitJson(form, action, payload, options) {
+    submitJsonForm(form, endpoint(action), payload, "Sending...", "failed to send message", options);
   }
 
   function textPayload(form) {
     var textarea = form.querySelector("textarea[name='text']");
     var text = textarea ? textarea.value.trim() : "";
     if (!text) {
-      setStatus(form, "Message is required.", true);
+      setFormStatus(form, "Message is required.", true);
       return null;
     }
     return { text: text };
@@ -326,11 +450,82 @@
 
   var noteForm = section.querySelector("[data-stream-note-form]");
   if (noteForm) {
+    var targetSelect = noteForm.querySelector("[data-agent-target]");
+    var directoryStatus = noteForm.querySelector("[data-agent-directory-status]");
+    if (targetSelect) {
+      fetch("/agents/directory", { credentials: "same-origin" })
+        .then(function (resp) {
+          if (!resp.ok || resp.redirected) throw new Error("Live agents are unavailable.");
+          return resp.json();
+        })
+        .then(function (directory) {
+          targetSelect.textContent = "";
+          var placeholder = document.createElement("option");
+          placeholder.value = "";
+          placeholder.disabled = true;
+          placeholder.selected = true;
+          placeholder.textContent = "Choose a live agent or the pull queue";
+          targetSelect.appendChild(placeholder);
+
+          (directory.sessions || []).forEach(function (agent) {
+            var option = document.createElement("option");
+            option.value = "agent";
+            option.dataset.provider = agent.provider;
+            option.dataset.sessionId = agent.sid;
+            option.textContent = agent.label + " · " + agent.provider +
+              (agent.project ? " · " + agent.project : "");
+            targetSelect.appendChild(option);
+          });
+
+          var queue = document.createElement("option");
+          queue.value = "queue";
+          queue.textContent = "Portal pull queue · waits for agent polling";
+          targetSelect.appendChild(queue);
+          targetSelect.disabled = false;
+          if (directoryStatus) {
+            directoryStatus.textContent = directory.error || "";
+            directoryStatus.classList.toggle("is-error", Boolean(directory.error));
+          }
+        })
+        .catch(function (err) {
+          targetSelect.textContent = "";
+          var queue = document.createElement("option");
+          queue.value = "queue";
+          queue.textContent = "Portal pull queue · live agents unavailable";
+          targetSelect.appendChild(queue);
+          targetSelect.disabled = false;
+          if (directoryStatus) {
+            directoryStatus.textContent = err.message;
+            directoryStatus.classList.add("is-error");
+          }
+        });
+    }
     noteForm.addEventListener("submit", function (event) {
       event.preventDefault();
       var payload = textPayload(noteForm);
       if (!payload) return;
-      submitJson(noteForm, "note", payload);
+      var exactAgentTarget = false;
+      if (targetSelect) {
+        if (!targetSelect.value) {
+          setFormStatus(noteForm, "Choose a delivery target.", true);
+          return;
+        }
+        if (targetSelect.value === "agent") {
+          var selected = targetSelect.options[targetSelect.selectedIndex];
+          if (!selected || !selected.dataset.provider || !selected.dataset.sessionId) {
+            setFormStatus(noteForm, "Choose a valid live agent.", true);
+            return;
+          }
+          if (/[\x00-\x1f\x7f]/.test(payload.text)) {
+            setFormStatus(noteForm, "Exact-session comments must be one paragraph.", true);
+            return;
+          }
+          payload.target_provider = selected.dataset.provider;
+          payload.target_session_id = selected.dataset.sessionId;
+          exactAgentTarget = true;
+        }
+      }
+      submitJson(noteForm, "note", payload, { idempotent: exactAgentTarget });
     });
   }
 
@@ -342,6 +537,48 @@
       var questionId = form.querySelector("input[name='question_id']");
       payload.question_id = questionId ? questionId.value : "";
       submitJson(form, "answer", payload);
+    });
+  });
+})();
+
+(function () {
+  var forms = Array.prototype.slice.call(
+    document.querySelectorAll("[data-agent-message-form], [data-agent-retry-form]")
+  );
+  if (!forms.length) return;
+
+  forms.forEach(function (form) {
+    var textarea = form.querySelector("[data-single-paragraph]");
+    if (textarea) {
+      textarea.addEventListener("keydown", function (event) {
+        if (event.key !== "Enter") return;
+        event.preventDefault();
+        form.requestSubmit();
+      });
+    }
+    form.addEventListener("submit", function (event) {
+      event.preventDefault();
+      var payload = {};
+      if (form.hasAttribute("data-confirm-unknown")) payload.confirm_unknown = true;
+      if (textarea) {
+        payload.text = textarea.value.trim();
+        if (!payload.text) {
+          setFormStatus(form, "Comment is required.", true);
+          return;
+        }
+        if (/[\x00-\x1f\x7f]/.test(payload.text)) {
+          setFormStatus(form, "Comment must be one paragraph.", true);
+          return;
+        }
+      }
+      submitJsonForm(
+        form,
+        new URL(form.action, window.location.origin).pathname,
+        payload,
+        textarea ? "Submitting to terminal…" : "Retrying…",
+        "Terminal submission failed.",
+        { idempotent: form.hasAttribute("data-agent-message-form") }
+      );
     });
   });
 })();

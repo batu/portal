@@ -1,6 +1,7 @@
 """Interactive view requests: kind=view posts an HTML view with an opaque JSON verdict."""
 
 import json
+from urllib.parse import urlsplit
 
 from gallery import db, server
 
@@ -10,7 +11,7 @@ def auth_headers(token):
 
 
 VIEW_HTML = b"<!doctype html><script>console.log('view')</script><p>picker</p>"
-VIEW_CSP = "sandbox allow-scripts allow-same-origin allow-forms"
+VIEW_CSP = "sandbox allow-scripts allow-forms"
 
 
 def _create_view(client, token, files=None, title="Pick frames"):
@@ -43,6 +44,10 @@ def test_view_html_served_with_scripts_enabled(client, token):
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith("text/html")
     assert resp.headers["content-security-policy"] == VIEW_CSP
+    assert "allow-same-origin" not in resp.headers["content-security-policy"]
+    assert 'url.searchParams.set("view_token", viewToken)' in resp.text
+    assert 'credentials: "omit"' in resp.text
+    assert resp.text.index("const viewToken") < resp.text.index("console.log('view')")
 
 
 def test_report_html_stays_script_blocked(client, token):
@@ -130,11 +135,66 @@ def test_view_request_page_redirects_to_entry_html(client, token):
     req_id = _create_view(client, token).json()["id"]
     resp = client.get(f"/r/{req_id}", params={"token": token}, follow_redirects=False)
     assert resp.status_code == 303
-    assert resp.headers["location"] == f"/media/{req_id}/01_picker.html?token={token}"
+    location = resp.headers["location"]
+    parts = urlsplit(location)
+    path_segments = parts.path.strip("/").split("/")
+    assert path_segments[0:2] == ["view", req_id]
+    assert path_segments[-1] == "01_picker.html"
+    assert len(path_segments[2]) == 64
+    assert parts.query == ""
+    assert token not in location
 
     resp = client.get(f"/r/{req_id}", params={"token": token}, follow_redirects=True)
     assert resp.status_code == 200
     assert resp.headers["content-security-policy"] == VIEW_CSP
+
+
+def test_view_capability_submits_only_its_verdict_and_cannot_authenticate_agents(client, token):
+    req_id = _create_view(client, token).json()["id"]
+    redirect = client.get(f"/r/{req_id}", params={"token": token}, follow_redirects=False)
+    capability = urlsplit(redirect.headers["location"]).path.strip("/").split("/")[2]
+    capability_params = {server.VIEW_CAPABILITY_PARAM: capability}
+
+    preflight = client.options(
+        f"/r/{req_id}/decide",
+        params=capability_params,
+        headers={"Origin": "null", "Access-Control-Request-Headers": "content-type"},
+    )
+    verdict = client.post(
+        f"/r/{req_id}/decide",
+        params=capability_params,
+        headers={"Origin": "null"},
+        json={"payload": {"picked": [2]}},
+    )
+    agent_send = client.post(
+        "/agents/codex/sid-live/messages",
+        params=capability_params,
+        headers={"Origin": "null"},
+        json={"text": "This must not reach a terminal"},
+    )
+
+    assert preflight.status_code == 204
+    assert preflight.headers["access-control-allow-origin"] == "null"
+    assert verdict.status_code == 200
+    assert verdict.headers["access-control-allow-origin"] == "null"
+    assert verdict.json()["payload"] == {"picked": [2]}
+    assert agent_send.status_code == 401
+    assert db.list_targeted_messages() == []
+
+
+def test_view_capability_media_is_limited_to_the_owning_request(client, token):
+    first_id = _create_view(client, token).json()["id"]
+    second_id = _create_view(client, token, title="Other view").json()["id"]
+    redirect = client.get(f"/r/{first_id}", params={"token": token}, follow_redirects=False)
+    capability = urlsplit(redirect.headers["location"]).path.strip("/").split("/")[2]
+
+    own_asset = client.get(f"/view/{first_id}/{capability}/02_clip.mp4")
+    other_asset = client.get(f"/view/{second_id}/{capability}/02_clip.mp4")
+    unlisted_asset = client.get(f"/view/{first_id}/{capability}/not-uploaded.js")
+
+    assert own_asset.status_code == 200
+    assert other_asset.status_code == 404
+    assert unlisted_asset.status_code == 404
 
 
 def test_view_verdict_payload_size_capped(client, token):

@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import hmac
 import html as html_lib
 import json
 import logging
@@ -23,21 +24,24 @@ from urllib.parse import quote, urlsplit
 
 import markdown as md_lib
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
-from . import config, db, notify, remote_config
+from . import agents, config, db, notify, remote_config
 
 log = logging.getLogger("gallery.server")
 
 VIDEO_EXTS = {".mp4", ".mov", ".webm", ".m4v", ".avi"}
 GAME_PREVIEW_EXTS = {".jpg", ".jpeg"}
 HTML_EXTS = {".html", ".htm"}
-# Interactive view HTML runs producer JS against the authed origin. Accepted for
-# the single-user tailnet deployment; revisit before any public exposure.
-VIEW_HTML_CSP = "sandbox allow-scripts allow-same-origin allow-forms"
+# Interactive view HTML is uploaded producer code. An opaque sandbox keeps its
+# scripts away from Portal cookies and same-origin authority; a request-scoped
+# capability grants only verdict submission for that one view.
+VIEW_HTML_CSP = "sandbox allow-scripts allow-forms"
+VIEW_CAPABILITY_PARAM = "view_token"
+VIEW_CAPABILITY_PURPOSE = b"portal-view-verdict-v1\0"
 STREAM_KINDS = {"session", "pinned"}
 POST_TYPES = {"report", "decision"}
 POST_UPLOAD_SOFT_CAP_BYTES = 200 * 1024 * 1024
@@ -45,6 +49,7 @@ UPLOAD_CHUNK_SIZE = 1024 * 1024
 MAX_TITLE_LENGTH = 300
 MAX_AUTHOR_LENGTH = 200
 MAX_MESSAGE_TEXT_LENGTH = 20_000
+AGENT_CONVERSATION_STREAM_SLUG = "agent-conversations"
 MAX_BODY_JSON_BYTES = 1_000_000
 MAX_JOURNEY_STEPS = 100
 MAX_STEP_MEDIA = 30
@@ -71,6 +76,7 @@ GAME_WEB_EXTS = {
 GAME_WEB_CSP = "sandbox allow-scripts"
 STREAM_SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?$")
 SAFE_SEGMENT_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+CLIENT_SUBMISSION_KEY_RE = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
 
 # Request context is stored, agent-controlled Markdown that renders into an
 # HTML `|safe` sink. Markdown preserves raw HTML, so its output is run through
@@ -343,12 +349,51 @@ def require_api_token(request: Request) -> dict:
 
 
 def web_token_ok(request: Request) -> bool:
+    # Sandboxed producer documents have an opaque origin. Even if a browser
+    # attaches Portal's cookie to an explicit credentials=include request, that
+    # uploaded script must not inherit the human operator's authority.
+    if request.headers.get("origin") == "null":
+        return False
     expected = _server_token()
     qs_token = request.query_params.get("token")
     if qs_token and qs_token == expected:
         return True
     cookie_token = request.cookies.get(COOKIE_NAME)
     return bool(cookie_token and cookie_token == expected)
+
+
+def _view_capability(req_id: str) -> str:
+    return hmac.new(
+        _server_token().encode("utf-8"),
+        VIEW_CAPABILITY_PURPOSE + req_id.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def _view_capability_ok(req_id: str, capability: str | None) -> bool:
+    return bool(
+        capability
+        and SAFE_SEGMENT_RE.fullmatch(req_id)
+        and re.fullmatch(r"[0-9a-f]{64}", capability)
+        and secrets.compare_digest(capability, _view_capability(req_id))
+    )
+
+
+def _view_verdict_capability_ok(req_id: str, capability: str | None) -> bool:
+    if not _view_capability_ok(req_id, capability):
+        return False
+    request_row = db.get_request(req_id)
+    return bool(request_row and request_row.get("kind") == "view")
+
+
+def _view_cors_headers() -> dict[str, str]:
+    return {
+        "Access-Control-Allow-Origin": "null",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "content-type",
+        "Cache-Control": "no-store",
+        "Vary": "Origin",
+    }
 
 
 def _maybe_set_cookie(response, request: Request) -> None:
@@ -927,6 +972,8 @@ def _is_text_html(media_type: str | None) -> bool:
 # (Batu, 2026-07-09). The header is self-contained inline styles — the sandboxed
 # producer page does not load Portal's style.css.
 _BODY_OPEN_RE = re.compile(rb"<body[^>]*>", re.IGNORECASE)
+_HEAD_OPEN_RE = re.compile(rb"<head[^>]*>", re.IGNORECASE)
+_HTML_OPEN_RE = re.compile(rb"<html[^>]*>", re.IGNORECASE)
 _DOCTYPE_RE = re.compile(rb"\A\s*<!doctype[^>]*>", re.IGNORECASE)
 
 # Deterministic status → inline chip style. Not user-controlled (status is drawn
@@ -971,8 +1018,55 @@ def _context_header_bytes(*, stream: dict | None, step, ask, status) -> bytes:
     return html.encode("utf-8")
 
 
-def _html_with_context_header(path, media_type: str, headers: dict, header_bytes: bytes):
+def _view_fetch_bridge_bytes(req_id: str, capability: str) -> bytes:
+    """Grant legacy producer fetches only this request's verdict capability."""
+    script = f"""<script>
+(function () {{
+  const requestId = {json.dumps(req_id)};
+  const viewToken = {json.dumps(capability)};
+  const nativeFetch = window.fetch;
+  if (typeof nativeFetch !== "function") return;
+  window.fetch = function (input, options) {{
+    let url;
+    try {{
+      const rawUrl = (typeof input === "string" || input instanceof URL) ? input : input.url;
+      url = new URL(rawUrl, window.location.href);
+    }} catch (_) {{
+      return nativeFetch.call(this, input, options);
+    }}
+    if (url.pathname !== "/r/" + encodeURIComponent(requestId) + "/decide") {{
+      return nativeFetch.call(this, input, options);
+    }}
+    url.searchParams.delete("token");
+    url.searchParams.set({json.dumps(VIEW_CAPABILITY_PARAM)}, viewToken);
+    const safeOptions = Object.assign({{}}, options || {{}}, {{ credentials: "omit" }});
+    if (typeof input === "string" || input instanceof URL) {{
+      return nativeFetch.call(this, url.toString(), safeOptions);
+    }}
+    return nativeFetch.call(this, new Request(url.toString(), input), safeOptions);
+  }};
+}})();
+</script>"""
+    return script.encode("utf-8")
+
+
+def _html_with_context_header(
+    path,
+    media_type: str,
+    headers: dict,
+    header_bytes: bytes,
+    *,
+    bootstrap_bytes: bytes = b"",
+):
     raw = path.read_bytes()
+    if bootstrap_bytes:
+        bootstrap_parent = (
+            _HEAD_OPEN_RE.search(raw)
+            or _HTML_OPEN_RE.search(raw)
+            or _DOCTYPE_RE.match(raw)
+        )
+        insertion = bootstrap_parent.end() if bootstrap_parent is not None else 0
+        raw = raw[:insertion] + bootstrap_bytes + raw[insertion:]
     # No <body> tag: still insert AFTER any leading doctype — content before the
     # doctype would demote the whole page to quirks mode.
     match = _BODY_OPEN_RE.search(raw) or _DOCTYPE_RE.match(raw)
@@ -1247,7 +1341,10 @@ def _parse_unconsumed(value: str | None) -> bool:
 
 
 def _message_mutation_status(exc: ValueError) -> int:
-    if isinstance(exc, db.StreamClosedError):
+    if isinstance(
+        exc,
+        (db.StreamClosedError, db.MessageDeliveryStateError, db.MessageIdempotencyConflictError),
+    ):
         return 409
     if isinstance(exc, (db.MessageNotFoundError, db.StreamNotFoundError)):
         return 404
@@ -1445,6 +1542,8 @@ async def create_stream(request: Request):
 def close_stream(request: Request, slug: str):
     require_api_token(request)
     _validate_slug(slug)
+    if slug == AGENT_CONVERSATION_STREAM_SLUG:
+        raise HTTPException(status_code=409, detail="the internal agent conversation stream cannot be archived")
     try:
         return db.close_stream(slug)
     except ValueError as exc:
@@ -1850,18 +1949,15 @@ def _view_context_header_bytes(req_id: str) -> bytes:
     )
 
 
-@app.get("/media/{req_id}/{filename}")
-def get_media(request: Request, req_id: str, filename: str):
-    if not web_token_ok(request):
-        raise HTTPException(status_code=401, detail="missing or invalid token")
+def _media_file_path(owner_id: str, filename: str) -> Path:
     if (
-        not SAFE_SEGMENT_RE.fullmatch(req_id)
-        or req_id in {".", ".."}
+        not SAFE_SEGMENT_RE.fullmatch(owner_id)
+        or owner_id in {".", ".."}
         or not _safe_media_filename(filename)
     ):
         raise HTTPException(status_code=404, detail="media not found")
     media_root = config.media_dir().resolve()
-    media_dir = (media_root / req_id).resolve()
+    media_dir = (media_root / owner_id).resolve()
     path = (media_dir / filename).resolve()
     try:
         path.relative_to(media_dir)
@@ -1870,6 +1966,50 @@ def get_media(request: Request, req_id: str, filename: str):
         raise HTTPException(status_code=404, detail="media not found") from exc
     if not path.is_file():
         raise HTTPException(status_code=404, detail="media not found")
+    return path
+
+
+def _view_media_url(req_id: str, filename: str) -> str:
+    capability = _view_capability(req_id)
+    return (
+        f"/view/{quote(req_id, safe='')}/{capability}/"
+        f"{quote(filename, safe='')}"
+    )
+
+
+@app.get("/view/{req_id}/{capability}/{filename}")
+def get_view_media(req_id: str, capability: str, filename: str):
+    if not _view_capability_ok(req_id, capability):
+        raise HTTPException(status_code=404, detail="view not found")
+    request_row = db.get_request(req_id)
+    if request_row is None or request_row.get("kind") != "view":
+        raise HTTPException(status_code=404, detail="view not found")
+    if filename not in {variant.get("media_path") for variant in request_row.get("variants", [])}:
+        raise HTTPException(status_code=404, detail="view media not found")
+    path = _media_file_path(req_id, filename)
+    media_type, _ = mimetypes.guess_type(str(path))
+    headers = {
+        "Cache-Control": "no-store",
+        "Referrer-Policy": "no-referrer",
+        "X-Content-Type-Options": "nosniff",
+    }
+    if Path(filename).suffix.lower() in HTML_EXTS:
+        headers["Content-Security-Policy"] = VIEW_HTML_CSP
+        return _html_with_context_header(
+            path,
+            "text/html",
+            headers,
+            _view_context_header_bytes(req_id),
+            bootstrap_bytes=_view_fetch_bridge_bytes(req_id, capability),
+        )
+    return FileResponse(path, media_type=media_type or "application/octet-stream", headers=headers)
+
+
+@app.get("/media/{req_id}/{filename}")
+def get_media(request: Request, req_id: str, filename: str):
+    if not web_token_ok(request):
+        raise HTTPException(status_code=401, detail="missing or invalid token")
+    path = _media_file_path(req_id, filename)
     media_type, _ = mimetypes.guess_type(str(path))
     headers = {"X-Content-Type-Options": "nosniff"}
     report_html_type = _report_html_media_type(req_id, filename, media_type)
@@ -1886,10 +2026,9 @@ def get_media(request: Request, req_id: str, filename: str):
             path, report_html_type, headers, _report_context_header_bytes(req_id)
         )
     if _view_html_media_type(req_id, filename):
-        headers["Content-Security-Policy"] = VIEW_HTML_CSP
-        return _html_with_context_header(
-            path, "text/html", headers, _view_context_header_bytes(req_id)
-        )
+        response = RedirectResponse(url=_view_media_url(req_id, filename), status_code=303)
+        _maybe_set_cookie(response, request)
+        return response
     if browser_safe_media:
         return FileResponse(path, media_type=media_type, headers=headers)
     return FileResponse(
@@ -2058,6 +2197,108 @@ def _validate_question_id(value: object) -> str:
     return question_id
 
 
+def _validate_agent_target(provider: object, session_id: object) -> tuple[str, str]:
+    if not agents.valid_provider(provider):
+        raise HTTPException(status_code=400, detail="invalid agent provider")
+    if not agents.valid_session_id(session_id):
+        raise HTTPException(status_code=400, detail="invalid agent session id")
+    return provider, session_id
+
+
+def _agent_message_text(value: object) -> str:
+    text = _bounded_text(value, "text", agents.MAX_AGENT_TEXT_LENGTH)
+    if not agents.valid_single_paragraph(text):
+        raise HTTPException(status_code=400, detail="text must be one paragraph without control characters")
+    return text
+
+
+def _client_submission_key(value: object) -> str:
+    key = _bounded_text(value, "idempotency_key", 128)
+    if not CLIENT_SUBMISSION_KEY_RE.fullmatch(key):
+        raise HTTPException(
+            status_code=400,
+            detail="idempotency_key must be 16-128 URL-safe characters",
+        )
+    return key
+
+
+def _agent_directory() -> tuple[list[dict], str | None]:
+    try:
+        return agents.list_replyable_agents(), None
+    except agents.AgentBridgeError as exc:
+        return [], str(exc)
+
+
+def _ensure_agent_conversation_stream() -> dict:
+    stream = db.get_stream(AGENT_CONVERSATION_STREAM_SLUG)
+    if stream is not None:
+        return db.reopen_stream(AGENT_CONVERSATION_STREAM_SLUG) if stream["closed_at"] else stream
+    try:
+        return db.create_stream(AGENT_CONVERSATION_STREAM_SLUG, "pinned", "Agent conversations")
+    except sqlite3.IntegrityError:
+        stream = db.get_stream(AGENT_CONVERSATION_STREAM_SLUG)
+        if stream is None:
+            raise
+        return db.reopen_stream(AGENT_CONVERSATION_STREAM_SLUG) if stream["closed_at"] else stream
+
+
+def _submit_targeted_message(message_id: str, *, allow_unknown: bool = False) -> dict:
+    try:
+        message = db.claim_message_delivery(message_id, allow_unknown=allow_unknown)
+    except ValueError as exc:
+        raise HTTPException(status_code=_message_mutation_status(exc), detail=str(exc)) from exc
+    try:
+        result = agents.submit_to_agent(
+            message["target_provider"],
+            message["target_session_id"],
+            message["text"],
+        )
+        outcome = result["outcome"]
+        detail = result["detail"]
+    except Exception:  # noqa: BLE001 - an invoked bridge may already have submitted input
+        log.exception("agent terminal submission bridge failed for message %s", message_id)
+        outcome = "unknown"
+        detail = "portal_bridge_exception"
+    try:
+        return db.complete_message_delivery(message_id, outcome, detail)
+    except ValueError as exc:
+        raise HTTPException(status_code=_message_mutation_status(exc), detail=str(exc)) from exc
+
+
+def _create_targeted_to_agent_message(
+    stream: dict,
+    text: str,
+    provider: str,
+    session_id: str,
+    client_submission_key: str,
+) -> dict:
+    try:
+        message, _created = db.create_or_get_targeted_message(
+            stream["id"],
+            text,
+            provider,
+            session_id,
+            client_submission_key,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=_message_mutation_status(exc), detail=str(exc)) from exc
+
+    # Repeated initial requests are reconciliation reads. Only a row that has
+    # never been claimed may enter the bridge; every other state is returned
+    # verbatim so an ambiguous/lost response cannot duplicate terminal input.
+    if message.get("delivery_state") != "pending":
+        return message
+    try:
+        return _submit_targeted_message(message["id"])
+    except HTTPException as exc:
+        if exc.status_code != 409:
+            raise
+        current = db.get_message(message["id"])
+        if current is not None and current.get("delivery_state") != "pending":
+            return current
+        raise
+
+
 def _create_to_agent_message(stream: dict, text: str) -> dict:
     for _ in range(5):
         try:
@@ -2201,6 +2442,87 @@ def web_index(request: Request, q: str | None = None):
     )
     _maybe_set_cookie(response, request)
     return response
+
+
+def _agent_history_context(sessions: list[dict]) -> tuple[list[dict], list[dict]]:
+    history = db.list_targeted_messages(limit=100)
+    labels = {(session["provider"], session["sid"]): session["label"] for session in sessions}
+    for message in history:
+        message["target_label"] = labels.get(
+            (message["target_provider"], message["target_session_id"]),
+            f"{message['target_provider']} · {message['target_session_id'][:12]}",
+        )
+        stream_open = message["stream_closed_at"] is None
+        message["retryable"] = stream_open and message["delivery_state"] == "failed"
+        message["confirmable"] = stream_open and message["delivery_state"] == "unknown"
+    by_target: dict[tuple[str, str], list[dict]] = {}
+    for message in history:
+        by_target.setdefault((message["target_provider"], message["target_session_id"]), []).append(message)
+    session_rows = []
+    for session in sessions:
+        row = dict(session)
+        row["messages"] = by_target.get((row["provider"], row["sid"]), [])[:5]
+        session_rows.append(row)
+    return session_rows, history
+
+
+@app.get("/agents/directory")
+def web_agent_directory(request: Request):
+    if not web_token_ok(request):
+        return _login_redirect(request)
+    sessions, error = _agent_directory()
+    if error is not None:
+        return {"sessions": [], "error": error}
+    return {"sessions": sessions, "error": None}
+
+
+@app.get("/agents", response_class=HTMLResponse)
+def web_agents(request: Request):
+    if not web_token_ok(request):
+        return _login_redirect(request)
+    sessions, agency_error = _agent_directory()
+    session_rows, history = _agent_history_context(sessions)
+    response = templates.TemplateResponse(
+        request,
+        "agents.html",
+        {
+            "sessions": session_rows,
+            "history": history,
+            "agency_error": agency_error,
+        },
+    )
+    response.headers["Referrer-Policy"] = "no-referrer"
+    _maybe_set_cookie(response, request)
+    return response
+
+
+@app.post("/agents/{provider}/{session_id}/messages")
+async def web_agent_message(request: Request, provider: str, session_id: str):
+    if not web_token_ok(request):
+        raise HTTPException(status_code=401, detail="missing or invalid token")
+    provider, session_id = _validate_agent_target(provider, session_id)
+    body = await _json_object_body(request)
+    text = _agent_message_text(body.get("text"))
+    client_submission_key = _client_submission_key(body.get("idempotency_key"))
+    stream = await run_in_threadpool(_ensure_agent_conversation_stream)
+    return await run_in_threadpool(
+        _create_targeted_to_agent_message,
+        stream,
+        text,
+        provider,
+        session_id,
+        client_submission_key,
+    )
+
+
+@app.post("/agents/messages/{message_id}/retry")
+async def web_agent_message_retry(request: Request, message_id: str):
+    if not web_token_ok(request):
+        raise HTTPException(status_code=401, detail="missing or invalid token")
+    _validate_question_id(message_id)
+    body = await _json_object_body(request)
+    allow_unknown = body.get("confirm_unknown") is True
+    return await run_in_threadpool(_submit_targeted_message, message_id, allow_unknown=allow_unknown)
 
 
 def _game_page_context(slug: str) -> dict:
@@ -2459,6 +2781,22 @@ async def web_stream_note(request: Request, slug: str):
         raise HTTPException(status_code=401, detail="missing or invalid token")
     stream = await run_in_threadpool(_web_open_stream_or_404, slug)
     body = await _json_object_body(request)
+    target_provider = body.get("target_provider")
+    target_session_id = body.get("target_session_id")
+    if (target_provider is None) != (target_session_id is None):
+        raise HTTPException(status_code=400, detail="target_provider and target_session_id must be supplied together")
+    if target_provider is not None:
+        provider, session_id = _validate_agent_target(target_provider, target_session_id)
+        text = _agent_message_text(body.get("text"))
+        client_submission_key = _client_submission_key(body.get("idempotency_key"))
+        return await run_in_threadpool(
+            _create_targeted_to_agent_message,
+            stream,
+            text,
+            provider,
+            session_id,
+            client_submission_key,
+        )
     text = _bounded_text(body.get("text"), "text", MAX_MESSAGE_TEXT_LENGTH)
     return await run_in_threadpool(_create_to_agent_message, stream, text)
 
@@ -2496,11 +2834,9 @@ def web_request_detail(request: Request, req_id: str):
     # Terminal views fall through to the Portal page so the lifecycle banner
     # (successor link / close reason) is reachable instead of the stale producer HTML.
     if view_entry is not None and r["status"] not in db.TERMINAL_STATUSES:
-        # A view owns the whole tab — no iframe box. Cookie auth carries over;
-        # forward an explicit ?token= so first-visit links still work.
-        qs_token = request.query_params.get("token")
-        suffix = f"?token={quote(qs_token, safe='')}" if qs_token else ""
-        response = RedirectResponse(url=f"{_media_url(r['id'], view_entry)}{suffix}", status_code=303)
+        # A view owns the whole tab — no iframe box. Its URL carries only a
+        # request-scoped verdict capability, never Portal's global token.
+        response = RedirectResponse(url=_view_media_url(r["id"], view_entry), status_code=303)
         _maybe_set_cookie(response, request)
         return response
     back = {"href": "/", "label": "Home"}
@@ -2518,7 +2854,7 @@ def web_request_detail(request: Request, req_id: str):
             "context_html": context_html,
             "stream_read_only": stream_read_only,
             "before_media": before_media,
-            "view_entry_url": _media_url(r["id"], view_entry) if view_entry else None,
+            "view_entry_url": _view_media_url(r["id"], view_entry) if view_entry else None,
             "back": back,
             "feedback_html": _feedback_html(r),
             "og": _og_context(request, r),
@@ -2781,7 +3117,7 @@ def web_request_chain(request: Request, req_id: str):
             "chain": chain,
             "chain_idx": chain_idx,
             "view_entry_url": (
-                _media_url(r["id"], _view_entry_media_path(r))
+                _view_media_url(r["id"], _view_entry_media_path(r))
                 if _view_entry_media_path(r)
                 else None
             ),
@@ -2798,13 +3134,27 @@ def web_request_chain(request: Request, req_id: str):
     return response
 
 
+@app.options("/r/{req_id}/decide")
+def web_decide_options(request: Request, req_id: str):
+    if not _view_verdict_capability_ok(req_id, request.query_params.get(VIEW_CAPABILITY_PARAM)):
+        raise HTTPException(status_code=401, detail="missing or invalid view capability")
+    return Response(status_code=204, headers=_view_cors_headers())
+
+
 @app.post("/r/{req_id}/decide")
 async def web_decide(request: Request, req_id: str):
-    """Cookie-authenticated decide endpoint used by the web UI's JS (no bearer header available in-browser)."""
-    if not web_token_ok(request):
+    """Accept a human cookie or one request-scoped producer capability."""
+    view_capability_ok = _view_verdict_capability_ok(
+        req_id,
+        request.query_params.get(VIEW_CAPABILITY_PARAM),
+    )
+    if not web_token_ok(request) and not view_capability_ok:
         raise HTTPException(status_code=401, detail="missing or invalid token")
     body = await request.json()
-    return _apply_verdict(req_id, body)
+    result = _apply_verdict(req_id, body)
+    if view_capability_ok:
+        return JSONResponse(result, headers=_view_cors_headers())
+    return result
 
 
 # --- journey web page ---
