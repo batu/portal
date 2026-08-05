@@ -29,3 +29,20 @@ Who or what produced a Request's content (typically an agent model id). Recorded
 
 ### Stream
 A named, slugged container that owns Requests and posts for one working session or project area. Closing a Stream makes its Requests read-only (archived).
+
+## Agent steering
+
+### Agent Session Identity
+The authoritative pair of provider and stable session ID supplied by Agency Fleet for one live, top-level agent. Labels, pane positions, TTYs, processes, and paths may help display or resolve it, but are not the identity.
+
+### Targeted Agent Message
+An operator-authored message bound immutably to one Agent Session Identity. It is excluded from the generic pull queue and retained with its delivery state and append-only Delivery Attempts.
+
+### Terminal Submission Receipt
+Durable evidence that literal message text plus Enter were sent to the revalidated target terminal. It is not evidence that the agent read, understood, acknowledged, or acted on the message. While the owning Stream is open, a failed attempt is retryable and an unknown attempt requires terminal inspection and explicit confirmation; archived Streams remain read-only.
+
+### Delivery Attempt
+One append-only attempt to submit a Targeted Agent Message, recording when it occurred, its outcome, and a sanitized detail. Only `submitted_to_terminal` consumes the message.
+
+### View Capability
+A request-scoped credential granted to active producer HTML for only its owning Request's declared media and Verdict endpoint. The view remains an opaque origin; the capability cannot authenticate unrelated Portal surfaces such as Agents.

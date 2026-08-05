@@ -1,0 +1,6 @@
+{
+  "verdict": "passed",
+  "findings": [],
+  "omissions": [],
+  "rationale": "The learning and CONCEPTS.md now match the current Portal and Agency contracts. Agency classifies subprocess-level ambiguity during the literal tmux write as unknown while preserving a pre-start OSError as failed, and focused tests cover both outcomes. Retry guidance is correctly limited to open Streams and names archived Streams as read-only. The authority split, exact provider and session identity, durable delivery states and attempts, response-loss idempotency, restart recovery, scoped view capability, residual terminal TOCTOU limit, symbols, and vocabulary are all grounded in the current diffs and tests."
+}

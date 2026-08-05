@@ -1,0 +1,736 @@
+{
+  "status": "complete",
+  "verdict": "Not ready",
+  "scope": {
+    "base": "staged changes across Portal 8d4cbf4, Agency 9b9f8a2, and Fabrikav2 12a1730e",
+    "branch": "feat/agent-conversations-release-workflow + feat/portal-release-best-practices + feat/ftb-portal-release",
+    "head_sha": "8d4cbf4cdd4e17bfde18c6a9ad87e348d44cd911",
+    "pr_url": null,
+    "files_changed": 34
+  },
+  "intent": "Add an authenticated Portal Agents workspace with exact-session steering and honest delivery receipts, formalize the studio game-release contract in Agency, and prepare a Find the Bird release candidate matching the Marble Run Portal shape.",
+  "intent_confidence": "explicit",
+  "reviewers": [
+    "correctness",
+    "testing",
+    "maintainability",
+    "project-standards",
+    "agent-native-reviewer",
+    "learnings-researcher",
+    "security",
+    "performance",
+    "api-contract",
+    "data-migration",
+    "reliability",
+    "adversarial",
+    "julik-frontend-races"
+  ],
+  "findings": [
+    {
+      "#": 1,
+      "title": "Producer HTML inherits terminal-steering authority",
+      "severity": "P0",
+      "file": "portal/gallery/server.py",
+      "line": 2331,
+      "confidence": 75,
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "pre_existing": false,
+      "suggested_fix": "Serve kind=view content without ambient Portal authority, stop forwarding the global token, and give verdict submission only a request-scoped capability that cannot access Agents routes.",
+      "first_evidence": "portal/gallery/server.py:2331 -- if not web_token_ok(request):",
+      "why_it_matters": "Scripted kind=view artifacts share the Portal origin and ambient cookie, so the new cookie-authenticated directory and message routes turn uploaded HTML into a principal that can steer live terminals.",
+      "evidence": [
+        "portal/gallery/server.py:40 -- VIEW_HTML_CSP includes allow-scripts and allow-same-origin",
+        "portal/gallery/server.py:2331 -- Agents send accepts ambient web authentication",
+        "portal/gallery/server.py:2654 -- the global query token is forwarded into the media URL"
+      ],
+      "reviewers": [
+        "security"
+      ]
+    },
+    {
+      "#": 2,
+      "title": "Replies can execute in a foreground shell",
+      "severity": "P0",
+      "file": "agency/src/agency/fleet/tmux.py",
+      "line": 510,
+      "confidence": 100,
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "pre_existing": false,
+      "suggested_fix": "Immediately before input, verify the same provider PID/process group still owns the pane foreground TTY; fail before writing if identity changed, and report unknown if it changes between literal write and Enter.",
+      "first_evidence": "agency/src/agency/fleet/tmux.py:510 -- [\"tmux\", \"send-keys\", \"-t\", pane, \"-l\", \"--\", text],",
+      "why_it_matters": "An exited or suspended agent can leave a shell in the same pane, causing an authenticated Portal comment to execute as an operating-system command instead of reaching the agent approval boundary.",
+      "evidence": [
+        "agency/src/agency/fleet/tmux.py:349 -- fresh target resolution verifies only the TTY-to-pane mapping",
+        "agency/src/agency/fleet/tmux.py:510 -- literal text is sent to the pane",
+        "agency/src/agency/fleet/tmux.py:521 -- Enter is sent separately"
+      ],
+      "reviewers": [
+        "security",
+        "adversarial"
+      ]
+    },
+    {
+      "#": 3,
+      "title": "Harness capture can falsely certify the production candidate",
+      "severity": "P1",
+      "file": "agency/src/agency/catalog/skills/game/portal-game-release/SKILL.md",
+      "line": 42,
+      "confidence": 100,
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "pre_existing": false,
+      "suggested_fix": "Label harness captures diagnostic-only and require a second install and capture from the exact harness-free production artifact, blocking publication when that lane is unavailable.",
+      "first_evidence": "agency/src/agency/catalog/skills/game/portal-game-release/SKILL.md:42 -- 4. **Gameplay evidence:** Load `game-device-verification` and use the canonical",
+      "why_it_matters": "The release skill requires evidence from the harness-free production candidate while the mandatory device skill builds a separate harness-enabled artifact, making the written contract contradictory or encouraging mismatched evidence.",
+      "evidence": [
+        "agency/src/agency/catalog/skills/game/portal-game-release/SKILL.md:43 -- capture from the same candidate",
+        "game-device-verification/SKILL.md:38 -- build the harness-enabled native artifact"
+      ],
+      "reviewers": [
+        "adversarial"
+      ]
+    },
+    {
+      "#": 4,
+      "title": "Recover interrupted delivery claims",
+      "severity": "P1",
+      "file": "portal/gallery/db.py",
+      "line": 1129,
+      "confidence": 100,
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "pre_existing": false,
+      "suggested_fix": "Reconcile persisted submitting records to unknown on startup with an append-only interrupted attempt so retry remains gated by explicit confirm_unknown.",
+      "first_evidence": "portal/gallery/db.py:1129 -- SET delivery_state = 'submitting', delivery_updated_at = ?",
+      "why_it_matters": "A crash after the claim commit but before terminal completion leaves a message permanently submitting, with no retry path and no truthful recorded outcome.",
+      "evidence": [
+        "portal/gallery/db.py:1136 -- the submitting claim commits before bridge invocation",
+        "portal/gallery/db.py:1120 -- retry allows pending and failed, plus explicitly confirmed unknown"
+      ],
+      "reviewers": [
+        "data-migration",
+        "reliability",
+        "adversarial",
+        "julik-frontend-races"
+      ]
+    },
+    {
+      "#": 5,
+      "title": "Lost HTTP response duplicates exact-session comments",
+      "severity": "P1",
+      "file": "portal/gallery/static/app.js",
+      "line": 34,
+      "confidence": 75,
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "pre_existing": false,
+      "suggested_fix": "Send a persistent client idempotency key, enforce uniqueness in Portal, return the existing delivery on repeats, and render transport failures as status unknown until history is reconciled.",
+      "first_evidence": "portal/gallery/static/app.js:34 -- if (button) button.disabled = false;",
+      "why_it_matters": "If terminal submission succeeds but the response is lost, the form is re-enabled and a repeat creates a fresh message ID, bypassing unknown-state confirmation and duplicating agent input.",
+      "evidence": [
+        "portal/gallery/server.py:2123 -- every initial request creates a new targeted message",
+        "portal/gallery/static/app.js:34 -- the unchanged form is enabled after transport failure"
+      ],
+      "reviewers": [
+        "adversarial"
+      ]
+    },
+    {
+      "#": 6,
+      "title": "Fallback SIDs leak local targets and vanish",
+      "severity": "P2",
+      "file": "agency/src/agency/fleet/hud.py",
+      "line": 1231,
+      "confidence": 100,
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "pre_existing": false,
+      "suggested_fix": "Exclude path- or TTY-derived fallback SIDs until a genuine stable URL-safe provider SID exists, and enforce the same SID contract in directory and submit paths.",
+      "first_evidence": "agency/src/agency/fleet/hud.py:1231 -- \"sid\": row.sid,",
+      "why_it_matters": "Fresh fallback IDs expose a local TTY or path and are then rejected by Portal, so the directory both leaks implementation detail and silently omits a live session.",
+      "evidence": [
+        "agency/src/agency/fleet/state.py constructs codex and Claude fallback SIDs from local targets"
+      ],
+      "reviewers": [
+        "correctness"
+      ]
+    },
+    {
+      "#": 7,
+      "title": "Duplicate SIDs are advertised but never submit",
+      "severity": "P2",
+      "file": "agency/src/agency/fleet/hud.py",
+      "line": 1237,
+      "confidence": 100,
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "pre_existing": false,
+      "suggested_fix": "Build the reply directory in two passes and expose only provider-plus-SID pairs with exactly one eligible live row.",
+      "first_evidence": "agency/src/agency/fleet/hud.py:1237 -- \"replyable\": True,",
+      "why_it_matters": "The UI offers controls for duplicate targets that submit_fleet_reply deterministically rejects as session_not_unique.",
+      "evidence": [
+        "agency/src/agency/fleet/hud.py:103 -- submission requires exactly one provider-plus-SID match"
+      ],
+      "reviewers": [
+        "correctness"
+      ]
+    },
+    {
+      "#": 8,
+      "title": "Bundle rewrite certifies missing and stale assets",
+      "severity": "P2",
+      "file": "fabrikav2/games/find_the_bird/build/nativePublicBundle.ts",
+      "line": 69,
+      "confidence": 100,
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "pre_existing": false,
+      "suggested_fix": "Validate every required package asset against output existence, size, and SHA-256 before setting bundledInApp; resolve obsolete bw.png references and add missing/stale fixture tests.",
+      "first_evidence": "fabrikav2/games/find_the_bird/build/nativePublicBundle.ts:69 -- bundledInApp: bundledLevelIds.has(level.id as string),",
+      "why_it_matters": "The current candidate claims two levels are bundled while their package metadata references absent bw.png files and four copied assets disagree with recorded size/hash metadata.",
+      "evidence": [
+        "generated dist and iOS bundles omit both referenced bw.png files",
+        "four of 36 manifested assets have stale sizes and hashes"
+      ],
+      "reviewers": [
+        "adversarial"
+      ]
+    },
+    {
+      "#": 9,
+      "title": "Validate Portal providers against Agency's enum",
+      "severity": "P2",
+      "file": "portal/gallery/agents.py",
+      "line": 19,
+      "confidence": 100,
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "pre_existing": false,
+      "suggested_fix": "Restrict Portal to the explicit claude, codex, and pi capability set before persisting a targeted message.",
+      "first_evidence": "portal/gallery/agents.py:19 -- _PROVIDER_RE = re.compile(r\"^[a-z][a-z0-9_-]{0,31}$\")",
+      "why_it_matters": "Portal accepts targets Agency cannot parse, converting a certain preflight failure into a persisted ambiguous delivery.",
+      "evidence": [
+        "agency/src/agency/cli.py uses FLEET_REPLY_PROVIDERS as argparse choices"
+      ],
+      "reviewers": [
+        "api-contract",
+        "adversarial"
+      ]
+    },
+    {
+      "#": 10,
+      "title": "Unicode separators create permanently failed messages",
+      "severity": "P2",
+      "file": "portal/gallery/agents.py",
+      "line": 40,
+      "confidence": 100,
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "pre_existing": false,
+      "suggested_fix": "Reject Unicode categories Cc, Zl, and Zp in Portal exactly as Agency does, with cross-contract boundary tests.",
+      "first_evidence": "portal/gallery/agents.py:40 -- return not any(ord(char) < 32 or ord(char) == 127 for char in value)",
+      "why_it_matters": "Portal persists characters Agency rejects, and retry resubmits the same invalid immutable text forever.",
+      "evidence": [
+        "agency/src/agency/fleet/hud.py rejects Unicode Cc, Zl, and Zp categories"
+      ],
+      "reviewers": [
+        "correctness"
+      ]
+    },
+    {
+      "#": 11,
+      "title": "Closing the internal stream permanently disables steering",
+      "severity": "P2",
+      "file": "portal/gallery/server.py",
+      "line": 2086,
+      "confidence": 100,
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "pre_existing": false,
+      "suggested_fix": "Reserve agent-conversations from closure and recover any legacy closed instance before accepting new Agent messages.",
+      "first_evidence": "portal/gallery/server.py:2086 -- if stream is not None:",
+      "why_it_matters": "The supported close API can archive the one internal Agent stream, after which every future Agent message is rejected and no recovery path exists.",
+      "evidence": [
+        "portal/gallery/db.py requires an open stream for targeted message creation"
+      ],
+      "reviewers": [
+        "correctness"
+      ]
+    },
+    {
+      "#": 12,
+      "title": "Archived messages expose impossible retry actions",
+      "severity": "P2",
+      "file": "portal/gallery/server.py",
+      "line": 2287,
+      "confidence": 100,
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "pre_existing": false,
+      "suggested_fix": "Carry the owning stream closed state into history and suppress failed and unknown retry controls for archived streams.",
+      "first_evidence": "portal/gallery/server.py:2287 -- message[\"retryable\"] = message[\"delivery_state\"] == \"failed\"",
+      "why_it_matters": "Archived history renders retry buttons that always return 409 because delivery claims require an open stream.",
+      "evidence": [
+        "portal/gallery/templates/stream.html renders retry forms without checking stream.closed_at"
+      ],
+      "reviewers": [
+        "correctness"
+      ]
+    },
+    {
+      "#": 13,
+      "title": "Add moved-pane tmux integration coverage",
+      "severity": "P2",
+      "file": "agency/tests/test_fleet_tmux.py",
+      "line": 233,
+      "confidence": 75,
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "pre_existing": false,
+      "suggested_fix": "Add a disposable two-pane tmux integration that changes pane position, invokes exact provider-plus-SID delivery, and proves only the target receives the marker.",
+      "first_evidence": "agency/tests/test_fleet_tmux.py:233 -- with mock.patch.object(fmod, \"_live_pane_id\", return_value=\"%42\") as live:",
+      "why_it_matters": "Mocked pane discovery and transport cannot prove the core safety property that a moved target does not redirect a comment to its neighbor.",
+      "evidence": [
+        "No staged test starts disposable tmux panes or captures their real output"
+      ],
+      "reviewers": [
+        "testing"
+      ]
+    },
+    {
+      "#": 14,
+      "title": "Exercise bridge-exception delivery state",
+      "severity": "P2",
+      "file": "portal/gallery/server.py",
+      "line": 2110,
+      "confidence": 75,
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "pre_existing": false,
+      "suggested_fix": "Make submit_to_agent raise in a route test and assert a durable unknown attempt plus confirmation-gated retry.",
+      "first_evidence": "portal/gallery/server.py:2110 -- except Exception:  # noqa: BLE001 - an invoked bridge may already have submitted input",
+      "why_it_matters": "Without exercising the ambiguous exception path, a regression could produce a 500 or unsafe automatic retry after terminal input may already have been submitted.",
+      "evidence": [
+        "staged tests cover a returned unknown outcome but never a raised bridge exception"
+      ],
+      "reviewers": [
+        "testing"
+      ]
+    }
+  ],
+  "actionable_findings": [
+    {
+      "#": 1,
+      "title": "Producer HTML inherits terminal-steering authority",
+      "severity": "P0",
+      "file": "portal/gallery/server.py",
+      "line": 2331,
+      "confidence": 75,
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "pre_existing": false,
+      "suggested_fix": "Serve kind=view content without ambient Portal authority, stop forwarding the global token, and give verdict submission only a request-scoped capability that cannot access Agents routes.",
+      "first_evidence": "portal/gallery/server.py:2331 -- if not web_token_ok(request):",
+      "why_it_matters": "Scripted kind=view artifacts share the Portal origin and ambient cookie, so the new cookie-authenticated directory and message routes turn uploaded HTML into a principal that can steer live terminals.",
+      "evidence": [
+        "portal/gallery/server.py:40 -- VIEW_HTML_CSP includes allow-scripts and allow-same-origin",
+        "portal/gallery/server.py:2331 -- Agents send accepts ambient web authentication",
+        "portal/gallery/server.py:2654 -- the global query token is forwarded into the media URL"
+      ],
+      "reviewers": [
+        "security"
+      ]
+    },
+    {
+      "#": 2,
+      "title": "Replies can execute in a foreground shell",
+      "severity": "P0",
+      "file": "agency/src/agency/fleet/tmux.py",
+      "line": 510,
+      "confidence": 100,
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "pre_existing": false,
+      "suggested_fix": "Immediately before input, verify the same provider PID/process group still owns the pane foreground TTY; fail before writing if identity changed, and report unknown if it changes between literal write and Enter.",
+      "first_evidence": "agency/src/agency/fleet/tmux.py:510 -- [\"tmux\", \"send-keys\", \"-t\", pane, \"-l\", \"--\", text],",
+      "why_it_matters": "An exited or suspended agent can leave a shell in the same pane, causing an authenticated Portal comment to execute as an operating-system command instead of reaching the agent approval boundary.",
+      "evidence": [
+        "agency/src/agency/fleet/tmux.py:349 -- fresh target resolution verifies only the TTY-to-pane mapping",
+        "agency/src/agency/fleet/tmux.py:510 -- literal text is sent to the pane",
+        "agency/src/agency/fleet/tmux.py:521 -- Enter is sent separately"
+      ],
+      "reviewers": [
+        "security",
+        "adversarial"
+      ]
+    },
+    {
+      "#": 3,
+      "title": "Harness capture can falsely certify the production candidate",
+      "severity": "P1",
+      "file": "agency/src/agency/catalog/skills/game/portal-game-release/SKILL.md",
+      "line": 42,
+      "confidence": 100,
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "pre_existing": false,
+      "suggested_fix": "Label harness captures diagnostic-only and require a second install and capture from the exact harness-free production artifact, blocking publication when that lane is unavailable.",
+      "first_evidence": "agency/src/agency/catalog/skills/game/portal-game-release/SKILL.md:42 -- 4. **Gameplay evidence:** Load `game-device-verification` and use the canonical",
+      "why_it_matters": "The release skill requires evidence from the harness-free production candidate while the mandatory device skill builds a separate harness-enabled artifact, making the written contract contradictory or encouraging mismatched evidence.",
+      "evidence": [
+        "agency/src/agency/catalog/skills/game/portal-game-release/SKILL.md:43 -- capture from the same candidate",
+        "game-device-verification/SKILL.md:38 -- build the harness-enabled native artifact"
+      ],
+      "reviewers": [
+        "adversarial"
+      ]
+    },
+    {
+      "#": 4,
+      "title": "Recover interrupted delivery claims",
+      "severity": "P1",
+      "file": "portal/gallery/db.py",
+      "line": 1129,
+      "confidence": 100,
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "pre_existing": false,
+      "suggested_fix": "Reconcile persisted submitting records to unknown on startup with an append-only interrupted attempt so retry remains gated by explicit confirm_unknown.",
+      "first_evidence": "portal/gallery/db.py:1129 -- SET delivery_state = 'submitting', delivery_updated_at = ?",
+      "why_it_matters": "A crash after the claim commit but before terminal completion leaves a message permanently submitting, with no retry path and no truthful recorded outcome.",
+      "evidence": [
+        "portal/gallery/db.py:1136 -- the submitting claim commits before bridge invocation",
+        "portal/gallery/db.py:1120 -- retry allows pending and failed, plus explicitly confirmed unknown"
+      ],
+      "reviewers": [
+        "data-migration",
+        "reliability",
+        "adversarial",
+        "julik-frontend-races"
+      ]
+    },
+    {
+      "#": 5,
+      "title": "Lost HTTP response duplicates exact-session comments",
+      "severity": "P1",
+      "file": "portal/gallery/static/app.js",
+      "line": 34,
+      "confidence": 75,
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "pre_existing": false,
+      "suggested_fix": "Send a persistent client idempotency key, enforce uniqueness in Portal, return the existing delivery on repeats, and render transport failures as status unknown until history is reconciled.",
+      "first_evidence": "portal/gallery/static/app.js:34 -- if (button) button.disabled = false;",
+      "why_it_matters": "If terminal submission succeeds but the response is lost, the form is re-enabled and a repeat creates a fresh message ID, bypassing unknown-state confirmation and duplicating agent input.",
+      "evidence": [
+        "portal/gallery/server.py:2123 -- every initial request creates a new targeted message",
+        "portal/gallery/static/app.js:34 -- the unchanged form is enabled after transport failure"
+      ],
+      "reviewers": [
+        "adversarial"
+      ]
+    },
+    {
+      "#": 6,
+      "title": "Fallback SIDs leak local targets and vanish",
+      "severity": "P2",
+      "file": "agency/src/agency/fleet/hud.py",
+      "line": 1231,
+      "confidence": 100,
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "pre_existing": false,
+      "suggested_fix": "Exclude path- or TTY-derived fallback SIDs until a genuine stable URL-safe provider SID exists, and enforce the same SID contract in directory and submit paths.",
+      "first_evidence": "agency/src/agency/fleet/hud.py:1231 -- \"sid\": row.sid,",
+      "why_it_matters": "Fresh fallback IDs expose a local TTY or path and are then rejected by Portal, so the directory both leaks implementation detail and silently omits a live session.",
+      "evidence": [
+        "agency/src/agency/fleet/state.py constructs codex and Claude fallback SIDs from local targets"
+      ],
+      "reviewers": [
+        "correctness"
+      ]
+    },
+    {
+      "#": 7,
+      "title": "Duplicate SIDs are advertised but never submit",
+      "severity": "P2",
+      "file": "agency/src/agency/fleet/hud.py",
+      "line": 1237,
+      "confidence": 100,
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "pre_existing": false,
+      "suggested_fix": "Build the reply directory in two passes and expose only provider-plus-SID pairs with exactly one eligible live row.",
+      "first_evidence": "agency/src/agency/fleet/hud.py:1237 -- \"replyable\": True,",
+      "why_it_matters": "The UI offers controls for duplicate targets that submit_fleet_reply deterministically rejects as session_not_unique.",
+      "evidence": [
+        "agency/src/agency/fleet/hud.py:103 -- submission requires exactly one provider-plus-SID match"
+      ],
+      "reviewers": [
+        "correctness"
+      ]
+    },
+    {
+      "#": 8,
+      "title": "Bundle rewrite certifies missing and stale assets",
+      "severity": "P2",
+      "file": "fabrikav2/games/find_the_bird/build/nativePublicBundle.ts",
+      "line": 69,
+      "confidence": 100,
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "pre_existing": false,
+      "suggested_fix": "Validate every required package asset against output existence, size, and SHA-256 before setting bundledInApp; resolve obsolete bw.png references and add missing/stale fixture tests.",
+      "first_evidence": "fabrikav2/games/find_the_bird/build/nativePublicBundle.ts:69 -- bundledInApp: bundledLevelIds.has(level.id as string),",
+      "why_it_matters": "The current candidate claims two levels are bundled while their package metadata references absent bw.png files and four copied assets disagree with recorded size/hash metadata.",
+      "evidence": [
+        "generated dist and iOS bundles omit both referenced bw.png files",
+        "four of 36 manifested assets have stale sizes and hashes"
+      ],
+      "reviewers": [
+        "adversarial"
+      ]
+    },
+    {
+      "#": 9,
+      "title": "Validate Portal providers against Agency's enum",
+      "severity": "P2",
+      "file": "portal/gallery/agents.py",
+      "line": 19,
+      "confidence": 100,
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "pre_existing": false,
+      "suggested_fix": "Restrict Portal to the explicit claude, codex, and pi capability set before persisting a targeted message.",
+      "first_evidence": "portal/gallery/agents.py:19 -- _PROVIDER_RE = re.compile(r\"^[a-z][a-z0-9_-]{0,31}$\")",
+      "why_it_matters": "Portal accepts targets Agency cannot parse, converting a certain preflight failure into a persisted ambiguous delivery.",
+      "evidence": [
+        "agency/src/agency/cli.py uses FLEET_REPLY_PROVIDERS as argparse choices"
+      ],
+      "reviewers": [
+        "api-contract",
+        "adversarial"
+      ]
+    },
+    {
+      "#": 10,
+      "title": "Unicode separators create permanently failed messages",
+      "severity": "P2",
+      "file": "portal/gallery/agents.py",
+      "line": 40,
+      "confidence": 100,
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "pre_existing": false,
+      "suggested_fix": "Reject Unicode categories Cc, Zl, and Zp in Portal exactly as Agency does, with cross-contract boundary tests.",
+      "first_evidence": "portal/gallery/agents.py:40 -- return not any(ord(char) < 32 or ord(char) == 127 for char in value)",
+      "why_it_matters": "Portal persists characters Agency rejects, and retry resubmits the same invalid immutable text forever.",
+      "evidence": [
+        "agency/src/agency/fleet/hud.py rejects Unicode Cc, Zl, and Zp categories"
+      ],
+      "reviewers": [
+        "correctness"
+      ]
+    },
+    {
+      "#": 11,
+      "title": "Closing the internal stream permanently disables steering",
+      "severity": "P2",
+      "file": "portal/gallery/server.py",
+      "line": 2086,
+      "confidence": 100,
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "pre_existing": false,
+      "suggested_fix": "Reserve agent-conversations from closure and recover any legacy closed instance before accepting new Agent messages.",
+      "first_evidence": "portal/gallery/server.py:2086 -- if stream is not None:",
+      "why_it_matters": "The supported close API can archive the one internal Agent stream, after which every future Agent message is rejected and no recovery path exists.",
+      "evidence": [
+        "portal/gallery/db.py requires an open stream for targeted message creation"
+      ],
+      "reviewers": [
+        "correctness"
+      ]
+    },
+    {
+      "#": 12,
+      "title": "Archived messages expose impossible retry actions",
+      "severity": "P2",
+      "file": "portal/gallery/server.py",
+      "line": 2287,
+      "confidence": 100,
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "pre_existing": false,
+      "suggested_fix": "Carry the owning stream closed state into history and suppress failed and unknown retry controls for archived streams.",
+      "first_evidence": "portal/gallery/server.py:2287 -- message[\"retryable\"] = message[\"delivery_state\"] == \"failed\"",
+      "why_it_matters": "Archived history renders retry buttons that always return 409 because delivery claims require an open stream.",
+      "evidence": [
+        "portal/gallery/templates/stream.html renders retry forms without checking stream.closed_at"
+      ],
+      "reviewers": [
+        "correctness"
+      ]
+    },
+    {
+      "#": 13,
+      "title": "Add moved-pane tmux integration coverage",
+      "severity": "P2",
+      "file": "agency/tests/test_fleet_tmux.py",
+      "line": 233,
+      "confidence": 75,
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "pre_existing": false,
+      "suggested_fix": "Add a disposable two-pane tmux integration that changes pane position, invokes exact provider-plus-SID delivery, and proves only the target receives the marker.",
+      "first_evidence": "agency/tests/test_fleet_tmux.py:233 -- with mock.patch.object(fmod, \"_live_pane_id\", return_value=\"%42\") as live:",
+      "why_it_matters": "Mocked pane discovery and transport cannot prove the core safety property that a moved target does not redirect a comment to its neighbor.",
+      "evidence": [
+        "No staged test starts disposable tmux panes or captures their real output"
+      ],
+      "reviewers": [
+        "testing"
+      ]
+    },
+    {
+      "#": 14,
+      "title": "Exercise bridge-exception delivery state",
+      "severity": "P2",
+      "file": "portal/gallery/server.py",
+      "line": 2110,
+      "confidence": 75,
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "pre_existing": false,
+      "suggested_fix": "Make submit_to_agent raise in a route test and assert a durable unknown attempt plus confirmation-gated retry.",
+      "first_evidence": "portal/gallery/server.py:2110 -- except Exception:  # noqa: BLE001 - an invoked bridge may already have submitted input",
+      "why_it_matters": "Without exercising the ambiguous exception path, a regression could produce a 500 or unsafe automatic retry after terminal input may already have been submitted.",
+      "evidence": [
+        "staged tests cover a returned unknown outcome but never a raised bridge exception"
+      ],
+      "reviewers": [
+        "testing"
+      ]
+    }
+  ],
+  "triage_groups": [
+    {
+      "title": "Terminal authority and exactly-once steering",
+      "findings": [
+        1,
+        2,
+        5
+      ],
+      "context": "Untrusted content, pane identity, and transport ambiguity all sit on the operator-to-terminal authority boundary.",
+      "preferred_resolution": "Isolate view authority first, bind delivery to the live foreground agent second, then add idempotent initial submission.",
+      "why": "These fixes prevent comments from becoming shell commands or duplicate side effects."
+    },
+    {
+      "title": "Honest delivery recovery",
+      "findings": [
+        4,
+        11,
+        12,
+        14
+      ],
+      "context": "Crash recovery and archived system-stream behavior must agree with the visible state machine.",
+      "preferred_resolution": "Recover interrupted claims, reserve the system stream, suppress impossible controls, and pin the exception branch with a test.",
+      "why": "Every badge and retry control must correspond to a legal durable transition."
+    },
+    {
+      "title": "Portal-Agency target contract",
+      "findings": [
+        6,
+        7,
+        9,
+        10
+      ],
+      "context": "The directory, Portal preflight, and Agency mutation path currently accept different target and text domains.",
+      "preferred_resolution": "Define one safe provider/SID/text contract and apply it at both serialization and submission boundaries.",
+      "why": "A target advertised as replyable must be submit-able without leaking local machine identifiers."
+    },
+    {
+      "title": "Release candidate provenance",
+      "findings": [
+        3,
+        8
+      ],
+      "context": "The workflow and bundle metadata can currently certify evidence or assets that do not belong to the claimed production candidate.",
+      "preferred_resolution": "Separate diagnostic harness evidence from release evidence, then validate packaged asset bytes before setting bundle authority.",
+      "why": "Portal should publish one coherent candidate, not an attractive collage of adjacent builds."
+    }
+  ],
+  "pre_existing_findings": [],
+  "requirements_completeness": null,
+  "learnings": [
+    "Portal browser tests are proxies; authenticated Agents flows still require inspected desktop and phone evidence.",
+    "Release checklists preserve evidence gates but do not themselves prove candidate coherence.",
+    "Packaged manifest authority must be checked against the actual native output, not only source fixtures."
+  ],
+  "agent_native_gaps": [],
+  "deployment_notes": [
+    "Find the Bird has a local signed candidate and browser proof, but matching physical-device gameplay is blocked by the offline iPhone and no Portal record was created.",
+    "Portal and Agency changes are isolated local worktree changes; no production deployment, Agency global sync, merge, or push occurred."
+  ],
+  "residual_risks": [
+    "Terminal submission is not agent acknowledgement; the state model must continue to name that boundary honestly.",
+    "A provider-owned IPC transport would remove the remaining pane/process race more completely than tmux foreground checks.",
+    "Public game bundles still rely on a human secret/content inspection gate.",
+    "Manifest initialization has no concurrent-startup coverage.",
+    "Large targeted-message histories have no query-plan or latency measurement."
+  ],
+  "testing_gaps": [
+    "Run inspected authenticated Agents flows at desktop and phone widths, including failed and confirmed-unknown states.",
+    "Run the exact physical production candidate on a named device before Find the Bird publication.",
+    "Measure unusually large targeted-message history only if Portal usage grows beyond its current single-user scale."
+  ],
+  "coverage": {
+    "mode": "agent",
+    "scope": "owned staged changes across three isolated worktrees; untracked UX report and generated release files excluded",
+    "validators_dispatched": 15,
+    "validators_true": 14,
+    "validators_false": 1,
+    "validator_false_reasons": [
+      "Whitespace-only input was already rejected by the shared bounded-text helper before persistence."
+    ],
+    "validator_infrastructure_failures": 0,
+    "over_budget_drops": 0,
+    "suppressed_by_confidence": {},
+    "mode_aware_demotions": 0,
+    "failed_reviewers": [
+      "adversarial peer-model pass returned non-parseable output and was non-blocking"
+    ]
+  },
+  "artifact_path": "/tmp/compound-engineering/ce-code-review/portal-cross-repo-20260805-2340/",
+  "run_id": "portal-cross-repo-20260805-2340"
+}
