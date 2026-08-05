@@ -737,7 +737,7 @@ def _rewrite_web_bundle_absolute_paths(web_root: Path, url_prefix: str) -> int:
     if not directories:
         return 0
     pattern = re.compile(
-        r"""(?P<lead>["'(=])/(?P<dir>""" + "|".join(re.escape(name) for name in directories) + r""")/"""
+        r"""(?P<lead>["'(`=])/(?P<dir>""" + "|".join(re.escape(name) for name in directories) + r""")/"""
     )
     rewritten = 0
     for path in web_root.rglob("*"):

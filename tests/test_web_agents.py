@@ -342,6 +342,8 @@ def test_agent_submission_browser_contract_persists_key_and_marks_transport_unkn
     assert "Submission status unknown. Submit again to reconcile" in script.text
     assert "setIdempotentFormLocked(form, true)" in script.text
     assert 'form.hasAttribute("data-agent-message-form")' in script.text
+    assert "rememberAgentComposerFocus(form, url)" in script.text
+    assert "restoreAgentComposerFocus(forms)" in script.text
 
 
 def test_internal_agent_stream_cannot_be_archived_and_legacy_closure_recovers_on_send(

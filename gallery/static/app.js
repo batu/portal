@@ -89,6 +89,42 @@ function clearClientSubmission(form, storageKey) {
   }
 }
 
+var AGENT_COMPOSER_FOCUS_STORAGE_KEY = "portal.agentComposerFocus.v1";
+
+function agentComposerFocusFingerprint(form, url) {
+  return window.location.pathname + ":" + new URL(url, window.location.origin).pathname;
+}
+
+function rememberAgentComposerFocus(form, url) {
+  try {
+    window.sessionStorage.setItem(
+      AGENT_COMPOSER_FOCUS_STORAGE_KEY,
+      agentComposerFocusFingerprint(form, url)
+    );
+  } catch (_err) {
+    // Focus restoration is a convenience; delivery never depends on it.
+  }
+}
+
+function restoreAgentComposerFocus(forms) {
+  var fingerprint = null;
+  try {
+    fingerprint = window.sessionStorage.getItem(AGENT_COMPOSER_FOCUS_STORAGE_KEY);
+    window.sessionStorage.removeItem(AGENT_COMPOSER_FOCUS_STORAGE_KEY);
+  } catch (_err) {
+    return;
+  }
+  if (!fingerprint) return;
+  forms.some(function (form) {
+    if (!form.hasAttribute("data-agent-message-form")) return false;
+    var action = new URL(form.action, window.location.origin).pathname;
+    if (fingerprint !== window.location.pathname + ":" + action) return false;
+    var textarea = form.querySelector("[data-single-paragraph]");
+    if (textarea) window.setTimeout(function () { textarea.focus(); }, 0);
+    return true;
+  });
+}
+
 function setIdempotentFormLocked(form, locked) {
   Array.prototype.slice.call(form.querySelectorAll("textarea, select, input")).forEach(function (control) {
     if (control.tagName === "TEXTAREA") control.readOnly = locked;
@@ -140,6 +176,7 @@ function submitJsonForm(form, url, payload, pendingMessage, defaultErrorMessage,
         return;
       }
       if (clientSubmission) clearClientSubmission(form, clientSubmission.storageKey);
+      if (options.restoreComposerFocus) rememberAgentComposerFocus(form, url);
       window.location.reload();
     })
     .catch(function (err) {
@@ -577,10 +614,14 @@ function submitJsonForm(form, url, payload, pendingMessage, defaultErrorMessage,
         payload,
         textarea ? "Submitting to terminal…" : "Retrying…",
         "Terminal submission failed.",
-        { idempotent: form.hasAttribute("data-agent-message-form") }
+        {
+          idempotent: form.hasAttribute("data-agent-message-form"),
+          restoreComposerFocus: form.hasAttribute("data-agent-message-form"),
+        }
       );
     });
   });
+  restoreAgentComposerFocus(forms);
 })();
 
 // ── Variant grid extras: per-row control + lightbox viewer ──────────────

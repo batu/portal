@@ -161,10 +161,13 @@ Pass `--web dist.zip` to attach a browser-playable preview to the release:
 portal game publish ... --web dist.zip
 ```
 
-`dist.zip` is a zip of the game's built Vite `dist/` directory. Build it with
-`base: './'` so the bundle's asset URLs stay relative — absolute `/assets/...`
-paths will 404 inside the preview. The bundle is extracted into the release
-directory and served publicly at `/games/<slug>/builds/<version>/play/`.
+`dist.zip` is a zip of the game's built Vite `dist/` directory. Prefer
+`base: './'` so Vite-owned asset URLs stay relative. As a compatibility layer,
+Portal also rewrites game-owned root-absolute references such as `/assets/...`
+and `/ui/...` when their top-level directory exists in the uploaded bundle.
+The bundle is extracted into the release directory and served publicly at
+`/games/<slug>/builds/<version>/play/`; live readback still has to exercise the
+entry point and a nested asset after publication.
 
 The game page then frames that preview on the release's version tab with device
 presets (iPhone SE, iPhone 15 Pro, iPhone 15 Pro Max, Pixel 8, iPad) and a

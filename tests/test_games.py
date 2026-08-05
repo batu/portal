@@ -407,10 +407,14 @@ def test_web_bundle_absolute_asset_paths_are_repointed_at_the_build(client, toke
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as z:
         z.writestr("index.html", '<script src="/assets/app.js"></script><link href="/fonts/x.css">')
-        z.writestr("assets/app.js", 'fetch("/levels/index.json");const a="/ui/logo.png";')
+        z.writestr(
+            "assets/app.js",
+            'fetch("/levels/index.json");const a="/ui/logo.png";const sound=`/audio/dog.wav`;',
+        )
         z.writestr("assets/app.css", 'a{background:url("/ui/bg.png")}')
         z.writestr("levels/index.json", '{"art":"/ui/tile.png"}')
         z.writestr("ui/logo.png", "x")
+        z.writestr("audio/dog.wav", "x")
         z.writestr("fonts/x.css", "@font-face{src:url('/fonts/f.woff2')}")
     buf.seek(0)
 
@@ -435,6 +439,7 @@ def test_web_bundle_absolute_asset_paths_are_repointed_at_the_build(client, toke
     js = (web / "assets" / "app.js").read_text()
     assert f'fetch("{prefix}/levels/index.json")' in js
     assert f'"{prefix}/ui/logo.png"' in js
+    assert f'`{prefix}/audio/dog.wav`' in js
     assert f'url("{prefix}/ui/bg.png")' in (web / "assets" / "app.css").read_text()
     assert f'"{prefix}/ui/tile.png"' in (web / "levels" / "index.json").read_text()
 
