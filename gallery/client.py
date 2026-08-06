@@ -2,12 +2,15 @@
 
 import json
 import mimetypes
-import uuid
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from pathlib import Path
 from typing import cast
+
+DEFAULT_REQUEST_TIMEOUT_SECONDS = 30
+GAME_PUBLISH_TIMEOUT_SECONDS = 600
 
 
 class GalleryClientError(Exception):
@@ -21,13 +24,20 @@ def _auth_headers(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
 
 
-def _request(method: str, url: str, headers: dict, data: bytes | None = None) -> dict | list:
+def _request(
+    method: str,
+    url: str,
+    headers: dict,
+    data: bytes | None = None,
+    *,
+    timeout: float = DEFAULT_REQUEST_TIMEOUT_SECONDS,
+) -> dict | list:
     try:
         req = urllib.request.Request(url, data=data, headers=headers, method=method)
     except ValueError as exc:
         raise GalleryClientError(0, f"invalid URL {url!r}: {exc}") from exc
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             body = resp.read()
             return json.loads(body) if body else {}
     except urllib.error.HTTPError as exc:
@@ -61,7 +71,15 @@ def delete_json(base_url: str, token: str, path: str) -> dict:
     return cast(dict, _request("DELETE", base_url + path, _auth_headers(token)))
 
 
-def post_multipart(base_url: str, token: str, path: str, fields: dict, files: list) -> dict:
+def post_multipart(
+    base_url: str,
+    token: str,
+    path: str,
+    fields: dict,
+    files: list,
+    *,
+    timeout: float = DEFAULT_REQUEST_TIMEOUT_SECONDS,
+) -> dict:
     """fields: simple string form fields. files: Path entries, or (field_name, Path) entries."""
     boundary = uuid.uuid4().hex
     parts = []
@@ -95,7 +113,9 @@ def post_multipart(base_url: str, token: str, path: str, fields: dict, files: li
 
     headers = _auth_headers(token)
     headers["Content-Type"] = f"multipart/form-data; boundary={boundary}"
-    return _request("POST", base_url + path, headers, body)
+    if timeout == DEFAULT_REQUEST_TIMEOUT_SECONDS:
+        return _request("POST", base_url + path, headers, body)
+    return _request("POST", base_url + path, headers, body, timeout=timeout)
 
 
 def close_request(base_url: str, token: str, req_id: str, reason: str) -> dict:
@@ -233,7 +253,14 @@ def publish_game_build(
     files = [("artifact", artifact), ("video", video), ("poster", poster)]
     if web is not None:
         files.append(("web", web))
-    return post_multipart(base_url, token, f"/api/games/{slug}/builds", fields, files)
+    return post_multipart(
+        base_url,
+        token,
+        f"/api/games/{slug}/builds",
+        fields,
+        files,
+        timeout=GAME_PUBLISH_TIMEOUT_SECONDS,
+    )
 
 
 def update_game_changelog(base_url: str, token: str, slug: str, version: str, changelog: str) -> dict:
