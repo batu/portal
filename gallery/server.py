@@ -1707,7 +1707,7 @@ def consume_message(request: Request, message_id: str):
         raise HTTPException(status_code=_message_mutation_status(exc), detail=str(exc)) from exc
 
 
-def _apply_verdict(req_id: str, body: dict) -> dict:
+def _apply_verdict(req_id: str, body: dict, *, allow_revision: bool = True) -> dict:
     r = db.get_request(req_id)
     if r is None:
         raise HTTPException(status_code=404, detail="request not found")
@@ -1723,8 +1723,15 @@ def _apply_verdict(req_id: str, body: dict) -> dict:
             detail={"error": "closed", "reason": r.get("close_reason")},
         )
 
+    requested_revision = body.get("redecide") is True
+    if requested_revision and not allow_revision:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "revision_forbidden"},
+        )
+
     verdict_count = db.count_verdicts(req_id)
-    if verdict_count > 0 and body.get("redecide") is not True:
+    if verdict_count > 0 and not requested_revision:
         raise HTTPException(
             status_code=409,
             detail={"error": "verdict_exists", "verdict_count": verdict_count},
@@ -1753,7 +1760,19 @@ def _apply_verdict(req_id: str, body: dict) -> dict:
             raise HTTPException(status_code=400, detail=f"selected indices not found on this request: {bad}")
 
     try:
-        result = db.record_verdict(req_id, selected, ratings, comment, payload=payload)
+        result = db.record_verdict(
+            req_id,
+            selected,
+            ratings,
+            comment,
+            payload=payload,
+            allow_revision=requested_revision,
+        )
+    except db.VerdictExistsError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "verdict_exists", "verdict_count": exc.verdict_count},
+        ) from exc
     except ValueError as exc:
         detail = str(exc)
         status = 409 if isinstance(exc, db.RequestTerminalError) or "closed" in detail else 400
@@ -2261,8 +2280,18 @@ def _submit_targeted_message(message_id: str, *, allow_unknown: bool = False) ->
         detail = "portal_bridge_exception"
     try:
         return db.complete_message_delivery(message_id, outcome, detail)
-    except ValueError as exc:
-        raise HTTPException(status_code=_message_mutation_status(exc), detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 - terminal input may already have been submitted
+        log.exception("message delivery completion failed for %s", message_id)
+        try:
+            return db.reconcile_message_delivery_unknown(message_id, "portal_completion_failed")
+        except Exception:  # noqa: BLE001 - startup recovery remains the final fallback
+            log.exception("message delivery reconciliation failed for %s", message_id)
+        if isinstance(exc, ValueError):
+            raise HTTPException(status_code=_message_mutation_status(exc), detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=500,
+            detail="message delivery completion failed; outcome is unknown",
+        ) from exc
 
 
 def _create_targeted_to_agent_message(
@@ -3148,10 +3177,11 @@ async def web_decide(request: Request, req_id: str):
         req_id,
         request.query_params.get(VIEW_CAPABILITY_PARAM),
     )
-    if not web_token_ok(request) and not view_capability_ok:
+    operator_ok = web_token_ok(request)
+    if not operator_ok and not view_capability_ok:
         raise HTTPException(status_code=401, detail="missing or invalid token")
     body = await request.json()
-    result = _apply_verdict(req_id, body)
+    result = _apply_verdict(req_id, body, allow_revision=operator_ok)
     if view_capability_ok:
         return JSONResponse(result, headers=_view_cors_headers())
     return result

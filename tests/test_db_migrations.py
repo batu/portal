@@ -410,6 +410,34 @@ def test_reconnecting_migrated_db_is_noop(data_dir):
     assert after == before
 
 
+def test_v14_hides_existing_targeted_rows_from_legacy_pull(data_dir):
+    stream = db.create_stream("legacy-pull", "session", "Legacy pull")
+    generic = db.create_message(stream["id"], "to_agent", "Generic")
+    targeted = db.create_targeted_message(stream["id"], "Targeted", "codex", "sid-live")
+    conn = db.connect()
+    conn.execute("UPDATE messages SET consumed_at = NULL WHERE id = ?", (targeted["id"],))
+    conn.execute("PRAGMA user_version = 13")
+    conn.commit()
+
+    db.reset_connection()
+    upgraded = db.connect()
+    legacy_visible = upgraded.execute(
+        "SELECT id FROM messages WHERE stream_id = ? AND direction = 'to_agent' AND consumed_at IS NULL",
+        (stream["id"],),
+    ).fetchall()
+
+    assert _user_version(upgraded) == 14
+    assert [row["id"] for row in legacy_visible] == [generic["id"]]
+    assert db.get_message(targeted["id"])["consumed_at"] is not None
+
+    # A v13 binary can write another NULL marker without lowering user_version.
+    upgraded.execute("UPDATE messages SET consumed_at = NULL WHERE id = ?", (targeted["id"],))
+    upgraded.commit()
+    db.reset_connection()
+    db.connect()
+    assert db.get_message(targeted["id"])["consumed_at"] is not None
+
+
 def test_interrupted_delivery_recovery_rolls_back_attempt_when_state_update_fails(data_dir):
     stream = db.create_stream("restart-rollback", "session", "Restart rollback")
     message = db.create_targeted_message(stream["id"], "First", "codex", "sid-live")
@@ -948,6 +976,25 @@ def test_count_verdicts_tracks_revisions(data_dir):
     assert db.count_verdicts("req_cv") == 1
     db.record_verdict("req_cv", [1], None, "second")
     assert db.count_verdicts("req_cv") == 2
+
+
+def test_first_verdict_insert_is_atomic(data_dir):
+    db.create_request("req_first", "First only", None, "pick-one", None, [_variant()])
+
+    def record(comment):
+        try:
+            db.record_verdict(
+                "req_first", [1], None, comment, allow_revision=False
+            )
+            return "recorded"
+        except db.VerdictExistsError:
+            return "rejected"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(record, ("one", "two")))
+
+    assert sorted(outcomes) == ["recorded", "rejected"]
+    assert db.count_verdicts("req_first") == 1
 
 
 def test_public_reads_do_not_observe_uncommitted_rows_before_rollback(data_dir, monkeypatch):

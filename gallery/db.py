@@ -88,6 +88,12 @@ class RequestTerminalError(ValueError):
     pass
 
 
+class VerdictExistsError(ValueError):
+    def __init__(self, verdict_count: int):
+        self.verdict_count = verdict_count
+        super().__init__(f"request already has {verdict_count} verdict(s)")
+
+
 class SuccessorNotFoundError(ValueError):
     pass
 
@@ -208,6 +214,8 @@ def _validate_schema_version(conn: sqlite3.Connection, version: int) -> None:
         _validate_v12_schema(conn)
     if version >= 13:
         _validate_v13_schema(conn)
+    if version >= 14:
+        _validate_v14_schema(conn)
 
 
 def _migrate_v1(conn: sqlite3.Connection) -> None:
@@ -481,6 +489,35 @@ def _validate_v13_schema(conn: sqlite3.Connection) -> None:
         raise RuntimeError("schema v13 missing unique targeted-message submission-key index")
 
 
+def _migrate_v14(conn: sqlite3.Connection) -> None:
+    # Older Portal binaries know nothing about exact-session delivery. Their
+    # generic pull predicate is only `consumed_at IS NULL`, so every targeted
+    # row must remain hidden from that predicate across a binary rollback.
+    conn.execute(
+        """
+        UPDATE messages
+        SET consumed_at = COALESCE(delivery_updated_at, created_at)
+        WHERE target_provider IS NOT NULL
+          AND target_session_id IS NOT NULL
+          AND consumed_at IS NULL
+        """
+    )
+
+
+def _validate_v14_schema(conn: sqlite3.Connection) -> None:
+    visible_targeted = conn.execute(
+        """
+        SELECT COUNT(*)
+        FROM messages
+        WHERE target_provider IS NOT NULL
+          AND target_session_id IS NOT NULL
+          AND consumed_at IS NULL
+        """
+    ).fetchone()[0]
+    if visible_targeted:
+        raise RuntimeError("schema v14 targeted messages remain visible to legacy pull")
+
+
 MIGRATIONS = [
     (1, _migrate_v1),
     (2, _migrate_v2),
@@ -495,6 +532,7 @@ MIGRATIONS = [
     (11, _migrate_v11),
     (12, _migrate_v12),
     (13, _migrate_v13),
+    (14, _migrate_v14),
 ]
 
 
@@ -517,6 +555,19 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
             conn.rollback()
             raise
         current = version
+    # A rollback to the v13 exact-session binary can create new targeted rows
+    # with a NULL legacy-consumption marker even though user_version remains
+    # 14. Reapply the idempotent data invariant whenever the forward binary
+    # opens the database.
+    if current >= 14:
+        try:
+            conn.execute("BEGIN")
+            _migrate_v14(conn)
+            _validate_v14_schema(conn)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
     if MIGRATIONS:
         _validate_schema_version(conn, MIGRATIONS[-1][0])
 
@@ -538,7 +589,6 @@ def _recover_interrupted_message_deliveries(conn: sqlite3.Connection) -> int:
               AND target_provider IS NOT NULL
               AND target_session_id IS NOT NULL
               AND delivery_state = 'submitting'
-              AND consumed_at IS NULL
             """
         ).fetchall()
         if rows:
@@ -553,7 +603,7 @@ def _recover_interrupted_message_deliveries(conn: sqlite3.Connection) -> int:
                 """
                 UPDATE messages
                 SET delivery_state = 'unknown', delivery_updated_at = ?
-                WHERE id = ? AND delivery_state = 'submitting' AND consumed_at IS NULL
+                WHERE id = ? AND delivery_state = 'submitting'
                 """,
                 ((timestamp, row["id"]) for row in rows),
             )
@@ -1044,13 +1094,17 @@ def _create_message(
     timestamp = created_at or now_iso()
     delivery_state = "pending" if target_provider is not None else None
     delivery_updated_at = timestamp if target_provider is not None else None
+    # A targeted row is delivered only by the exact-session bridge. Mark it
+    # consumed for backward compatibility so a rolled-back Portal binary,
+    # whose generic pull only checks this column, cannot claim it.
+    consumed_at = timestamp if target_provider is not None else None
     conn.execute(
         """
         INSERT INTO messages (
-            id, stream_id, direction, text, created_at,
+            id, stream_id, direction, text, created_at, consumed_at,
             target_provider, target_session_id, delivery_state, delivery_updated_at,
             client_submission_key
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             message_id,
@@ -1058,6 +1112,7 @@ def _create_message(
             direction,
             text,
             timestamp,
+            consumed_at,
             target_provider,
             target_session_id,
             delivery_state,
@@ -1292,7 +1347,7 @@ def claim_message_delivery(message_id: str, *, allow_unknown: bool = False) -> d
                 """
                 UPDATE messages
                 SET delivery_state = 'submitting', delivery_updated_at = ?
-                WHERE id = ? AND delivery_state = ? AND consumed_at IS NULL
+                WHERE id = ? AND delivery_state = ?
                 """,
                 (timestamp, message_id, state),
             )
@@ -1330,14 +1385,13 @@ def complete_message_delivery(message_id: str, outcome: str, detail: str) -> dic
                 """,
                 (message_id, timestamp, outcome, detail),
             )
-            consumed_at = timestamp if outcome == "submitted_to_terminal" else None
             cur = conn.execute(
                 """
                 UPDATE messages
                 SET delivery_state = ?, delivery_updated_at = ?, consumed_at = ?
                 WHERE id = ? AND delivery_state = 'submitting'
                 """,
-                (outcome, timestamp, consumed_at, message_id),
+                (outcome, timestamp, timestamp, message_id),
             )
             if cur.rowcount != 1:
                 raise MessageDeliveryStateError("message delivery state changed while completing")
@@ -1345,6 +1399,54 @@ def complete_message_delivery(message_id: str, outcome: str, detail: str) -> dic
             completed = _get_message_by_id(conn, message_id)
             assert completed is not None
             return completed
+        except Exception:
+            conn.rollback()
+            raise
+
+
+def reconcile_message_delivery_unknown(message_id: str, detail: str) -> dict:
+    """Resolve an in-process completion failure without waiting for restart.
+
+    The terminal bridge may already have submitted the input. Only a row still
+    owned by the `submitting` state is changed; a concurrently completed row is
+    returned verbatim.
+    """
+    if not isinstance(detail, str) or not re.fullmatch(r"[a-z0-9_]{1,80}", detail):
+        raise ValueError("invalid delivery detail")
+    conn = connect()
+    with _lock:
+        try:
+            message = _get_message_by_id(conn, message_id)
+            if message is None:
+                raise MessageNotFoundError(f"message not found: {message_id}")
+            if message.get("delivery_state") != "submitting":
+                return message
+            timestamp = now_iso()
+            conn.execute(
+                """
+                INSERT INTO message_delivery_attempts (message_id, attempted_at, outcome, detail)
+                VALUES (?, ?, 'unknown', ?)
+                """,
+                (message_id, timestamp, detail),
+            )
+            cur = conn.execute(
+                """
+                UPDATE messages
+                SET delivery_state = 'unknown', delivery_updated_at = ?, consumed_at = ?
+                WHERE id = ? AND delivery_state = 'submitting'
+                """,
+                (timestamp, timestamp, message_id),
+            )
+            if cur.rowcount != 1:
+                conn.rollback()
+                current = _get_message_by_id(conn, message_id)
+                if current is None:
+                    raise MessageNotFoundError(f"message not found: {message_id}")
+                return current
+            conn.commit()
+            reconciled = _get_message_by_id(conn, message_id)
+            assert reconciled is not None
+            return reconciled
         except Exception:
             conn.rollback()
             raise
@@ -1597,6 +1699,8 @@ def record_verdict(
     ratings: dict | None,
     comment: str | None,
     payload: object | None = None,
+    *,
+    allow_revision: bool = True,
 ) -> dict:
     """Insert a new verdict revision and mark the request decided. Latest verdict wins."""
     conn = connect()
@@ -1606,6 +1710,12 @@ def record_verdict(
             raise RequestTerminalError(f"request already {request['status']}: {req_id}")
         if request is not None and request["stream_id"] is not None:
             _require_open_stream(conn, request["stream_id"])
+        if not allow_revision:
+            verdict_count = conn.execute(
+                "SELECT COUNT(*) FROM verdicts WHERE request_id = ?", (req_id,)
+            ).fetchone()[0]
+            if verdict_count:
+                raise VerdictExistsError(verdict_count)
         conn.execute(
             "INSERT INTO verdicts (request_id, selected_indices, ratings_json, comment, payload_json, created_at) "
             "VALUES (?, ?, ?, ?, ?, ?)",
