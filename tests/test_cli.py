@@ -8,6 +8,27 @@ import pytest
 from gallery import cli, db
 
 
+def _record_urlopen_timeouts(monkeypatch):
+    observed_timeouts = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return b"{}"
+
+    def fake_urlopen(_request, timeout):
+        observed_timeouts.append(timeout)
+        return Response()
+
+    monkeypatch.setattr(cli.client.urllib.request, "urlopen", fake_urlopen)
+    return observed_timeouts
+
+
 def _stub_open_stream(monkeypatch):
     monkeypatch.setattr(cli.client, "get_stream", lambda *_args, **_kwargs: {"closed_at": None})
 
@@ -54,6 +75,45 @@ def test_client_network_error_becomes_gallery_client_error(monkeypatch):
 
     assert exc.value.status == 0
     assert "server down" in exc.value.message
+
+
+def test_game_publish_uses_a_timeout_sized_for_large_release_uploads(monkeypatch, tmp_path):
+    observed_timeouts = _record_urlopen_timeouts(monkeypatch)
+    artifact = tmp_path / "game.zip"
+    video = tmp_path / "game.mp4"
+    poster = tmp_path / "poster.jpg"
+    for path in (artifact, video, poster):
+        path.write_bytes(b"release")
+
+    cli.client.publish_game_build(
+        "http://gallery",
+        "tok",
+        "find-the-bird",
+        title="Find the Bird",
+        version="2026.08.06-2",
+        changelog="- Fixed preview boot",
+        artifact=artifact,
+        video=video,
+        poster=poster,
+    )
+
+    assert observed_timeouts == [600]
+
+
+def test_regular_multipart_upload_keeps_the_default_timeout(monkeypatch, tmp_path):
+    observed_timeouts = _record_urlopen_timeouts(monkeypatch)
+    attachment = tmp_path / "report.html"
+    attachment.write_text("<html></html>")
+
+    cli.client.post_multipart(
+        "http://gallery",
+        "tok",
+        "/api/streams/alpha/posts",
+        {"text": "Release report"},
+        [attachment],
+    )
+
+    assert observed_timeouts == [30]
 
 
 def test_client_malformed_url_becomes_gallery_client_error():
