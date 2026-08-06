@@ -160,7 +160,7 @@ def test_terminal_submission_malformed_response_is_unknown(monkeypatch, stdout):
     }
 
 
-def test_targeted_message_attempts_are_append_only_and_only_success_consumes(data_dir):
+def test_targeted_message_attempts_are_append_only_and_legacy_hidden(data_dir):
     stream = db.create_stream("alpha", "session", "Alpha")
     message = db.create_targeted_message(stream["id"], "First", "codex", "sid-live", message_id="m_one")
 
@@ -171,7 +171,7 @@ def test_targeted_message_attempts_are_append_only_and_only_success_consumes(dat
 
     assert message["delivery_state"] == "pending"
     assert failed["delivery_state"] == "failed"
-    assert failed["consumed_at"] is None
+    assert failed["consumed_at"] is not None
     assert delivered["delivery_state"] == "submitted_to_terminal"
     assert delivered["consumed_at"] is not None
     assert [attempt["outcome"] for attempt in db.list_message_delivery_attempts(message["id"])] == [
@@ -242,7 +242,12 @@ def test_targeted_message_is_never_visible_to_generic_pull(data_dir):
     queued = db.list_messages(stream["id"], direction="to_agent", unconsumed=True)
 
     assert [message["id"] for message in queued] == [generic["id"]]
-    assert targeted["consumed_at"] is None
+    assert targeted["consumed_at"] is not None
+    legacy_visible = db.connect().execute(
+        "SELECT id FROM messages WHERE stream_id = ? AND direction = 'to_agent' AND consumed_at IS NULL",
+        (stream["id"],),
+    ).fetchall()
+    assert [row["id"] for row in legacy_visible] == [generic["id"]]
     with pytest.raises(db.MessageDeliveryStateError, match="targeted message"):
         db.consume_message(targeted["id"])
 
@@ -253,7 +258,7 @@ def test_unknown_delivery_requires_explicit_confirmation_before_retry(data_dir):
     db.claim_message_delivery(message["id"])
     unknown = db.complete_message_delivery(message["id"], "unknown", "enter_result_unknown")
 
-    assert unknown["consumed_at"] is None
+    assert unknown["consumed_at"] is not None
     with pytest.raises(db.MessageDeliveryStateError, match="cannot be submitted from state unknown"):
         db.claim_message_delivery(message["id"])
     assert db.claim_message_delivery(message["id"], allow_unknown=True)["delivery_state"] == "submitting"
@@ -269,7 +274,7 @@ def test_restart_recovers_interrupted_delivery_once_and_still_requires_confirmat
 
     recovered = db.get_message(message["id"])
     assert recovered["delivery_state"] == "unknown"
-    assert recovered["consumed_at"] is None
+    assert recovered["consumed_at"] is not None
     assert [
         (attempt["outcome"], attempt["detail"])
         for attempt in db.list_message_delivery_attempts(message["id"])

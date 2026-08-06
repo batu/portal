@@ -166,6 +166,18 @@ def test_view_capability_submits_only_its_verdict_and_cannot_authenticate_agents
         headers={"Origin": "null"},
         json={"payload": {"picked": [2]}},
     )
+    forbidden_revision = client.post(
+        f"/r/{req_id}/decide",
+        params=capability_params,
+        headers={"Origin": "null"},
+        json={"payload": {"picked": [1]}, "redecide": True},
+    )
+    duplicate = client.post(
+        f"/r/{req_id}/decide",
+        params=capability_params,
+        headers={"Origin": "null"},
+        json={"payload": {"picked": [1]}},
+    )
     agent_send = client.post(
         "/agents/codex/sid-live/messages",
         params=capability_params,
@@ -178,6 +190,11 @@ def test_view_capability_submits_only_its_verdict_and_cannot_authenticate_agents
     assert verdict.status_code == 200
     assert verdict.headers["access-control-allow-origin"] == "null"
     assert verdict.json()["payload"] == {"picked": [2]}
+    assert forbidden_revision.status_code == 403
+    assert forbidden_revision.json()["detail"]["error"] == "revision_forbidden"
+    assert duplicate.status_code == 409
+    assert duplicate.json()["detail"]["verdict_count"] == 1
+    assert db.count_verdicts(req_id) == 1
     assert agent_send.status_code == 401
     assert db.list_targeted_messages() == []
 

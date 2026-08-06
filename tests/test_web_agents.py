@@ -1,3 +1,4 @@
+import sqlite3
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
@@ -212,7 +213,7 @@ def test_agent_message_failure_remains_retryable_and_retry_uses_original_target(
 
     assert failed.status_code == 200
     assert failed.json()["delivery_state"] == "failed"
-    assert failed.json()["consumed_at"] is None
+    assert failed.json()["consumed_at"] is not None
     assert reconciled.json()["id"] == failed.json()["id"]
     assert reconciled.json()["delivery_state"] == "failed"
     assert retried.status_code == 200
@@ -291,7 +292,7 @@ def test_bridge_exception_is_durable_unknown_and_requires_confirmation_before_re
     assert response.json()["delivery_state"] == "unknown"
     assert reconciled.json()["id"] == message_id
     assert reconciled.json()["delivery_state"] == "unknown"
-    assert response.json()["consumed_at"] is None
+    assert response.json()["consumed_at"] is not None
     assert stored["delivery_state"] == "unknown"
     assert [(attempt["outcome"], attempt["detail"]) for attempt in attempts] == [
         ("unknown", "portal_bridge_exception")
@@ -300,6 +301,40 @@ def test_bridge_exception_is_durable_unknown_and_requires_confirmation_before_re
     assert confirmed.status_code == 200
     assert confirmed.json()["delivery_state"] == "submitted_to_terminal"
     assert calls == 2
+
+
+def test_completion_failure_reconciles_submitting_delivery_in_process(client, token, monkeypatch):
+    _seed_cookie(client, token)
+    calls = []
+    monkeypatch.setattr(
+        agents,
+        "submit_to_agent",
+        lambda provider, sid, text: calls.append((provider, sid, text))
+        or {"outcome": "submitted_to_terminal", "detail": "literal_and_enter_sent"},
+    )
+    monkeypatch.setattr(
+        db,
+        "complete_message_delivery",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(sqlite3.OperationalError("write failed")),
+    )
+    payload = {
+        "text": "Reconcile completion",
+        "idempotency_key": _submission_key("completion_failure"),
+    }
+
+    response = client.post("/agents/codex/sid-live/messages", json=payload)
+    replay = client.post("/agents/codex/sid-live/messages", json=payload)
+
+    assert response.status_code == 200
+    assert response.json()["delivery_state"] == "unknown"
+    assert replay.status_code == 200
+    assert replay.json()["id"] == response.json()["id"]
+    assert replay.json()["delivery_state"] == "unknown"
+    assert calls == [("codex", "sid-live", "Reconcile completion")]
+    assert [
+        (attempt["outcome"], attempt["detail"])
+        for attempt in db.list_message_delivery_attempts(response.json()["id"])
+    ] == [("unknown", "portal_completion_failed")]
 
 
 def test_agent_message_requires_bounded_url_safe_idempotency_key(client, token, monkeypatch):
