@@ -1,4 +1,4 @@
-from gallery import db
+from gallery import agents, db
 
 
 def auth_headers(token):
@@ -227,3 +227,86 @@ def test_static_stream_message_js_posts_without_query_token_and_handles_status(c
     assert "data-form-status" in script.text
     assert "window.location.reload()" in script.text
     assert "button.disabled = false" in script.text
+
+
+def test_stream_note_can_target_exact_agent_and_submits_immediately(client, token, monkeypatch):
+    db.create_stream("alpha", "session", "Alpha stream")
+    monkeypatch.setattr(agents, "list_replyable_agents", lambda: [])
+    _seed_cookie(client, token, "alpha")
+    calls = []
+
+    def submitted(provider, sid, text):
+        calls.append((provider, sid, text))
+        return {"outcome": "submitted_to_terminal", "detail": "literal_and_enter_sent"}
+
+    monkeypatch.setattr(agents, "submit_to_agent", submitted)
+
+    payload = {
+        "text": "Steer this session",
+        "target_provider": "codex",
+        "target_session_id": "sid-live",
+        "idempotency_key": "portal_test_stream_submission",
+    }
+    response = client.post("/s/alpha/note", json=payload)
+    reconciled = client.post("/s/alpha/note", json=payload)
+
+    assert response.status_code == 200
+    assert response.json()["delivery_state"] == "submitted_to_terminal"
+    assert reconciled.status_code == 200
+    assert reconciled.json()["id"] == response.json()["id"]
+    assert calls == [("codex", "sid-live", "Steer this session")]
+    assert db.list_messages(db.get_stream("alpha")["id"], direction="to_agent", unconsumed=True) == []
+
+
+def test_stream_page_renders_agent_selector_and_failed_retry(monkeypatch, client, token):
+    stream = db.create_stream("alpha", "session", "Alpha stream")
+    message = db.create_targeted_message(stream["id"], "Try again", "codex", "sid-live")
+    db.claim_message_delivery(message["id"])
+    db.complete_message_delivery(message["id"], "failed", "session_not_replyable")
+    monkeypatch.setattr(
+        agents,
+        "list_replyable_agents",
+        lambda: [
+            {
+                "provider": "codex",
+                "sid": "sid-live",
+                "label": "portal-main",
+                "project": "portal",
+                "task": "feat/agents",
+                "state": "working",
+                "freshness_seconds": 3.0,
+                "replyable": True,
+            }
+        ],
+    )
+
+    page = client.get(f"/s/alpha?token={token}")
+    directory = client.get("/agents/directory")
+
+    assert page.status_code == 200
+    assert "Choose delivery target" in page.text
+    assert directory.status_code == 200
+    assert directory.json()["sessions"][0]["provider"] == "codex"
+    assert directory.json()["sessions"][0]["sid"] == "sid-live"
+    assert "submitted to terminal" in page.text
+    assert "failed" in page.text
+    assert 'data-agent-retry-form' in page.text
+    assert f'action="/agents/messages/{message["id"]}/retry"' in page.text
+
+
+def test_stream_target_pair_validation_does_not_create_message(client, token, monkeypatch):
+    stream = db.create_stream("alpha", "session", "Alpha stream")
+    monkeypatch.setattr(agents, "list_replyable_agents", lambda: [])
+    _seed_cookie(client, token, "alpha")
+
+    responses = [
+        client.post("/s/alpha/note", json={"text": "Half", "target_provider": "codex"}),
+        client.post("/s/alpha/note", json={"text": "Half", "target_session_id": "sid-live"}),
+        client.post(
+            "/s/alpha/note",
+            json={"text": "line one\nline two", "target_provider": "codex", "target_session_id": "sid-live"},
+        ),
+    ]
+
+    assert [response.status_code for response in responses] == [400, 400, 400]
+    assert db.list_messages(stream["id"]) == []

@@ -11,12 +11,11 @@ import secrets
 import sqlite3
 import threading
 from datetime import datetime, timezone
-from pathlib import Path
-
 from . import config
 
 KINDS = ("pick-one", "pick-many", "rank", "approve", "comment", "before-after", "view")
 MESSAGE_DIRECTIONS = ("to_agent", "to_human")
+MESSAGE_DELIVERY_OUTCOMES = ("submitted_to_terminal", "failed", "unknown")
 STREAM_SLUG_MAX_LENGTH = 128
 PROJECT_STREAM_PREFIX = "proj-"
 
@@ -70,6 +69,14 @@ class StreamClosedError(ValueError):
 
 
 class MessageNotFoundError(ValueError):
+    pass
+
+
+class MessageDeliveryStateError(ValueError):
+    pass
+
+
+class MessageIdempotencyConflictError(ValueError):
     pass
 
 
@@ -197,6 +204,10 @@ def _validate_schema_version(conn: sqlite3.Connection, version: int) -> None:
         _validate_v10_schema(conn)
     if version >= 11:
         _validate_v11_schema(conn)
+    if version >= 12:
+        _validate_v12_schema(conn)
+    if version >= 13:
+        _validate_v13_schema(conn)
 
 
 def _migrate_v1(conn: sqlite3.Connection) -> None:
@@ -389,6 +400,87 @@ def _validate_v11_schema(conn: sqlite3.Connection) -> None:
         raise RuntimeError("schema v11 missing game_builds column: web_preview_path")
 
 
+def _migrate_v12(conn: sqlite3.Connection) -> None:
+    _add_column_if_missing(conn, "messages", "target_provider", "target_provider TEXT")
+    _add_column_if_missing(conn, "messages", "target_session_id", "target_session_id TEXT")
+    _add_column_if_missing(conn, "messages", "delivery_state", "delivery_state TEXT")
+    _add_column_if_missing(conn, "messages", "delivery_updated_at", "delivery_updated_at TEXT")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS message_delivery_attempts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            message_id TEXT NOT NULL REFERENCES messages(id),
+            attempted_at TEXT NOT NULL,
+            outcome TEXT NOT NULL CHECK (outcome IN ('submitted_to_terminal', 'failed', 'unknown')),
+            detail TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_message_delivery_attempts_message "
+        "ON message_delivery_attempts(message_id, attempted_at, id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_messages_target_delivery "
+        "ON messages(target_provider, target_session_id, delivery_state, created_at)"
+    )
+
+
+def _validate_v12_schema(conn: sqlite3.Connection) -> None:
+    missing = {
+        "target_provider",
+        "target_session_id",
+        "delivery_state",
+        "delivery_updated_at",
+    } - _column_names(conn, "messages")
+    if missing:
+        raise RuntimeError(f"schema v12 missing messages columns: {', '.join(sorted(missing))}")
+    if (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'message_delivery_attempts'"
+        ).fetchone()
+        is None
+    ):
+        raise RuntimeError("schema v12 missing message_delivery_attempts table")
+    attempt_missing = {"id", "message_id", "attempted_at", "outcome", "detail"} - _column_names(
+        conn, "message_delivery_attempts"
+    )
+    if attempt_missing:
+        raise RuntimeError(
+            "schema v12 missing message_delivery_attempts columns: " + ", ".join(sorted(attempt_missing))
+        )
+    attempt_fks = conn.execute("PRAGMA foreign_key_list(message_delivery_attempts)").fetchall()
+    if not any(
+        row["from"] == "message_id" and row["table"] == "messages" and row["to"] == "id"
+        for row in attempt_fks
+    ):
+        raise RuntimeError("schema v12 message_delivery_attempts missing message_id foreign key")
+
+
+def _migrate_v13(conn: sqlite3.Connection) -> None:
+    _add_column_if_missing(conn, "messages", "client_submission_key", "client_submission_key TEXT")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_client_submission_key "
+        "ON messages(client_submission_key) WHERE client_submission_key IS NOT NULL"
+    )
+
+
+def _validate_v13_schema(conn: sqlite3.Connection) -> None:
+    if "client_submission_key" not in _column_names(conn, "messages"):
+        raise RuntimeError("schema v13 missing messages column: client_submission_key")
+    index = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'index' "
+        "AND name = 'idx_messages_client_submission_key'"
+    ).fetchone()
+    index_sql = re.sub(r"\s+", " ", (index["sql"] or "").lower()) if index is not None else ""
+    if not (
+        "create unique index" in index_sql
+        and "on messages(client_submission_key)" in index_sql
+        and "where client_submission_key is not null" in index_sql
+    ):
+        raise RuntimeError("schema v13 missing unique targeted-message submission-key index")
+
+
 MIGRATIONS = [
     (1, _migrate_v1),
     (2, _migrate_v2),
@@ -401,6 +493,8 @@ MIGRATIONS = [
     (9, _migrate_v9),
     (10, _migrate_v10),
     (11, _migrate_v11),
+    (12, _migrate_v12),
+    (13, _migrate_v13),
 ]
 
 
@@ -427,6 +521,49 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
         _validate_schema_version(conn, MIGRATIONS[-1][0])
 
 
+def _recover_interrupted_message_deliveries(conn: sqlite3.Connection) -> int:
+    """Move crash-interrupted targeted deliveries to an auditable unknown state."""
+    if _user_version(conn) < 12:
+        return 0
+    timestamp = now_iso()
+    try:
+        # Claim the writer lock before reading so every matching attempt and
+        # state transition is committed as one startup reconciliation.
+        conn.execute("BEGIN IMMEDIATE")
+        rows = conn.execute(
+            """
+            SELECT id
+            FROM messages
+            WHERE direction = 'to_agent'
+              AND target_provider IS NOT NULL
+              AND target_session_id IS NOT NULL
+              AND delivery_state = 'submitting'
+              AND consumed_at IS NULL
+            """
+        ).fetchall()
+        if rows:
+            conn.executemany(
+                """
+                INSERT INTO message_delivery_attempts (message_id, attempted_at, outcome, detail)
+                VALUES (?, ?, 'unknown', 'portal_restart_interrupted')
+                """,
+                ((row["id"], timestamp) for row in rows),
+            )
+            conn.executemany(
+                """
+                UPDATE messages
+                SET delivery_state = 'unknown', delivery_updated_at = ?
+                WHERE id = ? AND delivery_state = 'submitting' AND consumed_at IS NULL
+                """,
+                ((timestamp, row["id"]) for row in rows),
+            )
+        conn.commit()
+        return len(rows)
+    except Exception:
+        conn.rollback()
+        raise
+
+
 def connect() -> sqlite3.Connection:
     """Return the process-wide connection, opening it on first use."""
     global _conn
@@ -445,6 +582,7 @@ def connect() -> sqlite3.Connection:
             conn.executescript(SCHEMA)
             conn.commit()
             _run_migrations(conn)
+            _recover_interrupted_message_deliveries(conn)
         except Exception:
             conn.close()
             raise
@@ -727,6 +865,23 @@ def close_stream(slug: str) -> dict:
             raise
 
 
+def reopen_stream(slug: str) -> dict:
+    """Reopen a reserved internal stream that legacy code allowed to close."""
+    conn = connect()
+    with _lock:
+        try:
+            cur = conn.execute("UPDATE streams SET closed_at = NULL WHERE slug = ?", (slug,))
+            if cur.rowcount == 0:
+                raise ValueError(f"stream not found: {slug}")
+            conn.commit()
+            stream = _get_stream_by_slug(conn, slug)
+            assert stream is not None
+            return stream
+        except Exception:
+            conn.rollback()
+            raise
+
+
 def _require_open_stream(conn: sqlite3.Connection, stream_id: str) -> dict:
     stream = _get_stream_by_id(conn, stream_id)
     if stream is None:
@@ -859,6 +1014,12 @@ def _get_message_by_id(conn: sqlite3.Connection, message_id: str) -> dict | None
     return _message_from_row(conn.execute("SELECT * FROM messages WHERE id = ?", (message_id,)).fetchone())
 
 
+def get_message(message_id: str) -> dict | None:
+    conn = connect()
+    with _lock:
+        return _get_message_by_id(conn, message_id)
+
+
 def _create_message(
     conn: sqlite3.Connection,
     stream_id: str,
@@ -867,13 +1028,42 @@ def _create_message(
     *,
     created_at: str | None = None,
     message_id: str | None = None,
+    target_provider: str | None = None,
+    target_session_id: str | None = None,
+    client_submission_key: str | None = None,
 ) -> dict:
     _validate_message_direction(direction)
+    if (target_provider is None) != (target_session_id is None):
+        raise ValueError("target provider and session id must be supplied together")
+    if target_provider is not None and direction != "to_agent":
+        raise ValueError("only to_agent messages may have a delivery target")
+    if client_submission_key is not None and target_provider is None:
+        raise ValueError("only targeted messages may have a client submission key")
     _require_open_stream(conn, stream_id)
     message_id = message_id or new_message_id()
+    timestamp = created_at or now_iso()
+    delivery_state = "pending" if target_provider is not None else None
+    delivery_updated_at = timestamp if target_provider is not None else None
     conn.execute(
-        "INSERT INTO messages (id, stream_id, direction, text, created_at) VALUES (?, ?, ?, ?, ?)",
-        (message_id, stream_id, direction, text, created_at or now_iso()),
+        """
+        INSERT INTO messages (
+            id, stream_id, direction, text, created_at,
+            target_provider, target_session_id, delivery_state, delivery_updated_at,
+            client_submission_key
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            message_id,
+            stream_id,
+            direction,
+            text,
+            timestamp,
+            target_provider,
+            target_session_id,
+            delivery_state,
+            delivery_updated_at,
+            client_submission_key,
+        ),
     )
     message = _get_message_by_id(conn, message_id)
     assert message is not None
@@ -933,6 +1123,233 @@ def create_message_for_stream(
             raise
 
 
+def create_targeted_message(
+    stream_id: str,
+    text: str,
+    provider: str,
+    session_id: str,
+    *,
+    created_at: str | None = None,
+    message_id: str | None = None,
+    client_submission_key: str | None = None,
+) -> dict:
+    if not provider or not session_id:
+        raise ValueError("target provider and session id are required")
+    conn = connect()
+    with _lock:
+        try:
+            message = _create_message(
+                conn,
+                stream_id,
+                "to_agent",
+                text,
+                created_at=created_at,
+                message_id=message_id,
+                target_provider=provider,
+                target_session_id=session_id,
+                client_submission_key=client_submission_key,
+            )
+            conn.commit()
+            return message
+        except Exception:
+            conn.rollback()
+            raise
+
+
+def create_or_get_targeted_message(
+    stream_id: str,
+    text: str,
+    provider: str,
+    session_id: str,
+    client_submission_key: str,
+) -> tuple[dict, bool]:
+    """Atomically create a targeted message or reconcile its client retry.
+
+    The key names one immutable submission intent. Reusing it with different
+    content or a different destination is a conflict, never a second send.
+    """
+    if not provider or not session_id:
+        raise ValueError("target provider and session id are required")
+    if not client_submission_key:
+        raise ValueError("client submission key is required")
+    conn = connect()
+    with _lock:
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            existing = _message_from_row(
+                conn.execute(
+                    "SELECT * FROM messages WHERE client_submission_key = ?",
+                    (client_submission_key,),
+                ).fetchone()
+            )
+            if existing is not None:
+                immutable_intent = (
+                    existing["stream_id"],
+                    existing["direction"],
+                    existing["text"],
+                    existing.get("target_provider"),
+                    existing.get("target_session_id"),
+                )
+                requested_intent = (stream_id, "to_agent", text, provider, session_id)
+                if immutable_intent != requested_intent:
+                    raise MessageIdempotencyConflictError(
+                        "client submission key was already used for a different agent message"
+                    )
+                conn.commit()
+                return existing, False
+
+            message = None
+            for _ in range(5):
+                try:
+                    message = _create_message(
+                        conn,
+                        stream_id,
+                        "to_agent",
+                        text,
+                        target_provider=provider,
+                        target_session_id=session_id,
+                        client_submission_key=client_submission_key,
+                    )
+                    break
+                except sqlite3.IntegrityError as exc:
+                    if "messages.id" not in str(exc):
+                        raise
+            if message is None:
+                raise RuntimeError("could not allocate unique message id")
+            conn.commit()
+            return message, True
+        except Exception:
+            conn.rollback()
+            raise
+
+
+def list_message_delivery_attempts(message_id: str) -> list[dict]:
+    conn = connect()
+    with _lock:
+        rows = conn.execute(
+            "SELECT * FROM message_delivery_attempts WHERE message_id = ? ORDER BY attempted_at, id",
+            (message_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def list_targeted_messages(*, limit: int = 100) -> list[dict]:
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1 or limit > 500:
+        raise ValueError("limit must be between 1 and 500")
+    conn = connect()
+    with _lock:
+        rows = conn.execute(
+            """
+            SELECT
+                messages.*,
+                streams.slug AS stream_slug,
+                streams.title AS stream_title,
+                streams.closed_at AS stream_closed_at,
+                (
+                    SELECT COUNT(*)
+                    FROM message_delivery_attempts
+                    WHERE message_id = messages.id
+                ) AS delivery_attempt_count,
+                (
+                    SELECT detail
+                    FROM message_delivery_attempts
+                    WHERE message_id = messages.id
+                    ORDER BY attempted_at DESC, id DESC
+                    LIMIT 1
+                ) AS latest_delivery_detail
+            FROM messages
+            JOIN streams ON streams.id = messages.stream_id
+            WHERE messages.target_provider IS NOT NULL
+              AND messages.target_session_id IS NOT NULL
+            ORDER BY messages.created_at DESC, messages.rowid DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def claim_message_delivery(message_id: str, *, allow_unknown: bool = False) -> dict:
+    conn = connect()
+    with _lock:
+        try:
+            message = _get_message_by_id(conn, message_id)
+            if message is None:
+                raise MessageNotFoundError(f"message not found: {message_id}")
+            _require_open_stream(conn, message["stream_id"])
+            if message["direction"] != "to_agent" or not message.get("target_provider") or not message.get(
+                "target_session_id"
+            ):
+                raise MessageDeliveryStateError("message is not targeted to an agent")
+            state = message.get("delivery_state")
+            allowed_states = {"pending", "failed"}
+            if allow_unknown:
+                allowed_states.add("unknown")
+            if state not in allowed_states:
+                raise MessageDeliveryStateError(f"message cannot be submitted from state {state}")
+            timestamp = now_iso()
+            cur = conn.execute(
+                """
+                UPDATE messages
+                SET delivery_state = 'submitting', delivery_updated_at = ?
+                WHERE id = ? AND delivery_state = ? AND consumed_at IS NULL
+                """,
+                (timestamp, message_id, state),
+            )
+            if cur.rowcount != 1:
+                raise MessageDeliveryStateError("message delivery is already being handled")
+            conn.commit()
+            claimed = _get_message_by_id(conn, message_id)
+            assert claimed is not None
+            return claimed
+        except Exception:
+            conn.rollback()
+            raise
+
+
+def complete_message_delivery(message_id: str, outcome: str, detail: str) -> dict:
+    if outcome not in MESSAGE_DELIVERY_OUTCOMES:
+        raise ValueError(f"invalid delivery outcome: {outcome}")
+    if not isinstance(detail, str) or not re.fullmatch(r"[a-z0-9_]{1,80}", detail):
+        raise ValueError("invalid delivery detail")
+    conn = connect()
+    with _lock:
+        try:
+            message = _get_message_by_id(conn, message_id)
+            if message is None:
+                raise MessageNotFoundError(f"message not found: {message_id}")
+            if message.get("delivery_state") != "submitting":
+                raise MessageDeliveryStateError(
+                    f"message delivery cannot complete from state {message.get('delivery_state')}"
+                )
+            timestamp = now_iso()
+            conn.execute(
+                """
+                INSERT INTO message_delivery_attempts (message_id, attempted_at, outcome, detail)
+                VALUES (?, ?, ?, ?)
+                """,
+                (message_id, timestamp, outcome, detail),
+            )
+            consumed_at = timestamp if outcome == "submitted_to_terminal" else None
+            cur = conn.execute(
+                """
+                UPDATE messages
+                SET delivery_state = ?, delivery_updated_at = ?, consumed_at = ?
+                WHERE id = ? AND delivery_state = 'submitting'
+                """,
+                (outcome, timestamp, consumed_at, message_id),
+            )
+            if cur.rowcount != 1:
+                raise MessageDeliveryStateError("message delivery state changed while completing")
+            conn.commit()
+            completed = _get_message_by_id(conn, message_id)
+            assert completed is not None
+            return completed
+        except Exception:
+            conn.rollback()
+            raise
+
+
 def list_messages(
     stream_id: str,
     *,
@@ -956,6 +1373,9 @@ def list_messages(
             params.append(direction)
         if unconsumed:
             clauses.append("consumed_at IS NULL")
+            # Exact-session comments are delivered only by the Agency bridge.
+            # Generic ``portal pull`` consumers must never race that target.
+            clauses.append("target_session_id IS NULL")
         rows = conn.execute(
             "SELECT * FROM messages WHERE " + " AND ".join(clauses) + " ORDER BY created_at, rowid",
             params,
@@ -972,6 +1392,8 @@ def consume_message(message_id: str) -> dict:
             if message is None:
                 raise MessageNotFoundError(f"message not found: {message_id}")
             _require_open_stream(conn, message["stream_id"])
+            if message.get("target_session_id") is not None:
+                raise MessageDeliveryStateError("targeted message may only be consumed after terminal submission")
             if message["consumed_at"] is None:
                 conn.execute(
                     "UPDATE messages SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL",

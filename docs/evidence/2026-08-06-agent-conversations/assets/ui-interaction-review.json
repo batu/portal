@@ -1,0 +1,53 @@
+{
+  "reviewer": "ui-interaction",
+  "status": "partial",
+  "findings": [],
+  "supported_claims": [
+    {
+      "claim": "Composer focus is restored after successful exact-session reloads.",
+      "evidence": "In agents-atomic-flow-trace.zip, call@10 is the only composer click. After the first and second Enter submissions, call@27 and call@44 wait successfully for the textarea to be document.activeElement; call@29 and call@46 then type through the page keyboard without another click. agents-unknown-before-confirmation.png also shows the restored textarea focus ring after the third submission."
+    },
+    {
+      "claim": "Two consecutive follow-up messages can be entered and submitted without re-focusing the composer.",
+      "evidence": "The 5.36-second agents-atomic-flow.webm and its trace show Known failure delivery evidence and Atomic unknown delivery evidence typed and submitted with Enter after automatic focus restoration, with no intervening textarea click."
+    },
+    {
+      "claim": "The mobile primary-navigation hit areas now meet the asserted 44 CSS-pixel minimum.",
+      "evidence": "Trace call@94 measures Agents at 62.953125 by 44 CSS pixels and Games at 61.5625 by 44 CSS pixels in the 390 by 844 viewport; agents-atomic-mobile.png shows the added vertical hit area without overlap or clipping."
+    },
+    {
+      "claim": "One exact unknown message transitions atomically from unknown at 1 attempt to submitted at 2 attempts.",
+      "evidence": "agents-unknown-before-confirmation.png and agents-unknown-after-confirmation.png show the same Atomic unknown delivery evidence row and an unchanged history count of 3. The trace posts confirm_unknown to /agents/messages/m_e43f17/retry, and SQLite records unknown then submitted_to_terminal attempts for m_e43f17."
+    },
+    {
+      "claim": "Confirming the unknown message does not disable the unrelated failed-message retry.",
+      "evidence": "The failed Retry same session control remains readable in both desktop captures and the mobile capture; trace calls call@65, call@84, and call@98 report the control enabled."
+    },
+    {
+      "claim": "The Agents page remains readable and responsive at 390 CSS pixels.",
+      "evidence": "agents-atomic-mobile.png shows a single-column composer and history, wide primary controls, wrapped metadata, and no visible horizontal clipping."
+    }
+  ],
+  "evidence_used": [
+    "/private/tmp/portal-evidence-atomic-20260806/output/agents-unknown-before-confirmation.png",
+    "/private/tmp/portal-evidence-atomic-20260806/output/agents-unknown-after-confirmation.png",
+    "/private/tmp/portal-evidence-atomic-20260806/output/agents-atomic-mobile.png",
+    "/private/tmp/portal-evidence-atomic-20260806/output/agents-atomic-flow.webm",
+    "/private/tmp/portal-evidence-atomic-20260806/output/agents-atomic-flow-contact-sheet.png",
+    "/private/tmp/portal-evidence-atomic-20260806/output/agents-atomic-flow-trace.zip"
+  ],
+  "gaps": [
+    {
+      "gap": "Real mobile soft-keyboard, safe-area, and visual-viewport behavior remain unverified.",
+      "missing_artifact_or_check": "The mobile evidence is a headless Chromium viewport screenshot taken after the desktop interaction flow. It cannot show whether iOS Safari or Android Chrome preserves or reopens the soft keyboard after the reload-time focus restoration, keeps the textarea visible, and retains an ergonomic scroll position.",
+      "next_action": "Run two consecutive Enter submissions on iOS Safari and Android Chrome with the soft keyboard visible, recording document.activeElement, visualViewport dimensions, and scroll position."
+    },
+    {
+      "gap": "Exact-target clarity with multiple similar live sessions is not exercised.",
+      "missing_artifact_or_check": "All supplied artifacts contain one replyable agent, so the labels have not been challenged by two similar agent names or sessions.",
+      "next_action": "Capture a two-agent fixture with similar labels and verify that the intended exact session is distinguishable before submission and in outbound history."
+    }
+  ],
+  "recommended_next_action": "Run the restored-focus Enter loop once on iOS Safari and once on Android Chrome with the soft keyboard visible; if both retain a usable composer, promote this interaction review to passed.",
+  "summary": "The final atomic browser evidence resolves both prior findings. Composer focus survives successful exact-session reloads strongly enough for two follow-up Enter submissions with no re-click, and the mobile Agents and Games links now have 44-pixel-high hit areas. Retry safety, exact-message reconciliation, state labels, and the 390-pixel responsive layout are coherent and readable. The review remains partial only because headless browser evidence cannot establish physical mobile soft-keyboard behavior or cross-platform focus parity, and the one-agent fixture does not exercise disambiguation between similar live sessions."
+}

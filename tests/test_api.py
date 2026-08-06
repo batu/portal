@@ -506,7 +506,7 @@ def test_redecide_lock_requires_explicit_flag(client, token):
 
 
 def test_index_open_list_excludes_closed_and_superseded(client, token):
-    open_id = _create_request(client, token, title="Still open")
+    _create_request(client, token, title="Still open")
     decided_id = _create_request(client, token, title="Decided one")
     closed_id = _create_request(client, token, title="Closed one")
     old_id = _create_request(client, token, title="Superseded one")
@@ -837,7 +837,7 @@ def test_static_url_is_content_hashed_and_stable(data_dir):
 def test_pages_use_hashed_static_urls(client, data_dir):
     token = config.load_config()["token"]
     page = client.get(f"/?token={token}")
-    assert "style.css?v=" in page.text and "style.css?v=5" not in page.text
+    assert f'href="{server.static_url("style.css")}"' in page.text
 
 
 def test_gif_upload_gets_loop_mp4_sibling_and_template_uses_it(client, data_dir, tmp_path, monkeypatch):

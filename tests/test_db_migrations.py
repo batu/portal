@@ -128,7 +128,18 @@ def test_fresh_db_has_portal_schema_v3(data_dir):
     conn = db.connect()
 
     assert _user_version(conn) == db.MIGRATIONS[-1][0]
-    assert {"requests", "variants", "verdicts", "streams", "posts", "messages", "journeys", "games", "game_builds"} <= _table_names(conn)
+    assert {
+        "requests",
+        "variants",
+        "verdicts",
+        "streams",
+        "posts",
+        "messages",
+        "message_delivery_attempts",
+        "journeys",
+        "games",
+        "game_builds",
+    } <= _table_names(conn)
     assert {"slug", "title", "doc_json", "created_at", "updated_at"} == _column_names(conn, "journeys")
     assert {"stream_id", "before_media_path", "before_media_type"} <= _column_names(conn, "requests")
     assert {"superseded_by", "close_reason"} <= _column_names(conn, "requests")
@@ -156,7 +167,26 @@ def test_fresh_db_has_portal_schema_v3(data_dir):
         "author",
     ]
     assert "payload_json" in _column_names(conn, "verdicts")
-    assert {"id", "stream_id", "direction", "text", "created_at", "consumed_at"} <= _column_names(conn, "messages")
+    assert {
+        "id",
+        "stream_id",
+        "direction",
+        "text",
+        "created_at",
+        "consumed_at",
+        "target_provider",
+        "target_session_id",
+        "delivery_state",
+        "delivery_updated_at",
+        "client_submission_key",
+    } <= _column_names(conn, "messages")
+    assert {
+        "id",
+        "message_id",
+        "attempted_at",
+        "outcome",
+        "detail",
+    } == _column_names(conn, "message_delivery_attempts")
     assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
     assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
 
@@ -180,6 +210,13 @@ def test_fresh_db_has_portal_schema_v3(data_dir):
     ]
     assert "to_agent" in table_sql
     assert "to_human" in table_sql
+    submission_index = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'index' "
+        "AND name = 'idx_messages_client_submission_key'"
+    ).fetchone()
+    assert submission_index is not None
+    assert "CREATE UNIQUE INDEX" in submission_index["sql"]
+    assert "WHERE client_submission_key IS NOT NULL" in submission_index["sql"]
 
 
 def test_legacy_db_upgrade_preserves_existing_rows(data_dir):
@@ -313,7 +350,19 @@ def test_user_version_one_db_upgrades_to_v2_and_preserves_portal_rows(data_dir):
 
     assert _user_version(conn) == db.MIGRATIONS[-1][0]
     assert "messages" in _table_names(conn)
-    assert _column_names(conn, "messages") == {"id", "stream_id", "direction", "text", "created_at", "consumed_at"}
+    assert _column_names(conn, "messages") == {
+        "id",
+        "stream_id",
+        "direction",
+        "text",
+        "created_at",
+        "consumed_at",
+        "target_provider",
+        "target_session_id",
+        "delivery_state",
+        "delivery_updated_at",
+        "client_submission_key",
+    }
     assert _rows(conn, "SELECT id, slug, kind, title, created_at, closed_at FROM streams ORDER BY id") == [
         {
             "id": "s_existing",
@@ -359,6 +408,40 @@ def test_reconnecting_migrated_db_is_noop(data_dir):
     }
     assert _user_version(conn) == db.MIGRATIONS[-1][0]
     assert after == before
+
+
+def test_interrupted_delivery_recovery_rolls_back_attempt_when_state_update_fails(data_dir):
+    stream = db.create_stream("restart-rollback", "session", "Restart rollback")
+    message = db.create_targeted_message(stream["id"], "First", "codex", "sid-live")
+    db.claim_message_delivery(message["id"])
+    conn = db.connect()
+    conn.execute(
+        """
+        CREATE TRIGGER abort_delivery_recovery
+        BEFORE UPDATE OF delivery_state ON messages
+        WHEN OLD.delivery_state = 'submitting' AND NEW.delivery_state = 'unknown'
+        BEGIN
+            SELECT RAISE(ABORT, 'blocked recovery update');
+        END
+        """
+    )
+    conn.commit()
+
+    db.reset_connection()
+    with pytest.raises(sqlite3.IntegrityError, match="blocked recovery update"):
+        db.connect()
+    assert db._conn is None
+
+    raw = _raw_conn(config.db_path())
+    try:
+        assert raw.execute(
+            "SELECT delivery_state FROM messages WHERE id = ?", (message["id"],)
+        ).fetchone()[0] == "submitting"
+        assert raw.execute(
+            "SELECT COUNT(*) FROM message_delivery_attempts WHERE message_id = ?", (message["id"],)
+        ).fetchone()[0] == 0
+    finally:
+        raw.close()
 
 
 def test_partial_v1_db_completes_migration(data_dir):
