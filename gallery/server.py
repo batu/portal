@@ -567,7 +567,7 @@ def ftd_editor_asset(request: Request, asset_path: str):
 
 @app.api_route(
     "/tools/ftd-editor/{editor_path:path}",
-    methods=["GET", "POST"],
+    methods=["GET", "POST", "PUT"],
 )
 async def ftd_editor_proxy(request: Request, editor_path: str):
     if not web_token_ok(request):

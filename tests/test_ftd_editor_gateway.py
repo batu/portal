@@ -96,6 +96,30 @@ def test_ftd_editor_proxy_rewrites_authority_without_forwarding_portal_cookie(
     assert "cookie" not in observed["headers"]
 
 
+def test_ftd_editor_api_proxy_forwards_put_requests(client, data_dir, token, tmp_path, monkeypatch):
+    ui = tmp_path / "ui"
+    ui.mkdir()
+    (ui / "index.html").write_text("editor")
+    _configure(data_dir, ui)
+    observed = {}
+
+    def proxy(backend_url, method, path, query, body, headers):
+        observed.update(method=method, path=path, body=body)
+        return 200, {"Content-Type": "application/json"}, b'{"ok":true}'
+
+    monkeypatch.setattr(server, "_proxy_ftd_editor", proxy)
+    response = client.put(
+        "/tools/ftd-editor/api/sessions/level/sprite-candidates/dog_10%3Asprite_000/placement",
+        cookies={"gallery_token": token},
+        json={"spriteBox": [1, 2, 3, 4]},
+    )
+
+    assert response.status_code == 200
+    assert observed["method"] == "PUT"
+    assert observed["path"] == "api/sessions/level/sprite-candidates/dog_10:sprite_000/placement"
+    assert observed["body"] == b'{"spriteBox":[1,2,3,4]}'
+
+
 def test_copied_v1_editor_root_api_is_scoped_to_authenticated_editor_referrer(
     client, data_dir, token, tmp_path, monkeypatch
 ):
