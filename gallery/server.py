@@ -12,6 +12,7 @@ import re
 import secrets
 import shutil
 import sqlite3
+import stat as stat_lib
 import subprocess
 import tarfile
 import tempfile
@@ -449,7 +450,7 @@ def _ftd_editor_config() -> tuple[str, Path]:
     return backend_url.rstrip("/"), root
 
 
-def _ftd_static_file(ui_root: Path, relative: str) -> Path:
+def _safe_static_file(ui_root: Path, relative: str) -> Path:
     candidate = (ui_root / relative).resolve(strict=False)
     if candidate != ui_root and ui_root not in candidate.parents:
         raise HTTPException(status_code=404, detail="editor asset not found")
@@ -566,7 +567,7 @@ def ftd_editor_index(request: Request):
     if not web_token_ok(request):
         return _login_redirect(request)
     _, ui_root = _ftd_editor_config()
-    response = FileResponse(_ftd_static_file(ui_root, "index.html"))
+    response = FileResponse(_safe_static_file(ui_root, "index.html"))
     # The index references hashed asset filenames; if a browser caches it, the
     # whole old app survives redeploys (observed twice on 2026-07-29).
     response.headers["Cache-Control"] = "no-cache"
@@ -579,7 +580,7 @@ def ftd_editor_asset(request: Request, asset_path: str):
     if not web_token_ok(request):
         return _login_redirect(request)
     _, ui_root = _ftd_editor_config()
-    return FileResponse(_ftd_static_file(ui_root, f"assets/{asset_path}"))
+    return FileResponse(_safe_static_file(ui_root, f"assets/{asset_path}"))
 
 
 @app.api_route(
@@ -628,7 +629,8 @@ async def ftd_editor_proxy(request: Request, editor_path: str):
     )
 
 
-_difficulty_editor_root_cache: dict[tuple[str, str, int, int], Path] = {}
+_difficulty_editor_root_cache: dict[tuple[str, str, int, int], tuple[Path, frozenset[str]]] = {}
+_difficulty_editor_extract_lock = threading.Lock()
 
 
 def _difficulty_editor_config() -> tuple[Path, str]:
@@ -651,7 +653,7 @@ def _difficulty_editor_config() -> tuple[Path, str]:
     return archive, content_hash
 
 
-def _editor_manifest(root: Path, expected_hash: str) -> dict:
+def _editor_manifest(root: Path, expected_hash: str) -> frozenset[str]:
     manifest_path = root / "build-manifest.json"
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -706,23 +708,34 @@ def _editor_manifest(root: Path, expected_hash: str) -> dict:
     computed_hash = hashlib.sha256(aggregate).hexdigest()
     if manifest.get("contentHash") != computed_hash or computed_hash != expected_hash:
         raise HTTPException(status_code=503, detail="Difficulty editor aggregate hash does not match configuration")
-    return manifest
+    return frozenset(declared - {"build-manifest.json"})
 
 
-def _extract_difficulty_editor(archive: Path, expected_hash: str) -> Path:
-    if not archive.is_file():
+def _extract_difficulty_editor(archive: Path, expected_hash: str) -> tuple[Path, frozenset[str]]:
+    try:
+        stat = archive.stat()
+    except OSError as exc:
+        raise HTTPException(status_code=503, detail="Difficulty editor archive is unavailable") from exc
+    if not stat_lib.S_ISREG(stat.st_mode):
         raise HTTPException(status_code=503, detail="Difficulty editor archive is unavailable")
-    stat = archive.stat()
     cache_key = (str(archive), expected_hash, stat.st_mtime_ns, stat.st_size)
     cached = _difficulty_editor_root_cache.get(cache_key)
-    if cached is not None and cached.is_dir():
+    if cached is not None and cached[0].is_dir():
         return cached
+    with _difficulty_editor_extract_lock:
+        cached = _difficulty_editor_root_cache.get(cache_key)
+        if cached is not None and cached[0].is_dir():
+            return cached
+        artifact = _extract_difficulty_editor_locked(archive, expected_hash)
+        _difficulty_editor_root_cache.clear()
+        _difficulty_editor_root_cache[cache_key] = artifact
+        return artifact
+
+
+def _extract_difficulty_editor_locked(archive: Path, expected_hash: str) -> tuple[Path, frozenset[str]]:
     target = config.games_dir() / "marble-run" / "difficulty-editor" / "artifacts" / expected_hash
     if target.is_dir():
-        _editor_manifest(target, expected_hash)
-        _difficulty_editor_root_cache.clear()
-        _difficulty_editor_root_cache[cache_key] = target
-        return target
+        return target, _editor_manifest(target, expected_hash)
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary = Path(tempfile.mkdtemp(prefix=f".{expected_hash[:12]}-", dir=target.parent))
     total_bytes = 0
@@ -752,17 +765,15 @@ def _extract_difficulty_editor(archive: Path, expected_hash: str) -> Path:
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 with source, destination.open("wb") as output:
                     shutil.copyfileobj(source, output)
-        _editor_manifest(temporary, expected_hash)
+        allowed = _editor_manifest(temporary, expected_hash)
         temporary.replace(target)
     except Exception:
         shutil.rmtree(temporary, ignore_errors=True)
         raise
-    _difficulty_editor_root_cache.clear()
-    _difficulty_editor_root_cache[cache_key] = target
-    return target
+    return target, allowed
 
 
-def _difficulty_editor_root() -> Path:
+def _difficulty_editor_artifact() -> tuple[Path, frozenset[str]]:
     archive, content_hash = _difficulty_editor_config()
     return _extract_difficulty_editor(archive, content_hash)
 
@@ -782,12 +793,10 @@ def marble_run_difficulty_editor_asset(request: Request, asset_path: str):
     relative_path = PurePosixPath(relative)
     if relative_path.is_absolute() or ".." in relative_path.parts:
         raise HTTPException(status_code=404, detail="editor asset not found")
-    root = _difficulty_editor_root()
-    manifest = json.loads((root / "build-manifest.json").read_text(encoding="utf-8"))
-    allowed = {asset["path"] for asset in manifest["assets"]}
+    root, allowed = _difficulty_editor_artifact()
     if relative != "index.html" and relative not in allowed:
         raise HTTPException(status_code=404, detail="editor asset not found")
-    path = _ftd_static_file(root, relative)
+    path = _safe_static_file(root, relative)
     response = FileResponse(path)
     response.headers["Cache-Control"] = "no-cache" if relative == "index.html" else "public, max-age=31536000, immutable"
     _maybe_set_cookie(response, request)
