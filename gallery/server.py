@@ -12,7 +12,10 @@ import re
 import secrets
 import shutil
 import sqlite3
+import stat as stat_lib
 import subprocess
+import tarfile
+import tempfile
 import threading
 import urllib.error
 import urllib.request
@@ -251,6 +254,23 @@ def ftd_editor_enabled() -> bool:
 
 templates.env.globals["ftd_editor_enabled"] = ftd_editor_enabled
 
+
+def marble_run_difficulty_editor_enabled() -> bool:
+    try:
+        value = config.load_config().get("marble_run_difficulty_editor")
+    except (FileNotFoundError, ValueError):
+        return False
+    return (
+        isinstance(value, dict)
+        and isinstance(value.get("archive_path"), str)
+        and bool(value.get("archive_path"))
+        and isinstance(value.get("content_hash"), str)
+        and re.fullmatch(r"[0-9a-f]{64}", value.get("content_hash")) is not None
+    )
+
+
+templates.env.globals["marble_run_difficulty_editor_enabled"] = marble_run_difficulty_editor_enabled
+
 COOKIE_NAME = "gallery_token"
 # Remote-config form fields are namespaced so a stray form field can never be
 # mistaken for a Remote Config parameter name.
@@ -432,7 +452,7 @@ def _ftd_editor_config() -> tuple[str, Path]:
     return backend_url.rstrip("/"), root
 
 
-def _ftd_static_file(ui_root: Path, relative: str) -> Path:
+def _safe_static_file(ui_root: Path, relative: str) -> Path:
     candidate = (ui_root / relative).resolve(strict=False)
     if candidate != ui_root and ui_root not in candidate.parents:
         raise HTTPException(status_code=404, detail="editor asset not found")
@@ -549,7 +569,7 @@ def ftd_editor_index(request: Request):
     if not web_token_ok(request):
         return _login_redirect(request)
     _, ui_root = _ftd_editor_config()
-    response = FileResponse(_ftd_static_file(ui_root, "index.html"))
+    response = FileResponse(_safe_static_file(ui_root, "index.html"))
     # The index references hashed asset filenames; if a browser caches it, the
     # whole old app survives redeploys (observed twice on 2026-07-29).
     response.headers["Cache-Control"] = "no-cache"
@@ -562,7 +582,7 @@ def ftd_editor_asset(request: Request, asset_path: str):
     if not web_token_ok(request):
         return _login_redirect(request)
     _, ui_root = _ftd_editor_config()
-    return FileResponse(_ftd_static_file(ui_root, f"assets/{asset_path}"))
+    return FileResponse(_safe_static_file(ui_root, f"assets/{asset_path}"))
 
 
 @app.api_route(
@@ -609,6 +629,209 @@ async def ftd_editor_proxy(request: Request, editor_path: str):
         media_type=response_headers.get("Content-Type"),
         headers=safe_headers,
     )
+
+
+_difficulty_editor_root_cache: dict[tuple[str, str, int, int], tuple[Path, frozenset[str]]] = {}
+_difficulty_editor_extract_lock = threading.Lock()
+
+
+def _difficulty_editor_config() -> tuple[Path, str]:
+    value = config.load_config().get("marble_run_difficulty_editor")
+    if not isinstance(value, dict):
+        raise HTTPException(status_code=503, detail="Marble Run difficulty editor is not configured")
+    archive_path = value.get("archive_path")
+    content_hash = value.get("content_hash")
+    if not isinstance(archive_path, str) or not isinstance(content_hash, str):
+        raise HTTPException(status_code=503, detail="Marble Run difficulty editor configuration is incomplete")
+    if not re.fullmatch(r"[0-9a-f]{64}", content_hash):
+        raise HTTPException(status_code=503, detail="Marble Run difficulty editor content hash is invalid")
+    relative = PurePosixPath(archive_path)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise HTTPException(status_code=503, detail="Marble Run difficulty editor archive path is invalid")
+    games_root = config.games_dir().resolve()
+    archive = (games_root / Path(*relative.parts)).resolve(strict=False)
+    if archive != games_root and games_root not in archive.parents:
+        raise HTTPException(status_code=503, detail="Marble Run difficulty editor archive path is invalid")
+    return archive, content_hash
+
+
+def _editor_manifest(root: Path, expected_hash: str) -> frozenset[str]:
+    manifest_path = root / "build-manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=503, detail="Difficulty editor manifest is missing or malformed") from exc
+    if manifest.get("manifestVersion") != 1 or manifest.get("basePath") != "./":
+        raise HTTPException(status_code=503, detail="Difficulty editor manifest contract is unsupported")
+    assets = manifest.get("assets")
+    if not isinstance(assets, list) or not assets or len(assets) > MAX_GAME_WEB_FILES:
+        raise HTTPException(status_code=503, detail="Difficulty editor manifest asset inventory is invalid")
+    normalized = []
+    declared = {"build-manifest.json"}
+    for asset in assets:
+        if not isinstance(asset, dict):
+            raise HTTPException(status_code=503, detail="Difficulty editor manifest asset is invalid")
+        relative = asset.get("path")
+        size = asset.get("bytes")
+        digest = asset.get("sha256")
+        if (
+            not isinstance(relative, str)
+            or not relative
+            or PurePosixPath(relative).is_absolute()
+            or ".." in PurePosixPath(relative).parts
+            or not isinstance(size, int)
+            or size < 0
+            or not isinstance(digest, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", digest)
+            or relative in declared
+        ):
+            raise HTTPException(status_code=503, detail="Difficulty editor manifest asset is invalid")
+        path = root.joinpath(*PurePosixPath(relative).parts)
+        try:
+            payload = path.read_bytes()
+        except OSError as exc:
+            raise HTTPException(status_code=503, detail="Difficulty editor asset is missing") from exc
+        if len(payload) != size or hashlib.sha256(payload).hexdigest() != digest:
+            raise HTTPException(status_code=503, detail="Difficulty editor asset digest does not match manifest")
+        declared.add(relative)
+        normalized.append({"path": relative, "bytes": size, "sha256": digest})
+    actual = {
+        path.relative_to(root).as_posix()
+        for path in root.rglob("*")
+        if path.is_file()
+    }
+    if actual != declared:
+        raise HTTPException(status_code=503, detail="Difficulty editor artifact contains undeclared files")
+    aggregate = json.dumps(
+        {"basePath": "./", "assets": normalized},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    computed_hash = hashlib.sha256(aggregate).hexdigest()
+    if manifest.get("contentHash") != computed_hash or computed_hash != expected_hash:
+        raise HTTPException(status_code=503, detail="Difficulty editor aggregate hash does not match configuration")
+    return frozenset(declared - {"build-manifest.json"})
+
+
+def _extract_difficulty_editor(archive: Path, expected_hash: str) -> tuple[Path, frozenset[str]]:
+    try:
+        stat = archive.stat()
+    except OSError as exc:
+        raise HTTPException(status_code=503, detail="Difficulty editor archive is unavailable") from exc
+    if not stat_lib.S_ISREG(stat.st_mode):
+        raise HTTPException(status_code=503, detail="Difficulty editor archive is unavailable")
+    cache_key = (str(archive), expected_hash, stat.st_mtime_ns, stat.st_size)
+    cached = _difficulty_editor_root_cache.get(cache_key)
+    if cached is not None and cached[0].is_dir():
+        return cached
+    with _difficulty_editor_extract_lock:
+        cached = _difficulty_editor_root_cache.get(cache_key)
+        if cached is not None and cached[0].is_dir():
+            return cached
+        artifact = _extract_difficulty_editor_locked(archive, expected_hash)
+        _difficulty_editor_root_cache.clear()
+        _difficulty_editor_root_cache[cache_key] = artifact
+        return artifact
+
+
+def _extract_difficulty_editor_locked(archive: Path, expected_hash: str) -> tuple[Path, frozenset[str]]:
+    target = config.games_dir() / "marble-run" / "difficulty-editor" / "artifacts" / expected_hash
+    if target.is_dir():
+        return target, _editor_manifest(target, expected_hash)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = Path(tempfile.mkdtemp(prefix=f".{expected_hash[:12]}-", dir=target.parent))
+    total_bytes = 0
+    try:
+        try:
+            archive_file = tarfile.open(archive, mode="r:*")
+        except (OSError, tarfile.TarError) as exc:
+            raise HTTPException(status_code=503, detail="Difficulty editor archive is malformed") from exc
+        with archive_file:
+            members = archive_file.getmembers()
+            if len(members) > MAX_GAME_WEB_FILES + 100:
+                raise HTTPException(status_code=503, detail="Difficulty editor archive contains too many entries")
+            for member in members:
+                relative = PurePosixPath(member.name)
+                if relative.is_absolute() or ".." in relative.parts or not (member.isdir() or member.isfile()):
+                    raise HTTPException(status_code=503, detail="Difficulty editor archive contains an unsafe entry")
+                destination = temporary.joinpath(*relative.parts)
+                if member.isdir():
+                    destination.mkdir(parents=True, exist_ok=True)
+                    continue
+                total_bytes += member.size
+                if total_bytes > MAX_GAME_WEB_UNCOMPRESSED_BYTES:
+                    raise HTTPException(status_code=503, detail="Difficulty editor archive is too large")
+                source = archive_file.extractfile(member)
+                if source is None:
+                    raise HTTPException(status_code=503, detail="Difficulty editor archive entry is unreadable")
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                with source, destination.open("wb") as output:
+                    shutil.copyfileobj(source, output)
+        allowed = _editor_manifest(temporary, expected_hash)
+        temporary.replace(target)
+    except Exception:
+        shutil.rmtree(temporary, ignore_errors=True)
+        raise
+    return target, allowed
+
+
+def _difficulty_editor_artifact() -> tuple[Path, frozenset[str]]:
+    archive, content_hash = _difficulty_editor_config()
+    return _extract_difficulty_editor(archive, content_hash)
+
+
+def _difficulty_editor_capability(content_hash: str) -> str:
+    token = config.load_config().get("token")
+    if not isinstance(token, str) or not token:
+        raise HTTPException(status_code=503, detail="Portal token is unavailable")
+    return hmac.new(token.encode(), f"marble-run-difficulty\0{content_hash}".encode(), hashlib.sha256).hexdigest()
+
+
+@app.get("/tools/marble-run-difficulty")
+def marble_run_difficulty_editor_slash(request: Request):
+    if not web_token_ok(request):
+        return _login_redirect(request)
+    return RedirectResponse(url="/tools/marble-run-difficulty/", status_code=307)
+
+
+@app.get("/tools/marble-run-difficulty/{asset_path:path}")
+def marble_run_difficulty_editor_index(request: Request, asset_path: str):
+    if not web_token_ok(request):
+        return _login_redirect(request)
+    if asset_path:
+        raise HTTPException(status_code=404, detail="editor route not found")
+    _, content_hash = _difficulty_editor_config()
+    capability = _difficulty_editor_capability(content_hash)
+    source = f"/tool-artifacts/marble-run-difficulty/{capability}/{content_hash}/index.html"
+    response = HTMLResponse(
+        '<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">'
+        '<style>html,body,iframe{width:100%;height:100%;margin:0;border:0;display:block}</style></head>'
+        f'<body><iframe title="Marble Run difficulty editor" sandbox="allow-scripts allow-downloads" src="{source}"></iframe></body></html>'
+    )
+    response.headers["Cache-Control"] = "no-cache"
+    _maybe_set_cookie(response, request)
+    return response
+
+
+@app.get("/tool-artifacts/marble-run-difficulty/{capability}/{content_hash}/{asset_path:path}")
+def marble_run_difficulty_editor_asset(capability: str, content_hash: str, asset_path: str):
+    _, configured_hash = _difficulty_editor_config()
+    if content_hash != configured_hash or not hmac.compare_digest(capability, _difficulty_editor_capability(content_hash)):
+        raise HTTPException(status_code=404, detail="editor artifact not found")
+    relative = asset_path or "index.html"
+    relative_path = PurePosixPath(relative)
+    if relative_path.is_absolute() or ".." in relative_path.parts:
+        raise HTTPException(status_code=404, detail="editor asset not found")
+    root, allowed = _difficulty_editor_artifact()
+    if relative != "index.html" and relative not in allowed:
+        raise HTTPException(status_code=404, detail="editor asset not found")
+    path = _safe_static_file(root, relative)
+    response = FileResponse(path)
+    response.headers["Cache-Control"] = "no-cache" if relative == "index.html" else "public, max-age=31536000, immutable"
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    if relative == "index.html":
+        response.headers["Content-Security-Policy"] = "sandbox allow-scripts allow-downloads; default-src 'self' data: blob:; connect-src 'none'; form-action 'none'; object-src 'none'; base-uri 'none'"
+    return response
 
 
 @app.get("/login", response_class=HTMLResponse)
