@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import re
 import tarfile
 
 import pytest
@@ -54,6 +55,12 @@ def _configure(data_dir, relative: str, content_hash: str):
     server._difficulty_editor_root_cache.clear()
 
 
+def _artifact_url(shell: str, relative: str) -> str:
+    source = re.search(r'src="([^"]+/index\.html)"', shell)
+    assert source is not None
+    return source.group(1).removesuffix("index.html") + relative
+
+
 def test_gateway_requires_portal_login(client):
     response = client.get("/tools/marble-run-difficulty/", follow_redirects=False)
     assert response.status_code == 303
@@ -64,12 +71,17 @@ def test_gateway_serves_exact_verified_artifact(client, data_dir, token):
     relative, content_hash = _write_artifact(data_dir[0])
     _configure(data_dir, relative, content_hash)
 
-    index = client.get("/tools/marble-run-difficulty/", cookies={"gallery_token": token})
-    asset = client.get("/tools/marble-run-difficulty/assets/app.js", cookies={"gallery_token": token})
+    shell = client.get("/tools/marble-run-difficulty/", cookies={"gallery_token": token})
+    index = client.get(_artifact_url(shell.text, "index.html"))
+    asset = client.get(_artifact_url(shell.text, "assets/app.js"))
 
+    assert shell.status_code == 200
+    assert 'sandbox="allow-scripts allow-downloads"' in shell.text
+    assert shell.headers["cache-control"] == "no-cache"
     assert index.status_code == 200
     assert './assets/app.js' in index.text
     assert index.headers["cache-control"] == "no-cache"
+    assert "sandbox allow-scripts allow-downloads" in index.headers["content-security-policy"]
     assert asset.status_code == 200
     assert 'dataset.editor = "ready"' in asset.text
     assert asset.headers["cache-control"] == "public, max-age=31536000, immutable"
@@ -91,7 +103,8 @@ def test_gateway_fails_closed_for_invalid_artifact(client, data_dir, token, fail
         relative = "marble-run/difficulty-editor/archives/missing.tar.gz"
     _configure(data_dir, relative, content_hash)
 
-    response = client.get("/tools/marble-run-difficulty/", cookies={"gallery_token": token})
+    shell = client.get("/tools/marble-run-difficulty/", cookies={"gallery_token": token})
+    response = shell if shell.status_code != 200 else client.get(_artifact_url(shell.text, "index.html"))
 
     assert response.status_code == 503
 
@@ -100,17 +113,21 @@ def test_gateway_rejects_traversal_and_unknown_assets(client, data_dir, token):
     relative, content_hash = _write_artifact(data_dir[0])
     _configure(data_dir, relative, content_hash)
 
-    escaped = client.get(
-        "/tools/marble-run-difficulty/assets/%2e%2e/build-manifest.json",
-        cookies={"gallery_token": token},
-    )
-    unknown = client.get(
-        "/tools/marble-run-difficulty/assets/missing.js",
-        cookies={"gallery_token": token},
-    )
+    shell = client.get("/tools/marble-run-difficulty/", cookies={"gallery_token": token})
+    escaped = client.get(_artifact_url(shell.text, "assets/%2e%2e/build-manifest.json"))
+    unknown = client.get(_artifact_url(shell.text, "assets/missing.js"))
 
     assert escaped.status_code == 404
     assert unknown.status_code == 404
+
+
+def test_artifact_capability_is_required(client, data_dir, token):
+    relative, content_hash = _write_artifact(data_dir[0])
+    _configure(data_dir, relative, content_hash)
+    shell = client.get("/tools/marble-run-difficulty/", cookies={"gallery_token": token})
+    valid = _artifact_url(shell.text, "assets/app.js")
+    invalid = valid.replace("/tool-artifacts/marble-run-difficulty/", "/tool-artifacts/marble-run-difficulty/invalid", 1)
+    assert client.get(invalid).status_code == 404
 
 
 def test_nav_only_exposes_configured_editor(client, data_dir, token):

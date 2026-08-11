@@ -263,7 +263,9 @@ def marble_run_difficulty_editor_enabled() -> bool:
     return (
         isinstance(value, dict)
         and isinstance(value.get("archive_path"), str)
+        and bool(value.get("archive_path"))
         and isinstance(value.get("content_hash"), str)
+        and re.fullmatch(r"[0-9a-f]{64}", value.get("content_hash")) is not None
     )
 
 
@@ -778,6 +780,13 @@ def _difficulty_editor_artifact() -> tuple[Path, frozenset[str]]:
     return _extract_difficulty_editor(archive, content_hash)
 
 
+def _difficulty_editor_capability(content_hash: str) -> str:
+    token = config.load_config().get("token")
+    if not isinstance(token, str) or not token:
+        raise HTTPException(status_code=503, detail="Portal token is unavailable")
+    return hmac.new(token.encode(), f"marble-run-difficulty\0{content_hash}".encode(), hashlib.sha256).hexdigest()
+
+
 @app.get("/tools/marble-run-difficulty")
 def marble_run_difficulty_editor_slash(request: Request):
     if not web_token_ok(request):
@@ -786,9 +795,29 @@ def marble_run_difficulty_editor_slash(request: Request):
 
 
 @app.get("/tools/marble-run-difficulty/{asset_path:path}")
-def marble_run_difficulty_editor_asset(request: Request, asset_path: str):
+def marble_run_difficulty_editor_index(request: Request, asset_path: str):
     if not web_token_ok(request):
         return _login_redirect(request)
+    if asset_path:
+        raise HTTPException(status_code=404, detail="editor route not found")
+    _, content_hash = _difficulty_editor_config()
+    capability = _difficulty_editor_capability(content_hash)
+    source = f"/tool-artifacts/marble-run-difficulty/{capability}/{content_hash}/index.html"
+    response = HTMLResponse(
+        '<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">'
+        '<style>html,body,iframe{width:100%;height:100%;margin:0;border:0;display:block}</style></head>'
+        f'<body><iframe title="Marble Run difficulty editor" sandbox="allow-scripts allow-downloads" src="{source}"></iframe></body></html>'
+    )
+    response.headers["Cache-Control"] = "no-cache"
+    _maybe_set_cookie(response, request)
+    return response
+
+
+@app.get("/tool-artifacts/marble-run-difficulty/{capability}/{content_hash}/{asset_path:path}")
+def marble_run_difficulty_editor_asset(capability: str, content_hash: str, asset_path: str):
+    _, configured_hash = _difficulty_editor_config()
+    if content_hash != configured_hash or not hmac.compare_digest(capability, _difficulty_editor_capability(content_hash)):
+        raise HTTPException(status_code=404, detail="editor artifact not found")
     relative = asset_path or "index.html"
     relative_path = PurePosixPath(relative)
     if relative_path.is_absolute() or ".." in relative_path.parts:
@@ -799,7 +828,9 @@ def marble_run_difficulty_editor_asset(request: Request, asset_path: str):
     path = _safe_static_file(root, relative)
     response = FileResponse(path)
     response.headers["Cache-Control"] = "no-cache" if relative == "index.html" else "public, max-age=31536000, immutable"
-    _maybe_set_cookie(response, request)
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    if relative == "index.html":
+        response.headers["Content-Security-Policy"] = "sandbox allow-scripts allow-downloads; default-src 'self' data: blob:; connect-src 'none'; form-action 'none'; object-src 'none'; base-uri 'none'"
     return response
 
 
