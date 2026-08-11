@@ -46,6 +46,10 @@ systemd user unit for a future Linux move lives at `deploy/gallery.service`
     "ui_root": "/absolute/path/to/fabrikav2/tools/ftd-level-editor/dist",
     "command": ["/absolute/path/to/ftd-editor-rehearsal"]
   },
+  "marble_run_difficulty_editor": {
+    "archive_path": "marble-run/difficulty-editor/archives/<content-hash>.tar.gz",
+    "content_hash": "<build-manifest contentHash>"
+  },
   "telegram_bot_token": null,
   "telegram_chat_id": null
 }
@@ -61,6 +65,13 @@ systemd user unit for a future Linux move lives at `deploy/gallery.service`
   cookies and tokens are never forwarded to the editor service. When
   `command` is present, Portal starts that loopback process on service startup
   and terminates it during a clean shutdown.
+- `marble_run_difficulty_editor` is optional. Its archive path is relative to
+  `~/.gallery/games/` and must contain the exact contents of the editor's
+  production `dist/` directory, including `build-manifest.json`. Portal checks
+  every declared asset digest and the configured aggregate content hash before
+  extracting to a hash-named immutable directory. Changing `content_hash` is
+  the explicit activation step; retaining the prior archive and hash provides
+  rollback. The authenticated route is `/tools/marble-run-difficulty/`.
 
 ### Doorbell notifications (optional)
 
