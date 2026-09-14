@@ -96,6 +96,7 @@ def init_config(force: bool = False) -> dict:
         "port": DEFAULT_PORT,
         "url": DEFAULT_URL,
         "max_upload_bytes": DEFAULT_MAX_UPLOAD_BYTES,
+        "public_viewing": False,
         "telegram_bot_token": None,
         "telegram_chat_id": None,
     }

@@ -62,6 +62,31 @@ systemd user unit for a future Linux move lives at `deploy/gallery.service`
   `command` is present, Portal starts that loopback process on service startup
   and terminates it during a clean shutdown.
 
+### Public artifact viewing (opt-in)
+
+Set `"public_viewing": true` (JSON boolean) in the service's `config.json` to
+allow anonymous browsing of the index, streams, requests, chains, journeys,
+game listings/downloads/videos, and uploaded media/reports. It defaults to
+`false`; missing, string, and numeric values do not enable it. The setting is
+read per request. This is global publication of existing and future artifacts,
+not a per-stream sharing permission. Audit uploaded content before enabling it;
+Portal cannot remove secrets a producer embedded in an artifact.
+
+All mutations, uploads, verdicts, and `/api` data endpoints still require their
+existing authentication (health remains public). `/agents`, `/agents/directory`,
+editor gateways, and remote-config panels remain private, including GETs.
+Stream agent messages and write controls are not shown to anonymous viewers.
+Existing public game-share/preview endpoints are unchanged when this flag is off.
+
+Anonymous interactive views retain their opaque script-enabled sandbox, but
+receive neither the server token nor a scoped verdict capability/fetch bridge.
+Operators can still log in using the existing passphrase/token flow and submit
+verdicts, including the existing request-scoped interactive-view capability.
+Report scripts stay blocked. Auth-dependent pages and media use `no-store` to
+avoid sharing operator responses through caches. Disabling the flag restores
+private artifact viewing; it does not revoke previously issued operator/scoped
+credentials or copies already downloaded.
+
 ### Doorbell notifications (optional)
 
 When a new request is created, the server pings you on Telegram: it POSTs
@@ -268,8 +293,8 @@ over the 200 MB soft cap return a warning but are not rejected solely for size.
 
 Phase 1 includes streams, report posts, stream pages, legacy decision requests
 in project streams, and before/after review. Phase 2 added `ask`, `pull`, and
-stream note boxes. Public/per-stream auth remains planned in
-`docs/portal-spec.md`.
+stream note boxes. Global public artifact viewing is opt-in (above); per-stream
+auth remains planned in `docs/portal-spec.md`.
 
 ### Interactive views (`--kind view`)
 

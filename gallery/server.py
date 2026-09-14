@@ -362,6 +362,22 @@ def web_token_ok(request: Request) -> bool:
     return bool(cookie_token and cookie_token == expected)
 
 
+def web_view_ok(request: Request) -> bool:
+    """Artifact browsing only. Never use this guard on writes or admin routes."""
+    return config.load_config().get("public_viewing") is True or web_token_ok(request)
+
+
+def _view_entry_url(request: Request, req_id: str, filename: str) -> str:
+    # Only operators receive the existing request-scoped write capability.
+    # Anonymous views use ordinary public media, without a verdict bridge.
+    if web_token_ok(request):
+        return _view_media_url(req_id, filename)
+    return _media_url(req_id, filename)
+
+
+templates.env.globals["operator_authenticated"] = web_token_ok
+
+
 def _view_capability(req_id: str) -> str:
     return hmac.new(
         _server_token().encode("utf-8"),
@@ -397,6 +413,9 @@ def _view_cors_headers() -> dict[str, str]:
 
 
 def _maybe_set_cookie(response, request: Request) -> None:
+    # Operator and anonymous representations must not share a cached response.
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Referrer-Policy"] = "no-referrer"
     qs_token = request.query_params.get("token")
     if qs_token and qs_token == _server_token():
         response.set_cookie(COOKIE_NAME, qs_token, httponly=True, samesite="lax", max_age=3600 * 24 * 365)
@@ -2026,11 +2045,15 @@ def get_view_media(req_id: str, capability: str, filename: str):
 
 @app.get("/media/{req_id}/{filename}")
 def get_media(request: Request, req_id: str, filename: str):
-    if not web_token_ok(request):
+    if not web_view_ok(request):
         raise HTTPException(status_code=401, detail="missing or invalid token")
     path = _media_file_path(req_id, filename)
     media_type, _ = mimetypes.guess_type(str(path))
-    headers = {"X-Content-Type-Options": "nosniff"}
+    headers = {
+        "X-Content-Type-Options": "nosniff",
+        "Cache-Control": "no-store",
+        "Referrer-Policy": "no-referrer",
+    }
     report_html_type = _report_html_media_type(req_id, filename, media_type)
     browser_safe_media = bool(
         media_type
@@ -2045,6 +2068,11 @@ def get_media(request: Request, req_id: str, filename: str):
             path, report_html_type, headers, _report_context_header_bytes(req_id)
         )
     if _view_html_media_type(req_id, filename):
+        if not web_token_ok(request):
+            headers["Content-Security-Policy"] = VIEW_HTML_CSP
+            return _html_with_context_header(
+                path, "text/html", headers, _view_context_header_bytes(req_id)
+            )
         response = RedirectResponse(url=_view_media_url(req_id, filename), status_code=303)
         _maybe_set_cookie(response, request)
         return response
@@ -2448,7 +2476,7 @@ def _list_stream_summaries() -> list[dict]:
 
 @app.get("/", response_class=HTMLResponse)
 def web_index(request: Request, q: str | None = None):
-    if not web_token_ok(request):
+    if not web_view_ok(request):
         return _login_redirect(request)
     open_requests = db.list_requests(status="open")
     decided = db.list_requests(status="decided", q=q)
@@ -2585,7 +2613,7 @@ def _game_page_context(slug: str) -> dict:
 
 @app.get("/games", response_class=HTMLResponse)
 def web_games(request: Request):
-    if not web_token_ok(request):
+    if not web_view_ok(request):
         return _login_redirect(request)
     response = templates.TemplateResponse(request, "games.html", {"games": db.list_games()})
     _maybe_set_cookie(response, request)
@@ -2718,7 +2746,7 @@ def _game_file_response(
 
 
 def _private_game_release_file(request: Request, slug: str, version: str, field: str, *, download: bool):
-    if not web_token_ok(request):
+    if not web_view_ok(request):
         return _login_redirect(request)
     path = _resolve_game_build_file(slug, version, field)
     return _game_file_response(path, public=False, download=download, fallback_media_type="application/octet-stream")
@@ -2782,7 +2810,7 @@ def public_watch_game_build(slug: str, version: str):
 
 @app.get("/s/{slug}", response_class=HTMLResponse)
 def web_stream_detail(request: Request, slug: str):
-    if not web_token_ok(request):
+    if not web_view_ok(request):
         return _login_redirect(request)
     _validate_slug(slug)
     stream = db.get_stream_with_posts(slug)
@@ -2796,7 +2824,7 @@ def web_stream_detail(request: Request, slug: str):
         {
             "stream": stream,
             "posts": [_stream_post_context(post, request_summaries) for post in posts],
-            "messages": _stream_message_context(stream),
+            "messages": _stream_message_context(stream) if web_token_ok(request) else {},
         },
     )
     response.headers["Referrer-Policy"] = "no-referrer"
@@ -2843,7 +2871,7 @@ async def web_stream_answer(request: Request, slug: str):
 
 @app.get("/r/{req_id}", response_class=HTMLResponse)
 def web_request_detail(request: Request, req_id: str):
-    if not web_token_ok(request):
+    if not web_view_ok(request):
         if _is_link_preview_crawler(request):
             r = db.get_request(req_id)
             if r is None:
@@ -2863,9 +2891,9 @@ def web_request_detail(request: Request, req_id: str):
     # Terminal views fall through to the Portal page so the lifecycle banner
     # (successor link / close reason) is reachable instead of the stale producer HTML.
     if view_entry is not None and r["status"] not in db.TERMINAL_STATUSES:
-        # A view owns the whole tab — no iframe box. Its URL carries only a
-        # request-scoped verdict capability, never Portal's global token.
-        response = RedirectResponse(url=_view_media_url(r["id"], view_entry), status_code=303)
+        # A view owns the whole tab. Operators receive a scoped verdict URL;
+        # anonymous viewers receive a plain media URL with no write authority.
+        response = RedirectResponse(url=_view_entry_url(request, r["id"], view_entry), status_code=303)
         _maybe_set_cookie(response, request)
         return response
     back = {"href": "/", "label": "Home"}
@@ -2883,7 +2911,7 @@ def web_request_detail(request: Request, req_id: str):
             "context_html": context_html,
             "stream_read_only": stream_read_only,
             "before_media": before_media,
-            "view_entry_url": _view_media_url(r["id"], view_entry) if view_entry else None,
+            "view_entry_url": _view_entry_url(request, r["id"], view_entry) if view_entry else None,
             "back": back,
             "feedback_html": _feedback_html(r),
             "og": _og_context(request, r),
@@ -3107,7 +3135,7 @@ def web_request_chain(request: Request, req_id: str):
     Any request id in the chain resolves to the same page, so links stay
     valid as new versions supersede old ones.
     """
-    if not web_token_ok(request):
+    if not web_view_ok(request):
         if _is_link_preview_crawler(request):
             try:
                 chain = db.request_chain(req_id)
@@ -3146,7 +3174,7 @@ def web_request_chain(request: Request, req_id: str):
             "chain": chain,
             "chain_idx": chain_idx,
             "view_entry_url": (
-                _view_media_url(r["id"], _view_entry_media_path(r))
+                _view_entry_url(request, r["id"], _view_entry_media_path(r))
                 if _view_entry_media_path(r)
                 else None
             ),
@@ -3258,7 +3286,7 @@ def _journey_step_context(step: dict, status_map: dict[str, dict]) -> dict:
 
 @app.get("/g/{slug}", response_class=HTMLResponse)
 def web_journey_detail(request: Request, slug: str):
-    if not web_token_ok(request):
+    if not web_view_ok(request):
         return _login_redirect(request)
     _validate_slug(slug)
     journey = db.get_journey(slug)
