@@ -58,9 +58,9 @@ def summarize(reports, game):
                 revenues.append(amount(source["revenue"]))
             else:
                 spend = amount(source["spend"])
-                revenue = amount(source["revenue"]) if source.get("revenue") is not None else None
-                rows.append({**source, "provider": report["provider"], "spend": spend, "revenue": revenue,
-                             "ratio": revenue / spend if revenue is not None and spend else None})
+                installs = amount(source["installs"]) if source.get("installs") is not None else None
+                rows.append({**source, "provider": report["provider"], "spend": spend, "installs": installs,
+                             "cpi": spend / installs if installs else None})
     # Reports are required even when a provider has zero delivery.
     names = {r["provider"] for r in reports}
     spend_ok &= {"Meta", "Google Ads"} <= names
@@ -69,13 +69,19 @@ def summarize(reports, game):
     spend = reported_spend if spend_ok else None
     revenue = sum(revenues, Decimal(0)) if revenue_ok else None
     paid = [r for r in rows if r["spend"] > 0]
-    measured = [r for r in paid if r["ratio"] is not None]
-    best = max(measured, key=lambda r: (r["ratio"], r["spend"], r["ad_id"])) if measured and len(measured) == len(paid) and spend_ok else None
+    installs_complete = spend_ok and all(r["installs"] is not None for r in paid)
+    total_installs = sum((r["installs"] for r in paid), Decimal(0)) if installs_complete else None
+    candidates = [r for r in paid if r["installs"] and r["cpi"]]
+    best = min(candidates, key=lambda r: (r["cpi"], -r["installs"], r["ad_id"])) if candidates and installs_complete and revenue is not None else None
+    revenue_per_install = revenue / total_installs if revenue is not None and total_installs else None
+    best_ratio = revenue_per_install / best["cpi"] if best else None
     return {"spend": spend, "reported_spend": reported_spend, "revenue": revenue,
             "ratio": revenue / spend if revenue is not None and spend else None,
-            "best": best, "best_ratio": best["ratio"] if best else None,
-            "best_projected_revenue": spend * best["ratio"] if best else None,
-            "attributed_spend": sum((r["spend"] for r in measured), Decimal(0)),
+            "best": best, "best_ratio": best_ratio, "best_cpi": best["cpi"] if best else None,
+            "best_projected_revenue": spend * best_ratio if best else None,
+            "best_projected_installs": spend / best["cpi"] if best else None,
+            "best_gain": spend * best_ratio - revenue if best else None,
+            "total_installs": total_installs, "revenue_per_install": revenue_per_install,
             "ads": sorted(rows, key=lambda r: (-r["spend"], r["ad_id"])), "issues": issues}
 
 
@@ -84,7 +90,7 @@ def load_reports(start, end):
 
     settings = config.load_config().get("money", {})
     # The identity/settings digest prevents reuse after account configuration changes.
-    key = hashlib.sha256(json.dumps(["money-v1", start, end, settings], sort_keys=True).encode()).hexdigest()
+    key = hashlib.sha256(json.dumps(["money-v2-cpi", start, end, settings], sort_keys=True).encode()).hexdigest()
     path = config.data_dir() / "money" / f"{key}.json"
     def read_cache():
         try:

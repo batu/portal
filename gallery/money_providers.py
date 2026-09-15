@@ -79,7 +79,7 @@ def meta(settings, start, end):
     info = request_json(root + "?fields=currency,timezone_name", token)
     if info["currency"] != "TRY" or info["timezone_name"] not in {"Turkey", "Europe/Istanbul"}:
         raise ValueError("Incompatible Meta currency/time zone")
-    params = {"fields": "ad_id,ad_name,adset_id,spend,action_values", "level": "ad",
+    params = {"fields": "ad_id,ad_name,adset_id,spend,actions", "level": "ad",
               "time_range": json.dumps({"since": start, "until": end}), "limit": "500",
               "action_report_time": "impression", "action_attribution_windows": '["7d_click","1d_view"]'}
     rows, identities, cursors = [], {}, set()
@@ -106,12 +106,12 @@ def meta(settings, start, end):
             adset = row["adset_id"]
             game = identities[adset]
             if game:
-                # Purchase value and generic conversion value are NOT ad revenue.
-                values = [v["value"] for v in row.get("action_values", [])
-                          if v["action_type"] == "app_custom_event.fb_mobile_ad_impression"]
-                revenue = str(sum((amount(v) for v in values), amount(0))) if values else None
+                # omni_app_install overlaps mobile_app_install; never add both.
+                values = [v["value"] for v in row.get("actions", [])
+                          if v["action_type"] == "mobile_app_install"]
+                installs = str(sum((amount(v) for v in values), amount(0)))
                 rows.append({"game": game, "ad_id": row["ad_id"], "name": row["ad_name"],
-                             "spend": str(amount(row["spend"])), "revenue": revenue})
+                             "spend": str(amount(row["spend"])), "installs": installs})
         paging = data.get("paging", {})
         if not paging.get("next"):
             return {"currency": "TRY", "timezone": "Europe/Istanbul", "rows": rows}
@@ -140,26 +140,56 @@ def google_ads(settings, start, end):
         account = info["results"][0]["customer"]
         if account["currencyCode"] != "TRY" or account["timeZone"] != "Europe/Istanbul" or account.get("manager"):
             raise ValueError("Incompatible Google Ads account")
-        query = ("SELECT campaign.id, campaign.name, campaign.app_campaign_setting.app_id, metrics.cost_micros "
-                 f"FROM campaign WHERE segments.date BETWEEN '{start}' AND '{end}' AND metrics.cost_micros > 0")
-        body = {"query": query}
-        for _ in range(20):
-            data = request_json(url, token, body, headers)
-            for row in data.get("results", []):
-                campaign = row["campaign"]
-                app_id = campaign.get("appCampaignSetting", {}).get("appId")
-                if not app_id:
-                    raise ValueError("Cannot resolve campaign app identity")
-                game = STORE_GAMES.get(app_id)
-                if game:
-                    rows.append({"game": game, "ad_id": f'{customer}:{campaign["id"]}',
-                                 "name": campaign["name"] + " (campaign)",
-                                 "spend": str(amount(row["metrics"]["costMicros"]) / 1_000_000), "revenue": None})
-            if not data.get("nextPageToken"):
-                break
-            body["pageToken"] = data["nextPageToken"]
-        else:
+        def search(query):
+            body = {"query": query}
+            for _ in range(20):
+                data = request_json(url, token, body, headers)
+                yield from data.get("results", [])
+                if not data.get("nextPageToken"):
+                    return
+                body["pageToken"] = data["nextPageToken"]
             raise ValueError("Incomplete Google Ads pagination")
+
+        window = f"segments.date BETWEEN '{start}' AND '{end}'"
+        campaigns = {}
+        for row in search("SELECT campaign.id, campaign.name, campaign.app_campaign_setting.app_id, metrics.cost_micros "
+                          f"FROM campaign WHERE {window} AND metrics.cost_micros > 0"):
+            campaign = row["campaign"]
+            app_id = campaign.get("appCampaignSetting", {}).get("appId")
+            if not app_id:
+                raise ValueError("Cannot resolve campaign app identity")
+            game = STORE_GAMES.get(app_id)
+            if game:
+                campaigns[campaign["id"]] = {"game": game, "name": campaign["name"],
+                                              "micros": amount(row["metrics"]["costMicros"])}
+        if not campaigns:
+            continue
+        if any(not re.fullmatch(r"\d+", key) for key in campaigns):
+            raise ValueError("Invalid campaign identity")
+        campaign_filter = "campaign.id IN (" + ",".join(campaigns) + ")"
+        ads = search("SELECT campaign.id, ad_group_ad.resource_name, ad_group_ad.ad.id, ad_group_ad.ad.name, metrics.cost_micros "
+                     f"FROM ad_group_ad WHERE {window} AND {campaign_filter} AND metrics.cost_micros > 0")
+        conversions = search("SELECT ad_group_ad.resource_name, segments.conversion_action_category, metrics.conversions "
+                             f"FROM ad_group_ad WHERE {window} AND {campaign_filter} AND segments.conversion_action_category = 'DOWNLOAD'")
+        installs = {}
+        for row in conversions:
+            identity = row["adGroupAd"]["resourceName"]
+            installs[identity] = installs.get(identity, amount(0)) + amount(row["metrics"].get("conversions", "0"))
+        seen_cost = {identity: amount(0) for identity in campaigns}
+        for row in ads:
+            campaign_id = row["campaign"]["id"]
+            if campaign_id not in campaigns:
+                continue
+            campaign = campaigns[campaign_id]
+            identity = row["adGroupAd"]["resourceName"]
+            ad = row["adGroupAd"]["ad"]
+            micros = amount(row["metrics"]["costMicros"])
+            seen_cost[campaign_id] += micros
+            rows.append({"game": campaign["game"], "ad_id": identity,
+                         "name": ad.get("name") or f'{campaign["name"]} · ad {ad["id"]}',
+                         "spend": str(micros / 1_000_000), "installs": str(installs.get(identity, amount(0)))})
+        if any(seen_cost[key] != value["micros"] for key, value in campaigns.items()):
+            raise ValueError("Google ad spend does not reconcile to campaign totals")
     return {"currency": "TRY", "timezone": "Europe/Istanbul", "rows": rows}
 
 

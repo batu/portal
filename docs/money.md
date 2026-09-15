@@ -4,11 +4,12 @@
 
 ## Metrics
 
-- Spend is Meta ad spend plus Google Ads App campaign cost, using configured accounts only.
+- Spend is Meta ad spend plus Google Ads ad cost, reconciled to App campaign totals, using configured accounts only.
 - Revenue is AdMob mediation `ESTIMATED_EARNINGS`, requested in TRY and converted from micros with Decimal arithmetic. In-app purchases are excluded.
 - Revenue/spend is a calendar-period comparison, not cohort ROAS: revenue includes organic and previously acquired users.
-- The best-ad ratio is the maximum attributed ad revenue/spend among paid ads. It requires attribution for every paid row. Meta uses impression-time reporting with a fixed 7-day click / 1-day view window so revenue is credited to the delivery dates that generated the spend. Recent delivery may not have matured. Projected revenue is that ratio multiplied by the selected total spend. This hindsight estimate assumes constant returns under scaling and cannot establish a causal cost of exploration.
-- Missing ad revenue is not zero. Only Meta's explicit `app_custom_event.fb_mobile_ad_impression` action value is accepted as attributed ad revenue; generic purchase/conversion values are excluded. Google campaign costs do not manufacture ad-level attribution.
+- The best-ad estimate replays the full selected budget at the lowest observed positive-spend CPI, assuming equal revenue per install across the selected games and ads. Revenue per install = total period ad revenue / recorded paid installs. Projected installs = total spend / lowest CPI. Projected revenue = projected installs × revenue per install. Projected revenue/spend = revenue per install / lowest CPI. The panel also shows the gain over observed revenue.
+- Meta uses `mobile_app_install` actions with impression-time reporting and a fixed 7-day click / 1-day view window. `omni_app_install` overlaps and is not added again. Google uses ad-level `metrics.conversions` filtered to the DOWNLOAD conversion category; modeled fractional conversions are preserved. Missing actions in a successful report mean zero *recorded* installs. A missing install measurement or failed provider prevents the estimate. Zero-install ads remain in spend but cannot win; equal CPI prefers the larger sample.
+- Period earnings include organic and earlier users, while paid installs may be under-attributed. Their quotient is an optimistic proxy, not measured lifetime revenue per acquired user. Different providers' attribution methods and recent cohorts are not fully comparable. The replay assumes unchanged CPI and monetization at higher spend; hindsight selection and small samples prevent causal claims about exploration cost.
 
 Missing providers, incomplete pagination, invalid values, incompatible currencies/time zones, and unresolved identities prevent complete totals. Provider failures expose redacted status only. Valid empty provider results mean zero delivery. Historical Dog-to-Bird AdMob identity contamination is disclosed for per-game reporting.
 
@@ -55,4 +56,4 @@ Snapshots live in `GALLERY_DATA_DIR/money`, keyed by date window and configurati
 uv run --extra dev pytest tests/test_money.py tests/test_money_providers.py -q
 ```
 
-Before deployment, use a separate `GALLERY_DATA_DIR` and loopback uvicorn instance to read the selected provider reports and inspect `/money` in the browser. Compare individual-game and combined totals for the same dates. Confirm account coverage, the unavailable-attribution state, and that anonymous visitors reach login even when public artifact viewing is enabled. Installing runtime configuration or restarting the production Portal service requires separate deployment authorization.
+Before deployment, use a separate `GALLERY_DATA_DIR` and loopback uvicorn instance to read the selected provider reports and inspect `/money` in the browser. Compare individual-game and combined totals for the same dates. Confirm account coverage, the CPI replay and its assumptions, missing-provider behavior, and that anonymous visitors reach login even when public artifact viewing is enabled. Installing runtime configuration or restarting the production Portal service requires separate deployment authorization.

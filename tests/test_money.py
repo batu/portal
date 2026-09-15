@@ -9,8 +9,8 @@ def reports():
     return [
         {"provider": "Meta", "kind": "spend", "status": "ok", "currency": "TRY",
          "timezone": "Europe/Istanbul", "rows": [
-             {"game": "find-the-bird", "ad_id": "1", "name": "Bird A", "spend": "100", "revenue": "20"},
-             {"game": "find-the-dog", "ad_id": "2", "name": "Dog B", "spend": "300", "revenue": "30"}]},
+             {"game": "find-the-bird", "ad_id": "1", "name": "Bird A", "spend": "100", "installs": "10"},
+             {"game": "find-the-dog", "ad_id": "2", "name": "Dog B", "spend": "300", "installs": "10"}]},
         {"provider": "Google Ads", "kind": "spend", "status": "ok", "currency": "TRY",
          "timezone": "Europe/Istanbul", "rows": []},
         {"provider": "AdMob", "kind": "revenue", "status": "ok", "currency": "TRY",
@@ -26,8 +26,11 @@ def test_weighted_totals_and_best_ad_counterfactual():
     assert result["revenue"] == Decimal("60")
     assert result["ratio"] == Decimal("0.15")
     assert result["best"]["name"] == "Bird A"
-    assert result["best_ratio"] == Decimal("0.2")
-    assert result["best_projected_revenue"] == Decimal("80")
+    assert result["total_installs"] == 20
+    assert result["revenue_per_install"] == 3
+    assert result["best_cpi"] == 10
+    assert result["best_ratio"] == Decimal("0.3")
+    assert result["best_projected_revenue"] == Decimal("120")
 
 
 def test_filter_before_totalling_or_selecting_winner():
@@ -37,13 +40,48 @@ def test_filter_before_totalling_or_selecting_winner():
     assert result["best"]["name"] == "Dog B"
 
 
-def test_missing_attribution_is_not_zero_or_a_winner():
+def test_missing_install_measurement_blocks_estimate():
     data = reports()
-    data[0]["rows"][0]["revenue"] = None
+    data[0]["rows"][0]["installs"] = None
     result = money.summarize(data, "all")
     assert result["ratio"] == Decimal("0.15")
     assert result["best_ratio"] is None
-    assert result["attributed_spend"] == 300
+    assert result["total_installs"] is None
+
+
+def test_zero_install_ads_count_toward_budget_but_cannot_win():
+    data = reports()
+    data[0]["rows"][0]["installs"] = "0"
+    result = money.summarize(data, "all")
+    assert result["spend"] == 400
+    assert result["best"]["name"] == "Dog B"
+    assert result["best_cpi"] == 30
+    assert result["best_ratio"] == Decimal("0.2")
+
+
+@pytest.mark.parametrize("installs", ["100", None])
+def test_zero_spend_rows_do_not_dilute_or_block_paid_install_baseline(installs):
+    data = reports()
+    data[0]["rows"].append({"game": "find-the-bird", "ad_id": "free", "name": "Zero spend", "spend": "0", "installs": installs})
+    result = money.summarize(data, "all")
+    assert result["total_installs"] == 20
+    assert result["best_ratio"] == Decimal("0.3")
+    assert result["best_projected_installs"] == 40
+    assert result["best_gain"] == 60
+
+
+def test_zero_revenue_is_valid_but_missing_revenue_blocks_estimate():
+    data = reports()
+    data[2]["rows"] = []
+    assert money.summarize(data, "all")["best_ratio"] == 0
+    data[2]["status"] = "unavailable"
+    assert money.summarize(data, "all")["best_ratio"] is None
+
+
+def test_equal_cpi_prefers_larger_observed_sample():
+    data = reports()
+    data[0]["rows"][1]["installs"] = "30"
+    assert money.summarize(data, "all")["best"]["name"] == "Dog B"
 
 
 @pytest.mark.parametrize("failure", ["unavailable", "not_configured"])
@@ -92,7 +130,7 @@ def test_private_route_even_with_public_viewing(client, token, monkeypatch):
     assert page.headers["cache-control"] == "no-store"
     assert "400.00" in page.text
     assert "0.150×" in page.text
-    assert "Hindsight estimate" in page.text
+    assert "CPI-based estimate" in page.text
     assert token not in page.text
 
 

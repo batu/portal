@@ -5,7 +5,7 @@ import pytest
 from gallery import config, money, money_providers as providers
 
 
-def test_meta_uses_promoted_identity_and_only_ad_revenue(monkeypatch):
+def test_meta_install_actions_do_not_double_count_omni_alias(monkeypatch):
     monkeypatch.setattr(providers, "secret", lambda path: "fixture")
     calls = []
     def request(url, token, body=None, **kwargs):
@@ -21,14 +21,14 @@ def test_meta_uses_promoted_identity_and_only_ad_revenue(monkeypatch):
         assert "action_attribution_windows=" in url
         row = {"ad_id": "1", "ad_name": "Arbitrary title", "adset_id": "10", "spend": "12.50"}
         if "after=" not in url:
-            return {"data": [{**row, "action_values": [{"action_type": "purchase", "value": "999"}]}],
+            return {"data": [{**row, "actions": [{"action_type": "purchase", "value": "999"}]}],
                     "paging": {"next": "https://untrusted.invalid/?access_token=never-follow", "cursors": {"after": "next"}}}
-        return {"data": [{**row, "ad_id": "2", "action_values": [{"action_type": "app_custom_event.fb_mobile_ad_impression", "value": "1.25"}]}]}
+        return {"data": [{**row, "ad_id": "2", "actions": [{"action_type": "mobile_app_install", "value": "3"}, {"action_type": "omni_app_install", "value": "3"}]}]}
     monkeypatch.setattr(providers, "request_json", request)
     result = providers.meta({"token_file": "unused", "account_id": "123"}, "2026-09-01", "2026-09-14")
     assert result["rows"][0]["game"] == "find-the-bird"
-    assert result["rows"][0]["revenue"] is None
-    assert result["rows"][1]["revenue"] == "1.25"
+    assert result["rows"][0]["installs"] == "0"
+    assert result["rows"][1]["installs"] == "3"
     assert all(url.startswith("https://graph.facebook.com/") for url in calls)
     assert calls.count("https://graph.facebook.com/v23.0/") == 1
 
@@ -39,13 +39,18 @@ def test_google_spend_conversion_and_other_games_excluded(monkeypatch):
     def request(url, token, body, headers):
         if "FROM customer" in body["query"]:
             return {"results": [{"customer": {"currencyCode": "TRY", "timeZone": "Europe/Istanbul", "manager": False}}]}
+        if "FROM ad_group_ad" in body["query"]:
+            if "metrics.conversions" in body["query"]:
+                assert "segments.conversion_action_category = 'DOWNLOAD'" in body["query"]
+                return {"results": [{"adGroupAd": {"resourceName": "customers/123/adGroupAds/10~20"}, "metrics": {"conversions": "2.5"}}]}
+            return {"results": [{"campaign": {"id": "10"}, "adGroupAd": {"resourceName": "customers/123/adGroupAds/10~20", "ad": {"id": "20", "name": "App ad"}}, "metrics": {"costMicros": "12345678"}}]}
         return {"results": [{"campaign": {"id": "10", "name": "App campaign", "appCampaignSetting": {"appId": "6796698146"}}, "metrics": {"costMicros": "12345678"}},
                             {"campaign": {"id": "11", "name": "Other", "appCampaignSetting": {"appId": "123"}}, "metrics": {"costMicros": "999999999"}}]}
     monkeypatch.setattr(providers, "request_json", request)
     result = providers.google_ads({"developer_token_file": "unused", "customer_ids": ["123"]}, "2026-09-01", "2026-09-14")
     assert len(result["rows"]) == 1
     assert result["rows"][0]["spend"] == "12.345678"
-    assert result["rows"][0]["revenue"] is None
+    assert result["rows"][0]["installs"] == "2.5"
 
 
 @pytest.mark.parametrize("truncated", [False, True])
