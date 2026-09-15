@@ -29,7 +29,7 @@ from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
-from . import agents, config, db, notify, remote_config
+from . import agents, config, db, money, notify, remote_config
 
 log = logging.getLogger("gallery.server")
 
@@ -656,6 +656,28 @@ async def web_login_submit(request: Request, password: str = Form(""), next: str
         {"error": "Wrong passphrase.", "next_path": _safe_next_path(next)},
         status_code=401,
     )
+
+
+# --- money (authenticated) ---
+
+
+@app.get("/money", response_class=HTMLResponse)
+def web_money(request: Request, start: str | None = None, end: str | None = None, game: str = "all"):
+    if not web_token_ok(request):
+        return _login_redirect(request)
+    filter_error = None
+    try:
+        start, end, game = money.filters(start, end, game)
+    except ValueError as exc:
+        filter_error = str(exc)
+    reports = money.load_reports(start, end) if not filter_error else []
+    response = templates.TemplateResponse(request, "money.html", {
+        "start": start, "end": end, "game": game, "games": money.GAMES,
+        "reports": reports, "money": money.summarize(reports, game), "filter_error": filter_error,
+    }, status_code=400 if filter_error else 200)
+    response.headers["Cache-Control"] = "no-store"
+    _maybe_set_cookie(response, request)
+    return response
 
 
 # --- health (unauthenticated) ---

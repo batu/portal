@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Money — Portal{% endblock %}
+{% block main_class %}wide money-page{% endblock %}
+{% macro cash(value) %}{% if value is not none %}{{ '{:,.2f}'.format(value) }} <small>TRY</small>{% else %}<span class="money-unavailable">Unavailable</span>{% endif %}{% endmacro %}
+{% macro ratio(value) %}{% if value is not none %}{{ '{:.3f}'.format(value) }}×{% else %}<span class="money-unavailable">Unavailable</span>{% endif %}{% endmacro %}
+{% block content %}
+<header class="money-heading">
+  <p class="eyebrow">Find the Bird + Find the Dog</p>
+  <h1>Money</h1>
+  <p>What we spent. What the games earned. What the best ad could have returned.</p>
+</header>
+<form class="money-filters" action="/money" method="get">
+  <label>Game<select name="game"><option value="all" {% if game == 'all' %}selected{% endif %}>Both games</option>{% for key, name in games.items() %}<option value="{{ key }}" {% if game == key %}selected{% endif %}>{{ name }}</option>{% endfor %}</select></label>
+  <label>From<input name="start" type="date" value="{{ start }}" required></label>
+  <label>Through<input name="end" type="date" value="{{ end }}" required></label>
+  <button type="submit">Apply</button>
+</form>
+{% if filter_error %}<p class="money-notice" role="alert">{{ filter_error }}</p>{% else %}
+<p class="money-period">{{ start }} — {{ end }} · Inclusive dates · Europe/Istanbul · TRY</p>
+{% if game != 'all' %}<p class="money-notice">Per-game revenue follows AdMob’s app identity. Historical Dog builds reported earnings under Bird; this split may include those earnings.</p>{% endif %}
+{% if money.issues %}<div class="money-notice" role="status"><strong>Reporting is incomplete</strong>{% for issue in money.issues %}<p>{{ issue }}</p>{% endfor %}</div>{% endif %}
+<section class="money-metrics" aria-label="Money overview">
+  <article><h2>Total ad spend</h2><p class="money-value">{{ cash(money.spend) }}</p><p class="money-caption">Meta + Google Ads</p>{% if money.spend is none and money.reported_spend %}<p class="money-caption">Reported portion: {{ cash(money.reported_spend) }}</p>{% endif %}</article>
+  <article><h2>Total ad revenue</h2><p class="money-value">{{ cash(money.revenue) }}</p><p class="money-caption">AdMob estimated earnings</p></article>
+  <article><h2>Revenue / spend</h2><p class="money-value">{{ ratio(money.ratio) }}</p><p class="money-caption">{% if money.ratio is not none %}{{ '{:.1f}'.format(money.ratio * 100) }}% of spend recovered{% elif money.spend == 0 %}No spend in this period{% else %}Needs complete spend and revenue{% endif %}</p></article>
+</section>
+<section class="money-best" aria-labelledby="best-title">
+  <div><p class="eyebrow">Exploration → exploitation</p><h2 id="best-title">All spend on the best ad</h2><p class="money-caption">CPI-based estimate · Equal revenue per install</p></div>
+  <div class="money-best-result"><p class="money-value">{{ ratio(money.best_ratio) }}</p>{% if money.best %}<p>{{ money.best.name }}</p><p>Projected revenue: {{ cash(money.best_projected_revenue) }}</p><p>~{{ '{:,.0f}'.format(money.best_projected_installs) }} installs · {{ cash(money.best_gain) }} more revenue</p>{% endif %}</div>
+  {% if money.best %}<p class="money-explanation">Lowest CPI: {{ cash(money.best_cpi) }} from {{ '{:g}'.format(money.best.installs) }} recorded installs. Baseline: {{ cash(money.revenue_per_install) }} revenue per install across {{ '{:g}'.format(money.total_installs) }} recorded paid installs. Estimated ratio = revenue per install ÷ lowest CPI.</p>
+  <p class="money-explanation">Assumes equal revenue per install and unchanged CPI at the full budget. Period earnings include organic and earlier users, while install tracking may be incomplete; this can overstate returns. The winner is selected in hindsight, and small samples can be noisy.</p>
+  {% else %}<p class="money-explanation">Needs complete spend and revenue reports, install reporting for every paid ad, and at least one recorded install. Ads with zero recorded installs count toward spend but cannot win.</p>{% endif %}
+</section>
+<details class="money-details"><summary>How these numbers work</summary>
+  <p>Revenue / spend compares earnings and acquisition spend recorded during the same dates. Revenue includes organic users and users acquired earlier; it is not cohort ROAS. 1.000× means revenue equals spend.</p>
+  <p>The best-ad estimate uses period ad revenue divided by recorded paid installs, then divides by the lowest observed cost per install (CPI). It assumes the same revenue per install across the selected games and ads. Meta uses recorded mobile app installs on delivery dates with a 7-day click / 1-day view window. Google uses ad-level download conversions. Attribution methods differ, and recent delivery may not have matured. Missing install actions mean no installs recorded, not proof that nobody installed.</p>
+  <p>Historical Dog builds used Bird’s AdMob identity. Both-game revenue still includes those earnings once, but the per-game split follows the provider app identity and may be contaminated.</p>
+  <p>Coverage: configured Meta and Google Ads accounts, and AdMob mediation earnings for these two games. In-app purchases and other business costs are excluded. Provider earnings are estimates and may be revised. Reports refresh on the next visit after 15 minutes.</p>
+</details>
+<section class="money-sources" aria-label="Reporting sources"><h2>Sources</h2>{% for report in reports %}<div><strong>{{ report.provider }}</strong><span>{{ 'Connected' if report.status == 'ok' else 'Unavailable' }}</span><span>{% if report.observed_at %}Fetched {{ report.observed_at[:19] }} UTC{% else %}No report{% endif %}</span></div>{% endfor %}</section>
+{% if money.ads %}<details class="money-details"><summary>Spend breakdown · {{ money.ads|length }} ads</summary><div class="money-table-wrap"><table><thead><tr><th>Ad</th><th>Game</th><th>Source</th><th>Spend (TRY)</th><th>Recorded installs</th><th>CPI (TRY)</th></tr></thead><tbody>{% for ad in money.ads %}<tr><td>{{ ad.name }}</td><td>{{ games[ad.game] }}</td><td>{{ ad.provider }}</td><td>{{ '{:,.2f}'.format(ad.spend) }}</td><td>{{ '{:g}'.format(ad.installs) if ad.installs is not none else 'Unavailable' }}</td><td>{{ '{:,.2f}'.format(ad.cpi) if ad.cpi is not none else '—' }}</td></tr>{% endfor %}</tbody></table></div></details>{% endif %}
+{% endif %}
+{% endblock %}
