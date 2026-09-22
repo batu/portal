@@ -46,3 +46,14 @@ One append-only attempt to submit a Targeted Agent Message, recording when it oc
 
 ### View Capability
 A request-scoped credential granted to active producer HTML for only its owning Request's declared media and Verdict endpoint. The view remains an opaque origin; the capability cannot authenticate unrelated Portal surfaces such as Agents.
+
+## Game releases
+
+### Release Approval Manifest
+The redacted, immutable description of one proposed game-release run: resolved game identity, provider mutations, credential actions, build target, physical device, and required verification. Approval applies only to that exact content and becomes invalid when any governed field changes.
+
+### Provider Receipt
+Evidence for the strongest boundary a provider exposes, recorded separately as local configuration, SDK handoff, provider acceptance, or dashboard-visible ingestion. An unsupported stronger boundary never inherits a pass from a weaker one.
+
+### Verified Release Candidate
+A native artifact bound to its source revision, build configuration, digest, installed application identity, physical device, gameplay evidence, and required Provider Receipts. Diagnostic harness success alone does not confer this status.

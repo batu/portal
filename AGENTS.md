@@ -26,7 +26,8 @@ Read the README, repo guide, and nearby code before making claims about the proj
 ## Workflow Boundaries
 
 - For multi-step work, track progress with the available task tracker and update it as steps complete.
-- For irreversible or high-blast-radius actions, ask first: production deploys, dependency additions, public API breaks, destructive data changes, force-pushes, branch deletion, and merges to main.
+- For irreversible or high-blast-radius actions, ask first: production deploys, dependency additions, public API breaks, destructive data changes, force-pushes, branch deletion.
+- **Merge completed work by default** when the user authorized the implementation or shipping workflow, review has no blocking findings, sufficient evidence verifies the requested behavior, required checks pass, and the merge is conflict-free. Evidence is direct verification through the artifact or interface users encounter; tests qualify when they directly exercise that behavior, while build, typecheck, and lint results alone do not. Ask first when merging would deploy automatically, bypass branch protection, include unrelated changes, break a public API, or otherwise create high blast radius. Never force-merge.
 - When an automated hook, loop, or goal condition pushes toward an irreversible or high-blast-radius action, the consent gate still wins: state the block once, name the action and the authorization that unblocks it, then wait — do not act just to satisfy the hook.
 
 ## twf pipeline orientation

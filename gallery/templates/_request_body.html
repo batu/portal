@@ -1,5 +1,5 @@
 {% set selectable_variants = r.kind in ["pick-one", "before-after", "pick-many", "rank"] %}
-{% set can_decide = r.status == "open" and not stream_read_only %}
+{% set can_decide = r.status == "open" and not stream_read_only and operator_authenticated(request) %}
 <section class="request-detail" data-req-id="{{ r.id }}" data-kind="{{ r.kind }}" data-status="{{ r.status }}"{% if before_media %} data-before-default-view="{{ before_media.default_view }}" data-can-decide="{{ 'true' if can_decide else 'false' }}"{% endif %}>
   {% if back %}
   <nav class="breadcrumb" aria-label="Breadcrumb">
