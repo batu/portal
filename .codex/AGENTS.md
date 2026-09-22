@@ -10,14 +10,14 @@ Tool mapping:
 - Read: use shell reads (cat/sed) or rg
 - Write: create files via apply_patch
 - Edit/MultiEdit: use apply_patch
-- Bash: use shell_command
+- Bash: use the shell execution tool exposed by the current harness
 - Grep: use rg (fallback: grep)
 - Glob: use rg --files or find
-- LS: use ls via shell_command
+- LS: use ls via the available shell tool
 - WebFetch/WebSearch: use curl or Context7 for library docs
-- AskUserQuestion/Question: present choices as a numbered list in chat and wait for a reply number. For multi-select (multiSelect: true), accept comma-separated numbers. Never skip or auto-configure; wait for the user's response before proceeding.
-- Task/Subagent/Parallel: use Codex subagents when the user explicitly asks for delegation/subagents OR when a loaded skill/workflow explicitly requires Task/Subagent/parallel agents. Use `spawn_agent` for those agent tasks, wait for their results, and report which agents ran. Use `multi_tool_use.parallel` only for parallel local tool calls such as independent file reads/searches.
-- TodoWrite/TodoRead: use file-based todos in todos/ with file-todos skill
+- AskUserQuestion/Question: ask only for missing information that materially affects the task or authorization still required for the next action. Use the current harness's question tool when available; use asynchronous clarification while independent work continues. If a required decision needs a blocking answer and no suitable tool exists, ask one concise question in chat and wait for that answer. Do not repeat decisions or permissions already supplied by the user.
+- Task/Subagent/Parallel: use subagents when the user explicitly asks for delegation OR a loaded skill/workflow requires it. Use the exposed agent tool, confirm whether workers share files, assign bounded ownership, await results, and report which agents ran. For independent local tool calls use the current harness's supported parallel orchestration, such as awaited Promises in functions.exec; do not assume a named tool exists.
+- TodoWrite/TodoRead: use the available task tracker, or a plain task checklist in the existing task artifact when no tracker is exposed
 - Skill: open the referenced SKILL.md and follow it
 - ExitPlanMode: ignore
 <!-- END COMPOUND CODEX TOOL MAP -->
