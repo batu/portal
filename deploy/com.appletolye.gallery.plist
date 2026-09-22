@@ -1,20 +1,31 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  launchd user agent for Gallery.
-  This is a template: install.sh substitutes __HOME__ with the real home
-  directory before copying it to ~/Library/LaunchAgents/.
+  launchd system daemon for Gallery, run as the owning user.
+  A daemon starts at boot without a GUI login; a user agent does not, which
+  left Portal down after every reboot until someone logged in.
+  This is a template: install.sh substitutes __HOME__ and __USER__ before
+  copying it to /Library/LaunchDaemons/.
 -->
 <plist version="1.0">
 <dict>
     <key>Label</key>
     <string>com.appletolye.gallery</string>
 
+    <key>UserName</key>
+    <string>__USER__</string>
+
+    <key>GroupName</key>
+    <string>staff</string>
+
     <key>ProgramArguments</key>
     <array>
         <string>__HOME__/.local/bin/gallery</string>
         <string>serve</string>
     </array>
+
+    <key>WorkingDirectory</key>
+    <string>__HOME__</string>
 
     <key>RunAtLoad</key>
     <true/>
@@ -30,6 +41,10 @@
 
     <key>EnvironmentVariables</key>
     <dict>
+        <key>HOME</key>
+        <string>__HOME__</string>
+        <key>USER</key>
+        <string>__USER__</string>
         <key>PATH</key>
         <string>__HOME__/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
     </dict>
