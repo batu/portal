@@ -11,6 +11,9 @@ from typing import cast
 
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 30
 GAME_PUBLISH_TIMEOUT_SECONDS = 600
+# Uploads go through the public tunnel, which has sustained ~270 KB/s; budget
+# for 100 KB/s so an 8 MB report gets ~110 s instead of timing out at 30.
+UPLOAD_BUDGET_BYTES_PER_SECOND = 100_000
 
 
 class GalleryClientError(Exception):
@@ -114,8 +117,18 @@ def post_multipart(
     headers = _auth_headers(token)
     headers["Content-Type"] = f"multipart/form-data; boundary={boundary}"
     if timeout == DEFAULT_REQUEST_TIMEOUT_SECONDS:
+        timeout = upload_timeout(len(body))
+    if timeout == DEFAULT_REQUEST_TIMEOUT_SECONDS:
         return _request("POST", base_url + path, headers, body)
     return _request("POST", base_url + path, headers, body, timeout=timeout)
+
+
+def upload_timeout(body_bytes: int) -> float:
+    """Default timeout plus transfer time at the budgeted rate, capped at the game-publish ceiling."""
+    return min(
+        GAME_PUBLISH_TIMEOUT_SECONDS,
+        DEFAULT_REQUEST_TIMEOUT_SECONDS + body_bytes // UPLOAD_BUDGET_BYTES_PER_SECOND,
+    )
 
 
 def close_request(base_url: str, token: str, req_id: str, reason: str) -> dict:
@@ -172,6 +185,16 @@ def create_stream_post(
         "body": json.dumps(body) if body is not None else None,
     }
     return post_multipart(base_url, token, f"/api/streams/{slug}/posts", fields, files or [])
+
+
+def get_post(base_url: str, token: str, post_id: str) -> dict:
+    post_id = urllib.parse.quote(post_id, safe="")
+    return cast(dict, get_json(base_url, token, f"/api/posts/{post_id}"))
+
+
+def replace_post_files(base_url: str, token: str, post_id: str, files: list[Path]) -> dict:
+    post_id = urllib.parse.quote(post_id, safe="")
+    return post_multipart(base_url, token, f"/api/posts/{post_id}/files", {}, files)
 
 
 def get_stream_post(base_url: str, token: str, slug: str, post_id: str) -> dict:

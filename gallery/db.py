@@ -1034,6 +1034,19 @@ def get_post(post_id: str) -> dict | None:
         return _get_post_by_id(conn, post_id)
 
 
+def update_post_body(post_id: str, body: dict) -> dict | None:
+    conn = connect()
+    with _lock:
+        try:
+            conn.execute("UPDATE posts SET body_json = ? WHERE id = ?", (json.dumps(body), post_id))
+            post = _get_post_by_id(conn, post_id)
+            conn.commit()
+            return post
+        except Exception:
+            conn.rollback()
+            raise
+
+
 def get_stream_post(slug: str, post_id: str) -> dict | None:
     conn = connect()
     with _lock:
