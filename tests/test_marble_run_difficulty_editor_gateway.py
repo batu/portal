@@ -77,7 +77,8 @@ def test_gateway_serves_exact_verified_artifact(client, data_dir, token):
 
     assert shell.status_code == 200
     assert 'sandbox="allow-scripts allow-downloads"' in shell.text
-    assert shell.headers["cache-control"] == "no-cache"
+    # Public viewing forces no-store so operator and anonymous views never share a cache entry.
+    assert shell.headers["cache-control"] == "no-store"
     assert index.status_code == 200
     assert './assets/app.js' in index.text
     assert index.headers["cache-control"] == "no-cache"
