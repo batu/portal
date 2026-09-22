@@ -1931,6 +1931,71 @@ async def create_stream_post(
     return response
 
 
+def _require_post(post_id: str) -> dict:
+    if not SAFE_SEGMENT_RE.fullmatch(post_id) or post_id in {".", ".."}:
+        raise HTTPException(status_code=404, detail="post not found")
+    post = db.get_post(post_id)
+    if post is None:
+        raise HTTPException(status_code=404, detail="post not found")
+    return post
+
+
+@app.get("/api/posts/{post_id}")
+def get_post(request: Request, post_id: str):
+    require_api_token(request)
+    return _require_post(post_id)
+
+
+@app.post("/api/posts/{post_id}/files")
+async def replace_post_files(
+    request: Request,
+    post_id: str,
+    files: list[UploadFile] = File(...),
+):
+    """Fix a post in place: each upload overwrites the stored file whose stored
+    or original name matches its filename, or is appended as a new file."""
+    server_cfg = require_api_token(request)
+    _enforce_upload_size(request, server_cfg.get("max_upload_bytes", config.DEFAULT_MAX_UPLOAD_BYTES))
+    post = _require_post(post_id)
+    body = post["body"] if isinstance(post.get("body"), dict) else {}
+    stored = _post_files(post)
+    dest_dir = config.media_dir() / post_id
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    used_names = {f["media_path"] for f in stored if isinstance(f.get("media_path"), str)}
+    replaced, added = [], []
+    for upload in _coerce_uploads(files):
+        name = Path(upload.filename or "").name
+        if not _safe_media_filename(name):
+            raise HTTPException(status_code=400, detail=f"invalid filename: {upload.filename!r}")
+        match = next(
+            (f for f in stored if name in {f.get("media_path"), f.get("original_name")}),
+            None,
+        )
+        if match is None:
+            match = {
+                "media_path": _prefixed_media_name(len(stored) + 1, name, f"file_{len(stored) + 1}", used_names),
+                "original_name": name,
+            }
+            stored.append(match)
+            added.append(match["media_path"])
+        else:
+            replaced.append(match["media_path"])
+        if not _safe_media_filename(match["media_path"]):
+            raise HTTPException(status_code=400, detail=f"invalid stored filename: {match['media_path']!r}")
+        dest_path = dest_dir / match["media_path"]
+        tmp_path = dest_dir / f".{match['media_path']}.upload"
+        try:
+            match["size"] = await _write_upload(upload, tmp_path)
+            tmp_path.replace(dest_path)
+        finally:
+            tmp_path.unlink(missing_ok=True)
+        match["media_type"] = (
+            upload.content_type or mimetypes.guess_type(match["media_path"])[0] or "application/octet-stream"
+        )
+    updated = db.update_post_body(post_id, {**body, "files": stored})
+    return {"post": updated, "replaced": replaced, "added": added}
+
+
 @app.get("/api/streams/{slug}/posts/{post_id}")
 def get_stream_post(request: Request, slug: str, post_id: str):
     require_api_token(request)
@@ -2269,10 +2334,42 @@ def get_view_media(req_id: str, capability: str, filename: str):
     return FileResponse(path, media_type=media_type or "application/octet-stream", headers=headers)
 
 
+def _post_files(post: dict | None) -> list[dict]:
+    body = post.get("body") if post else None
+    files = body.get("files") if isinstance(body, dict) else None
+    return [f for f in files if isinstance(f, dict)] if isinstance(files, list) else []
+
+
+def _resolve_media_alias(owner_id: str, filename: str) -> str:
+    """Map a post upload's original name to its stored `NN_` name.
+
+    Report HTML written before upload references assets by their original
+    names (`foo.png`), but storage renames them (`02_foo.png`); resolving the
+    original name keeps those references working. Stored names always win.
+    """
+    if (
+        not SAFE_SEGMENT_RE.fullmatch(owner_id)
+        or owner_id in {".", ".."}
+        or not _safe_media_filename(filename)
+        or (config.media_dir() / owner_id / filename).is_file()
+    ):
+        return filename
+    for file_info in _post_files(db.get_post(owner_id)):
+        media_path = file_info.get("media_path")
+        if (
+            file_info.get("original_name") == filename
+            and isinstance(media_path, str)
+            and _safe_media_filename(media_path)
+        ):
+            return media_path
+    return filename
+
+
 @app.get("/media/{req_id}/{filename}")
 def get_media(request: Request, req_id: str, filename: str):
     if not web_token_ok(request):
         raise HTTPException(status_code=401, detail="missing or invalid token")
+    filename = _resolve_media_alias(req_id, filename)
     path = _media_file_path(req_id, filename)
     media_type, _ = mimetypes.guess_type(str(path))
     headers = {"X-Content-Type-Options": "nosniff"}

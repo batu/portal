@@ -260,6 +260,15 @@ portal stream new ftd-menu-redesign-0708 --kind session --title "FTD menu redesi
 portal report --stream ftd-menu-redesign-0708 --title "Spacing pass 3" \
   docs/evidence/2026-07-08-grid/grid.html docs/evidence/2026-07-08-grid/assets/*
 
+# Reports are flat: reference each asset by its file name (src="shot.png").
+# Portal stores uploads as NN_<name> and serves both names. The CLI refuses
+# HTML that references files it is not uploading (--allow-missing-refs skips
+# the check) and prints the report's direct page URL as "url".
+
+# Fix a posted report in place: files matching a stored or original name
+# are overwritten, the rest are appended.
+portal replace p_a1b2c3 grid.html missing-asset.png
+
 # Post a decision request into the stream. --before adds the baseline image
 # for before/after review; candidate files remain the selectable variants.
 portal post --stream ftd-menu-redesign-0708 --title "Pick the strongest pass" \
@@ -275,7 +284,8 @@ portal stream close ftd-menu-redesign-0708
 `portal post --kind` accepts `pick-one`, `pick-many`, `rank`, `approve`,
 `comment`, and `before-after`. Reports and stream-attached decisions use the
 same bearer-token config as the older Gallery request flow. Stream post uploads
-over the 200 MB soft cap return a warning but are not rejected solely for size.
+over the 200 MB soft cap return a warning but are not rejected solely for size. CLI upload
+timeouts scale with request size (30 s plus 1 s per 100 KB, capped at 600 s).
 
 Phase 1 includes streams, report posts, stream pages, legacy decision requests
 in project streams, and before/after review. Phase 2 added `ask`, `pull`, and
