@@ -3,11 +3,13 @@
 import argparse
 import glob
 import hashlib
+import html.parser
 import json
 import os
 import re
 import sys
 import time
+import urllib.parse
 from pathlib import Path
 
 from . import client, config, trello_watch
@@ -298,9 +300,104 @@ def cmd_feedback(args):
     print(json.dumps(result))
 
 
+HTML_SUFFIXES = {".html", ".htm"}
+REF_ATTRS = {"src", "href", "poster", "srcset", "data"}
+CSS_URL_RE = re.compile(r"url\(\s*['\"]?([^'\")]+)")
+
+
+class _RefCollector(html.parser.HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.refs: list[str] = []
+        self._in_style = False
+
+    def handle_starttag(self, tag, attrs):
+        self._in_style = tag == "style"
+        for name, value in attrs:
+            if not value:
+                continue
+            if name == "srcset":
+                self.refs.extend(part.split()[0] for part in value.split(",") if part.strip())
+            elif name in REF_ATTRS:
+                self.refs.append(value)
+            elif name == "style":
+                self.refs.extend(CSS_URL_RE.findall(value))
+
+    def handle_endtag(self, tag):
+        if tag == "style":
+            self._in_style = False
+
+    def handle_data(self, data):
+        if self._in_style:
+            self.refs.extend(CSS_URL_RE.findall(data))
+
+
+def _local_ref(ref: str) -> str | None:
+    """The file a relative reference points at, or None for absolute/anchor/data refs."""
+    ref = ref.strip()
+    parsed = urllib.parse.urlsplit(ref)
+    if parsed.scheme or parsed.netloc or not parsed.path or parsed.path.startswith("/"):
+        return None
+    path = urllib.parse.unquote(parsed.path)
+    return path[2:] if path.startswith("./") else path
+
+
+def _missing_html_refs(html_path: Path, available: set[str]) -> list[str]:
+    """Relative references in `html_path` that match no file the post will serve."""
+    collector = _RefCollector()
+    collector.feed(html_path.read_text(errors="replace"))
+    missing = []
+    for ref in collector.refs:
+        target = _local_ref(ref)
+        if target is not None and target not in available and target not in missing:
+            missing.append(target)
+    return missing
+
+
+def _served_names(files: list[Path]) -> set[str]:
+    """Names a post serves each upload under: original name and stored `NN_` name."""
+    names = set()
+    for i, path in enumerate(files, start=1):
+        names.add(path.name)
+        names.add(path.name if re.match(r"^\d{2}_", path.name) else f"{i:02d}_{path.name}")
+    return names
+
+
+def _refuse_missing_refs(html_files: list[Path], available: set[str]) -> None:
+    problems = [(f, _missing_html_refs(f, available)) for f in html_files]
+    problems = [(f, missing) for f, missing in problems if missing]
+    if not problems:
+        return
+    for html_file, missing in problems:
+        print(f"error: {html_file.name} references files that are not uploaded:", file=sys.stderr)
+        for name in missing:
+            print(f"  {name}", file=sys.stderr)
+    print(
+        "Posts are flat: pass each asset as an argument and reference it by file name "
+        "(no directories). Use --allow-missing-refs to post anyway.",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+
+def _page_url(base_url: str, post: dict) -> str | None:
+    """Direct URL of the post's HTML page, if it has one."""
+    body = post.get("body")
+    files = body.get("files") if isinstance(body, dict) else None
+    for file_info in files if isinstance(files, list) else []:
+        media_path = file_info.get("media_path") if isinstance(file_info, dict) else None
+        if isinstance(media_path, str) and Path(media_path).suffix.lower() in HTML_SUFFIXES:
+            return f"{base_url}/media/{urllib.parse.quote(post['id'], safe='')}/{urllib.parse.quote(media_path)}"
+    return None
+
+
 def cmd_report(args):
     base_url, token = config.client_config()
     files = _resolve_files([args.file_html, *args.assets])
+    if not args.allow_missing_refs:
+        _refuse_missing_refs(
+            [f for f in files if f.suffix.lower() in HTML_SUFFIXES], _served_names(files)
+        )
     body = {
         k: v
         for k, v in {"step": args.step, "purpose": args.purpose, "ask": args.ask}.items()
@@ -319,6 +416,32 @@ def cmd_report(args):
         )
     except client.GalleryClientError as exc:
         _exit_client_error(exc)
+    url = _page_url(base_url, result.get("post") or {})
+    if url:
+        result["url"] = url
+    print(json.dumps(result))
+
+
+def cmd_replace(args):
+    base_url, token = config.client_config()
+    files = _resolve_files(args.files)
+    try:
+        if not args.allow_missing_refs:
+            html_files = [f for f in files if f.suffix.lower() in HTML_SUFFIXES]
+            if html_files:
+                post = client.get_post(base_url, token, args.post_id)
+                available = {f.name for f in files}
+                for file_info in post.get("body", {}).get("files", []):
+                    available.update(
+                        v for v in (file_info.get("media_path"), file_info.get("original_name")) if v
+                    )
+                _refuse_missing_refs(html_files, available)
+        result = client.replace_post_files(base_url, token, args.post_id, files)
+    except client.GalleryClientError as exc:
+        _exit_client_error(exc)
+    url = _page_url(base_url, result.get("post") or {})
+    if url:
+        result["url"] = url
     print(json.dumps(result))
 
 
@@ -625,8 +748,21 @@ def main():
     p.add_argument("--step", default=None, help="Optional: which step this report covers")
     p.add_argument("--purpose", default=None, help="Optional: one-line purpose of this report")
     p.add_argument("--ask", default=None, help="Optional: what the human is being asked to do")
+    p.add_argument(
+        "--allow-missing-refs",
+        action="store_true",
+        help="Post even if the HTML references files that are not uploaded",
+    )
     p.add_argument("file_html")
     p.add_argument("assets", nargs="*")
+
+    p = sub.add_parser(
+        "replace",
+        help="Fix a post in place: overwrite files matched by name, append the rest",
+    )
+    p.add_argument("post_id")
+    p.add_argument("--allow-missing-refs", action="store_true")
+    p.add_argument("files", nargs="+")
 
     p = sub.add_parser("wait", help="Block until a request is decided, then print the verdict")
     p.add_argument("id")
@@ -696,6 +832,7 @@ def main():
         "supersede": cmd_supersede,
         "feedback": cmd_feedback,
         "report": cmd_report,
+        "replace": cmd_replace,
         "wait": cmd_wait,
         "ask": cmd_ask,
         "pull": cmd_pull,

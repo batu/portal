@@ -46,6 +46,10 @@ systemd user unit for a future Linux move lives at `deploy/gallery.service`
     "ui_root": "/absolute/path/to/fabrikav2/tools/ftd-level-editor/dist",
     "command": ["/absolute/path/to/ftd-editor-rehearsal"]
   },
+  "marble_run_difficulty_editor": {
+    "archive_path": "marble-run/difficulty-editor/archives/<content-hash>.tar.gz",
+    "content_hash": "<build-manifest contentHash>"
+  },
   "telegram_bot_token": null,
   "telegram_chat_id": null
 }
@@ -61,6 +65,13 @@ systemd user unit for a future Linux move lives at `deploy/gallery.service`
   cookies and tokens are never forwarded to the editor service. When
   `command` is present, Portal starts that loopback process on service startup
   and terminates it during a clean shutdown.
+- `marble_run_difficulty_editor` is optional. Its archive path is relative to
+  `~/.gallery/games/` and must contain the exact contents of the editor's
+  production `dist/` directory, including `build-manifest.json`. Portal checks
+  every declared asset digest and the configured aggregate content hash before
+  extracting to a hash-named immutable directory. Changing `content_hash` is
+  the explicit activation step; retaining the prior archive and hash provides
+  rollback. The authenticated route is `/tools/marble-run-difficulty/`.
 
 ### Public artifact viewing (opt-in)
 
@@ -274,6 +285,15 @@ portal stream new ftd-menu-redesign-0708 --kind session --title "FTD menu redesi
 portal report --stream ftd-menu-redesign-0708 --title "Spacing pass 3" \
   docs/evidence/2026-07-08-grid/grid.html docs/evidence/2026-07-08-grid/assets/*
 
+# Reports are flat: reference each asset by its file name (src="shot.png").
+# Portal stores uploads as NN_<name> and serves both names. The CLI refuses
+# HTML that references files it is not uploading (--allow-missing-refs skips
+# the check) and prints the report's direct page URL as "url".
+
+# Fix a posted report in place: files matching a stored or original name
+# are overwritten, the rest are appended.
+portal replace p_a1b2c3 grid.html missing-asset.png
+
 # Post a decision request into the stream. --before adds the baseline image
 # for before/after review; candidate files remain the selectable variants.
 portal post --stream ftd-menu-redesign-0708 --title "Pick the strongest pass" \
@@ -289,7 +309,8 @@ portal stream close ftd-menu-redesign-0708
 `portal post --kind` accepts `pick-one`, `pick-many`, `rank`, `approve`,
 `comment`, and `before-after`. Reports and stream-attached decisions use the
 same bearer-token config as the older Gallery request flow. Stream post uploads
-over the 200 MB soft cap return a warning but are not rejected solely for size.
+over the 200 MB soft cap return a warning but are not rejected solely for size. CLI upload
+timeouts scale with request size (30 s plus 1 s per 100 KB, capped at 600 s).
 
 Phase 1 includes streams, report posts, stream pages, legacy decision requests
 in project streams, and before/after review. Phase 2 added `ask`, `pull`, and

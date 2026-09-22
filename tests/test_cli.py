@@ -141,7 +141,7 @@ def test_help_aliases_list_portal_verbs(monkeypatch, capsys, binary):
     assert exc.value.code == 0
     out = capsys.readouterr().out
     assert "usage: portal" in out
-    for verb in ["init", "post", "wait", "status", "list", "serve", "stream", "report", "ask", "pull", "trello-watch", "game"]:
+    for verb in ["init", "post", "wait", "status", "list", "serve", "stream", "report", "replace", "ask", "pull", "trello-watch", "game"]:
         assert verb in out
 
 
@@ -1272,3 +1272,88 @@ def test_post_warns_on_live_sibling_without_supersedes(monkeypatch, capsys):
     err = capsys.readouterr().err
     assert "already has a live request req_live" in err
     assert "portal supersede req_live --successor req_new" in err
+
+
+def test_multipart_upload_timeout_scales_with_body_size():
+    assert cli.client.upload_timeout(1_000) == 30
+    assert cli.client.upload_timeout(17_000_000) == 200
+    assert cli.client.upload_timeout(500_000_000) == 600
+
+
+def test_report_prints_direct_page_url(monkeypatch, tmp_path, capsys):
+    html = tmp_path / "report.html"
+    html.write_text("<html></html>")
+    monkeypatch.setattr(cli.config, "client_config", lambda: ("https://portal.example", "tok"))
+    monkeypatch.setattr(
+        cli.client,
+        "create_stream_post",
+        lambda *_a, **_k: {"post": {"id": "p_abc", "body": {"files": [{"media_path": "01_report.html"}]}}},
+    )
+    monkeypatch.setattr("sys.argv", ["portal", "report", "--stream", "alpha", "--title", "R", str(html)])
+
+    cli.main()
+
+    assert json.loads(capsys.readouterr().out)["url"] == "https://portal.example/media/p_abc/01_report.html"
+
+
+def test_report_refuses_html_referencing_unuploaded_files(monkeypatch, tmp_path, capsys):
+    html = tmp_path / "report.html"
+    html.write_text(
+        '<html><style>.a{background:url("bg.png")}</style>'
+        '<img src="shot.png"><img src="02_shot.png"><img src="./shot.png">'
+        '<img src="assets/nested.png"><video poster="missing.jpg"></video>'
+        '<img srcset="small.png 1x, shot.png 2x">'
+        '<a href="#top"></a><a href="https://x.test/a.png"></a><img src="data:image/png;base64,AA">'
+        "</html>"
+    )
+    (tmp_path / "shot.png").write_bytes(b"png")
+    monkeypatch.setattr(cli.config, "client_config", lambda: ("http://gallery", "tok"))
+    posted = []
+    monkeypatch.setattr(cli.client, "create_stream_post", lambda *a, **k: posted.append(a) or {"post": {}})
+    argv = ["portal", "report", "--stream", "alpha", "--title", "R", str(html), str(tmp_path / "shot.png")]
+    monkeypatch.setattr("sys.argv", argv)
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+
+    assert exc.value.code == 1
+    assert posted == []
+    err = capsys.readouterr().err
+    for name in ["bg.png", "assets/nested.png", "missing.jpg", "small.png"]:
+        assert f"  {name}\n" in err
+    assert "  shot.png\n" not in err
+    assert "02_shot.png" not in err
+
+    monkeypatch.setattr("sys.argv", [*argv[:2], "--allow-missing-refs", *argv[2:]])
+    cli.main()
+    assert len(posted) == 1
+
+
+def test_replace_checks_refs_against_existing_post_files(monkeypatch, tmp_path, capsys):
+    html = tmp_path / "report.html"
+    html.write_text('<img src="shot.png"><img src="gone.png">')
+    monkeypatch.setattr(cli.config, "client_config", lambda: ("http://gallery", "tok"))
+    monkeypatch.setattr(
+        cli.client,
+        "get_post",
+        lambda *_a: {"id": "p_abc", "body": {"files": [{"media_path": "02_shot.png", "original_name": "shot.png"}]}},
+    )
+    replaced = []
+    monkeypatch.setattr(
+        cli.client,
+        "replace_post_files",
+        lambda _u, _t, post_id, files: replaced.append((post_id, files))
+        or {"post": {"id": post_id, "body": {"files": [{"media_path": "01_report.html"}]}}, "replaced": ["01_report.html"]},
+    )
+    monkeypatch.setattr("sys.argv", ["portal", "replace", "p_abc", str(html)])
+
+    with pytest.raises(SystemExit):
+        cli.main()
+    err = capsys.readouterr().err
+    assert "  gone.png\n" in err and "  shot.png\n" not in err
+    assert replaced == []
+
+    html.write_text('<img src="shot.png">')
+    cli.main()
+    assert replaced == [("p_abc", [html])]
+    assert json.loads(capsys.readouterr().out)["url"] == "http://gallery/media/p_abc/01_report.html"

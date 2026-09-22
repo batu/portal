@@ -559,3 +559,79 @@ def test_client_stream_helpers_call_expected_methods_paths_and_payloads(monkeypa
     assert b'name="body"' in calls[4]["data"]
     assert b'"summary": "ok"' in calls[4]["data"]
     assert b'name="files"; filename="report.html"' in calls[4]["data"]
+
+
+def _post_report(client, token, files):
+    create = client.post(
+        "/api/streams/fixes/posts",
+        headers=auth_headers(token),
+        data={"type": "report", "title": "Report", "author": "codex"},
+        files=files,
+    )
+    assert create.status_code == 200
+    return create.json()["post"]
+
+
+def test_report_assets_resolve_by_original_name(client, token):
+    post = _post_report(
+        client,
+        token,
+        [
+            ("files", ("page.html", b'<img src="shot.png">', "text/html")),
+            ("files", ("shot.png", tiny_png_bytes(), "image/png")),
+        ],
+    )
+    assert post["body"]["files"][1]["media_path"] == "02_shot.png"
+
+    by_original = client.get(f"/media/{post['id']}/shot.png?token={token}")
+    by_stored = client.get(f"/media/{post['id']}/02_shot.png?token={token}")
+    unknown = client.get(f"/media/{post['id']}/other.png?token={token}")
+
+    assert by_original.status_code == 200
+    assert by_original.content == tiny_png_bytes()
+    assert by_stored.content == tiny_png_bytes()
+    assert unknown.status_code == 404
+
+
+def test_replace_post_files_overwrites_by_name_and_appends_new(client, token):
+    post = _post_report(
+        client,
+        token,
+        [
+            ("files", ("page.html", b"<p>v1</p>", "text/html")),
+            ("files", ("shot.png", tiny_png_bytes(), "image/png")),
+        ],
+    )
+
+    replaced = client.post(
+        f"/api/posts/{post['id']}/files",
+        headers=auth_headers(token),
+        files=[
+            ("files", ("page.html", b"<p>v2</p>", "text/html")),
+            ("files", ("extra.png", tiny_png_bytes(), "image/png")),
+        ],
+    )
+
+    assert replaced.status_code == 200
+    payload = replaced.json()
+    assert payload["replaced"] == ["01_page.html"]
+    assert payload["added"] == ["03_extra.png"]
+    assert [f["media_path"] for f in payload["post"]["body"]["files"]] == [
+        "01_page.html",
+        "02_shot.png",
+        "03_extra.png",
+    ]
+    page = client.get(f"/media/{post['id']}/01_page.html?token={token}")
+    assert b"<p>v2</p>" in page.content
+    assert client.get(f"/media/{post['id']}/extra.png?token={token}").status_code == 200
+    fetched = client.get(f"/api/posts/{post['id']}", headers=auth_headers(token)).json()
+    assert fetched["body"]["files"] == payload["post"]["body"]["files"]
+    assert not list((config.media_dir() / post["id"]).glob(".*"))
+
+
+def test_replace_post_files_requires_auth_and_known_post(client, token):
+    files = [("files", ("a.png", tiny_png_bytes(), "image/png"))]
+    assert client.post("/api/posts/p_missing/files", files=files).status_code == 401
+    assert client.get("/api/posts/p_missing").status_code == 401
+    assert client.post("/api/posts/p_missing/files", headers=auth_headers(token), files=files).status_code == 404
+    assert client.get("/api/posts/p_missing", headers=auth_headers(token)).status_code == 404
