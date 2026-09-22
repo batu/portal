@@ -573,6 +573,9 @@ def ftd_editor_index(request: Request):
     # whole old app survives redeploys (observed twice on 2026-07-29).
     response.headers["Cache-Control"] = "no-cache"
     _maybe_set_cookie(response, request)
+    # The editor UI issues calls to /api/* which require the referer header to
+    # match /tools/ftd-editor/. _maybe_set_cookie sets no-referrer; override here.
+    response.headers["Referrer-Policy"] = "same-origin"
     return response
 
 
