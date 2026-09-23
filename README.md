@@ -25,9 +25,12 @@ To run the service persistently under launchd (recommended on the Mac mini):
 ./deploy/install.sh
 ```
 
-This installs the package, runs `gallery init` if needed, and loads the
-system daemon `/Library/LaunchDaemons/com.appletolye.gallery.plist`
-(RunAtLoad + KeepAlive, runs as your user; needs sudo). A daemon starts at
+Run it as your normal user, not with `sudo`: it installs the package, runs
+`gallery init` if needed, and calls `sudo` itself (prompting for your password)
+only to install and load the system daemon
+`/Library/LaunchDaemons/com.appletolye.gallery.plist` (RunAtLoad + KeepAlive,
+runs as your user). Run as root, it refuses unless `GALLERY_INSTALL_USER=<user>`
+names the user Portal should run as. A daemon starts at
 boot without a GUI login, so Portal survives reboots. Restart it with
 `sudo launchctl kickstart -k system/com.appletolye.gallery`.
 Logs go to `~/.gallery/logs/stdout.log` and `stderr.log`. A reference

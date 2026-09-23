@@ -168,14 +168,34 @@ def test_public_game_read_routes(client, token, published):
                "poster": ("poster.jpg", b"poster", "image/jpeg")},
     )
     assert response.status_code == 200
-    for path in ("/games", "/games/public-game", "/games/public-game/builds/v1/download"):
+    for path in ("/games", "/games/public-game", "/games/public-game/builds/v1/public-download"):
         response = client.get(path)
         assert response.status_code == 200
         assert response.url.path != "/login"
         assert_no_authority(response, token, server._view_capability(published["view"]))
-    response = client.get("/games/public-game/builds/v1/video", headers={"Range": "bytes=2-4"})
+    response = client.get("/games/public-game/builds/v1/public-video", headers={"Range": "bytes=2-4"})
     assert response.status_code == 206
     assert response.content == b"234"
+
+
+def test_private_game_release_routes_require_operator_token_in_public_mode(client, token, published):
+    response = client.post(
+        "/api/games/public-game/builds", headers={"Authorization": f"Bearer {token}"},
+        data={"title": "Public Game", "description": "A game", "version": "v1", "changelog": "Initial release"},
+        files={"artifact": ("game.ipa", b"native-build", "application/octet-stream"),
+               "video": ("clip.mp4", b"0123456789", "video/mp4"),
+               "poster": ("poster.jpg", b"poster", "image/jpeg")},
+    )
+    assert response.status_code == 200
+    client.cookies.clear()
+    for path in ("/games/public-game/builds/v1/download", "/games/public-game/builds/v1/video"):
+        anonymous = client.get(path, follow_redirects=False)
+        assert anonymous.status_code == 303
+        assert anonymous.headers["location"].startswith("/login")
+        assert b"native-build" not in anonymous.content
+        operator = client.get(path, params={"token": token})
+        assert operator.status_code == 200
+    assert client.get("/games/public-game/builds/v1/download", params={"token": token}).content == b"native-build"
 
 
 def test_operator_auth_still_works_in_public_mode(client, token, published):

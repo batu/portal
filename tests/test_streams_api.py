@@ -629,6 +629,59 @@ def test_replace_post_files_overwrites_by_name_and_appends_new(client, token):
     assert not list((config.media_dir() / post["id"]).glob(".*"))
 
 
+def test_replace_post_files_rejects_bad_name_before_writing_anything(client, token):
+    post = _post_report(client, token, [("files", ("page.html", b"<p>v1</p>", "text/html"))])
+
+    rejected = client.post(
+        f"/api/posts/{post['id']}/files",
+        headers=auth_headers(token),
+        files=[
+            ("files", ("page.html", b"<p>v2</p>", "text/html")),
+            ("files", ("..", b"bad", "text/plain")),
+        ],
+    )
+
+    assert rejected.status_code == 400
+    assert (config.media_dir() / post["id"] / "01_page.html").read_bytes() == b"<p>v1</p>"
+    fetched = client.get(f"/api/posts/{post['id']}", headers=auth_headers(token)).json()
+    assert fetched["body"]["files"] == post["body"]["files"]
+
+
+def test_concurrent_replace_post_files_keeps_every_added_file(client, token):
+    import asyncio
+
+    import httpx
+
+    post = _post_report(client, token, [("files", ("page.html", b"<p>v1</p>", "text/html"))])
+
+    async def replace_all():
+        transport = httpx.ASGITransport(app=server.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as ac:
+            return await asyncio.gather(*[
+                ac.post(
+                    f"/api/posts/{post['id']}/files",
+                    headers=auth_headers(token),
+                    files=[("files", (f"extra{i}.png", tiny_png_bytes() + bytes([i]), "image/png"))],
+                )
+                for i in range(4)
+            ])
+
+    responses = asyncio.run(replace_all())
+
+    assert [r.status_code for r in responses] == [200] * 4
+    added = [name for r in responses for name in r.json()["added"]]
+    assert len(set(added)) == 4
+    fetched = client.get(f"/api/posts/{post['id']}", headers=auth_headers(token)).json()
+    files = fetched["body"]["files"]
+    assert sorted(f["original_name"] for f in files) == ["extra0.png", "extra1.png", "extra2.png", "extra3.png", "page.html"]
+    assert len({f["media_path"] for f in files}) == 5
+    for f in files:
+        if f["original_name"].startswith("extra"):
+            index = int(f["original_name"][5])
+            assert (config.media_dir() / post["id"] / f["media_path"]).read_bytes() == tiny_png_bytes() + bytes([index])
+    assert not list((config.media_dir() / post["id"]).glob(".*"))
+
+
 def test_replace_post_files_requires_auth_and_known_post(client, token):
     files = [("files", ("a.png", tiny_png_bytes(), "image/png"))]
     assert client.post("/api/posts/p_missing/files", files=files).status_code == 401
