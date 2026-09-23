@@ -150,6 +150,30 @@ def test_copied_v1_editor_root_api_is_scoped_to_authenticated_editor_referrer(
     assert unrelated.status_code == 404
 
 
+def test_legacy_editor_proxy_rejects_foreign_referrer_host_with_editor_path(
+    client, data_dir, token, tmp_path, monkeypatch
+):
+    ui = tmp_path / "ui"
+    ui.mkdir()
+    (ui / "index.html").write_text("editor")
+    _configure(data_dir, ui)
+    calls = []
+
+    def proxy(backend_url, method, path, query, body, headers):
+        calls.append(path)
+        return 200, {"Content-Type": "application/json"}, b"{}"
+
+    monkeypatch.setattr(server, "_proxy_ftd_editor", proxy)
+    foreign = client.get(
+        "/api/config",
+        cookies={"gallery_token": token},
+        headers={"referer": "https://evil.example/tools/ftd-editor/"},
+    )
+
+    assert foreign.status_code == 404
+    assert calls == []
+
+
 def test_ftd_editor_sse_proxy_yields_upstream_events_without_buffering(monkeypatch):
     class Upstream:
         status = 200

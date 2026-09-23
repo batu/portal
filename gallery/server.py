@@ -19,6 +19,8 @@ import tempfile
 import threading
 import urllib.error
 import urllib.request
+import uuid
+import weakref
 import zipfile
 from datetime import datetime, timezone
 from html.parser import HTMLParser
@@ -35,6 +37,28 @@ from starlette.concurrency import run_in_threadpool
 from . import agents, config, db, money, notify, remote_config
 
 log = logging.getLogger("gallery.server")
+
+_TOKEN_QUERY_RE = re.compile(r"([?&]token=)[^&#\s]*", re.IGNORECASE)
+
+
+def redact_token_query(value: str) -> str:
+    return _TOKEN_QUERY_RE.sub(r"\1REDACTED", value)
+
+
+class _RedactTokenAccessLogFilter(logging.Filter):
+    """Keep operator tokens passed as ?token= out of uvicorn's access log."""
+
+    gallery_token_redactor = True
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.args, tuple):
+            record.args = tuple(redact_token_query(a) if isinstance(a, str) else a for a in record.args)
+        return True
+
+
+_access_logger = logging.getLogger("uvicorn.access")
+if not any(getattr(f, "gallery_token_redactor", False) for f in _access_logger.filters):
+    _access_logger.addFilter(_RedactTokenAccessLogFilter())
 
 VIDEO_EXTS = {".mp4", ".mov", ".webm", ".m4v", ".avi"}
 GAME_PREVIEW_EXTS = {".jpg", ".jpeg"}
@@ -1968,6 +1992,18 @@ def get_post(request: Request, post_id: str):
     return _require_post(post_id)
 
 
+_post_replace_locks: "weakref.WeakValueDictionary[str, asyncio.Lock]" = weakref.WeakValueDictionary()
+
+
+def _post_replace_lock(post_id: str) -> asyncio.Lock:
+    """One lock per post; Portal serves from a single process, so an in-process lock serializes replaces."""
+    lock = _post_replace_locks.get(post_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _post_replace_locks[post_id] = lock
+    return lock
+
+
 @app.post("/api/posts/{post_id}/files")
 async def replace_post_files(
     request: Request,
@@ -1978,43 +2014,55 @@ async def replace_post_files(
     or original name matches its filename, or is appended as a new file."""
     server_cfg = require_api_token(request)
     _enforce_upload_size(request, server_cfg.get("max_upload_bytes", config.DEFAULT_MAX_UPLOAD_BYTES))
-    post = _require_post(post_id)
-    body = post["body"] if isinstance(post.get("body"), dict) else {}
-    stored = _post_files(post)
-    dest_dir = config.media_dir() / post_id
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    used_names = {f["media_path"] for f in stored if isinstance(f.get("media_path"), str)}
-    replaced, added = [], []
-    for upload in _coerce_uploads(files):
+    _require_post(post_id)
+    uploads = _coerce_uploads(files)
+    # Validate every filename before touching disk so a bad name never leaves
+    # a multi-file replace half-applied.
+    names = []
+    for upload in uploads:
         name = Path(upload.filename or "").name
         if not _safe_media_filename(name):
             raise HTTPException(status_code=400, detail=f"invalid filename: {upload.filename!r}")
-        match = next(
-            (f for f in stored if name in {f.get("media_path"), f.get("original_name")}),
-            None,
-        )
-        if match is None:
-            match = {
-                "media_path": _prefixed_media_name(len(stored) + 1, name, f"file_{len(stored) + 1}", used_names),
-                "original_name": name,
-            }
-            stored.append(match)
-            added.append(match["media_path"])
-        else:
-            replaced.append(match["media_path"])
-        if not _safe_media_filename(match["media_path"]):
-            raise HTTPException(status_code=400, detail=f"invalid stored filename: {match['media_path']!r}")
-        dest_path = dest_dir / match["media_path"]
-        tmp_path = dest_dir / f".{match['media_path']}.upload"
-        try:
-            match["size"] = await _write_upload(upload, tmp_path)
-            tmp_path.replace(dest_path)
-        finally:
-            tmp_path.unlink(missing_ok=True)
-        match["media_type"] = (
-            upload.content_type or mimetypes.guess_type(match["media_path"])[0] or "application/octet-stream"
-        )
-    updated = db.update_post_body(post_id, {**body, "files": stored})
+        names.append(name)
+    # Serialize replaces per post: the file list is read-modify-write and new
+    # NN_ stored names are allocated from it, so both happen under the lock.
+    async with _post_replace_lock(post_id):
+        post = _require_post(post_id)
+        body = post["body"] if isinstance(post.get("body"), dict) else {}
+        stored = _post_files(post)
+        used_names = {f["media_path"] for f in stored if isinstance(f.get("media_path"), str)}
+        replaced, added, plan = [], [], []
+        for upload, name in zip(uploads, names):
+            match = next(
+                (f for f in stored if name in {f.get("media_path"), f.get("original_name")}),
+                None,
+            )
+            if match is None:
+                match = {
+                    "media_path": _prefixed_media_name(len(stored) + 1, name, f"file_{len(stored) + 1}", used_names),
+                    "original_name": name,
+                }
+                stored.append(match)
+                added.append(match["media_path"])
+            else:
+                replaced.append(match["media_path"])
+            if not _safe_media_filename(match["media_path"]):
+                raise HTTPException(status_code=400, detail=f"invalid stored filename: {match['media_path']!r}")
+            plan.append((upload, match))
+        dest_dir = config.media_dir() / post_id
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        for upload, match in plan:
+            dest_path = dest_dir / match["media_path"]
+            tmp_path = dest_dir / f".{match['media_path']}.{uuid.uuid4().hex}.upload"
+            try:
+                match["size"] = await _write_upload(upload, tmp_path)
+                tmp_path.replace(dest_path)
+            finally:
+                tmp_path.unlink(missing_ok=True)
+            match["media_type"] = (
+                upload.content_type or mimetypes.guess_type(match["media_path"])[0] or "application/octet-stream"
+            )
+        updated = db.update_post_body(post_id, {**body, "files": stored})
     return {"post": updated, "replaced": replaced, "added": added}
 
 
@@ -3091,7 +3139,9 @@ def _game_file_response(
 
 
 def _private_game_release_file(request: Request, slug: str, version: str, field: str, *, download: bool):
-    if not web_view_ok(request):
+    # Native builds and release videos stay operator-only even when
+    # public_viewing is on; anonymous viewers use the public-* routes.
+    if not web_token_ok(request):
         return _login_redirect(request)
     path = _resolve_game_build_file(slug, version, field)
     return _game_file_response(path, public=False, download=download, fallback_media_type="application/octet-stream")
@@ -3657,6 +3707,10 @@ def _is_ftd_editor_referrer(request: Request) -> bool:
     if not referrer:
         return False
     parsed = urlsplit(referrer)
+    # Same-origin only: a foreign page whose path merely mimics the editor's
+    # must not unlock the legacy proxy with the operator's cookie.
+    if parsed.netloc.lower() != (request.headers.get("host") or "").lower():
+        return False
     return parsed.path.startswith("/tools/ftd-editor/")
 
 
